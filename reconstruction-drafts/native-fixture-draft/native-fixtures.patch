@@ -1,0 +1,381 @@
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt
+@@ -9,6 +9,8 @@
+ import com.jarvys.agent.ConversationInput
+ import com.jarvys.agent.LocalRunStore
+ import com.jarvys.agent.ModelReply
++import com.jarvys.agent.NativeCentralTreeEpisodeFixture
++import com.jarvys.agent.CoreToolResult
+ import com.jarvys.agent.WorkspaceConversationInputStore
+ import com.jarvys.agent.crew.CrewBotSnapshot
+ import com.jarvys.agent.crew.CrewManager
+@@ -61,6 +63,7 @@
+     private val modelCalls = AtomicInteger()
+     private val noAdmission = Runnable {}
+     private val tools = CoreToolRegistry(emptyList())
++    private var liveFrame: NativeCentralTreeEpisodeFixture.Frame? = null
+ 
+     @Before fun setUp() {
+         context = RuntimeEnvironment.getApplication()
+@@ -83,26 +86,29 @@
+ 
+     @Test fun crewOffKeepsAssignmentPreparedAndSamePayloadCanStartAfterUserEnablesCrew() {
+         val scope = workspace("crew-off")
+-        CrewMode.write(context, CrewMode.OFF)
+-        val failure = assertThrows(WorkspacePreAdmissionException::class.java) { delegate(scope) }
+-        assertEquals(WorkspacePreAdmissionException.Reason.CREW_DISABLED, failure.reason)
+-        val prepared = WorkspaceRegistry(context).use { it.listAssignments(scope.workspaceId).single() }
+-        assertEquals(WorkspaceAssignmentState.PREPARED, prepared.state)
+-        assertNull(prepared.botId)
+-        assertTrue(managerLookups.isEmpty())
+-        assertEquals(0, modelCalls.get())
+-        CrewMode.write(context, CrewMode.AUTO) // Simulates the user's explicit settings action.
+-        val admitted = delegate(scope)
+-        await(bot(scope, admitted))
+-        assertEquals(prepared.assignmentId, admitted.getString("assignment_id"))
+-        assertEquals(1, modelCalls.get())
++        var prepared: WorkspaceAssignment? = null
++        episode(steps = arrayOf({
++            CrewMode.write(context, CrewMode.OFF)
++            val failure = assertThrows(WorkspacePreAdmissionException::class.java) { delegate(scope) }
++            assertEquals(WorkspacePreAdmissionException.Reason.CREW_DISABLED, failure.reason)
++            prepared = WorkspaceRegistry(context).use { it.listAssignments(scope.workspaceId).single() }
++            assertEquals(WorkspaceAssignmentState.PREPARED, prepared!!.state)
++            assertNull(prepared!!.botId)
++            assertTrue(managerLookups.isEmpty()); assertEquals(0, modelCalls.get())
++            CrewMode.write(context, CrewMode.AUTO)
++        }, {
++            val admitted = delegate(scope)
++            await(bot(scope, admitted))
++            assertEquals(prepared!!.assignmentId, admitted.getString("assignment_id"))
++            assertEquals(prepared!!.centralSource, currentAssignment(scope, admitted).centralSource)
++            assertEquals(1, modelCalls.get())
++        }))
+     }
+ 
+     @Test fun rejectedRoleRemainsPreparedAndDoesNotInventAnUncertainSpawn() {
+         val scope = workspace("bad-role")
+         val failure = assertThrows(WorkspacePreAdmissionException::class.java) {
+-            coordinator.delegate(scope.workspaceId, "bad-role", "unknown-role", MISSION, null, null,
+-                "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), noAdmission)
++            delegate(scope, key = "bad-role", role = "unknown-role", selectedTools = null, workerName = null)
+         }
+         assertEquals(WorkspacePreAdmissionException.Reason.WORKER_CONFIGURATION_REJECTED, failure.reason)
+         val prepared = WorkspaceRegistry(context).use { it.listAssignments(scope.workspaceId).single() }
+@@ -120,18 +126,17 @@
+             modelCalls.incrementAndGet(); done()
+         }).also { manager ->
+             manager.configureProfiles({ role -> if (role == "race-profile" && available.get())
+-                com.jarvys.agent.crew.CrewRole("race-profile", "Synthetic worker", "test", "Instructions", emptyList(), null)
++                com.jarvys.agent.crew.CrewRole("race-profile", "Synthetic worker", "general", "Instructions", emptyList(), null,
++                    "Synthetic native profile", 1, emptyList(), CrewProfile.WorkspaceMode.LEGACY_CHAT)
+                 else null })
+         } }
+         val scope = workspace("post-preflight-revocation")
+-        val admissions = AtomicInteger()
+         val revokeAtStarted = Runnable {
+-            // Continuation-mode conflict check, prepareAssignment, explicit preflight admission,
+-            // then markStarted's beforeWrite. Revoke after preflight, not before it.
+-            if (admissions.incrementAndGet() == 4) available.set(false)
+-        }
+-        fun attempt(admission: Runnable) = coordinator.delegate(scope.workspaceId, "race", "race-profile",
+-            MISSION, null, null, "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), admission)
++            val row = WorkspaceRegistry(context).use { it.listAssignments(scope.workspaceId).singleOrNull() }
++            if (row?.state == WorkspaceAssignmentState.STARTED) available.set(false)
++        }
++        fun attempt(admission: Runnable) = delegate(scope, key = "race", role = "race-profile", selectedTools = null,
++            workerName = null, admission = admission)
+         val failure = assertThrows(IllegalArgumentException::class.java) { attempt(revokeAtStarted) }
+         val uncertain = WorkspaceRegistry(context).use { it.listAssignments(scope.workspaceId).single() }
+         assertEquals(WorkspaceAssignmentState.UNCERTAIN, uncertain.state)
+@@ -148,13 +153,13 @@
+     @Test fun delegatesUseDistinctExecutionSessionsAndDuplicatePayloadDoesNotSpawnAgain() {
+         val firstScope = workspace("first")
+         val secondScope = workspace("second")
+-        val first = delegate(firstScope)
+-        val second = delegate(secondScope)
+-        await(bot(firstScope, first))
+-        await(bot(secondScope, second))
+-
++        lateinit var first: JSONObject
++        lateinit var second: JSONObject
++        lateinit var duplicate: JSONObject
+         val reopened = freshCoordinator()
+-        val duplicate = delegate(firstScope, owner = reopened)
++        episode(steps = arrayOf({ first = delegate(firstScope); await(bot(firstScope, first)) },
++            { second = delegate(secondScope); await(bot(secondScope, second)) },
++            { duplicate = delegate(firstScope, owner = reopened) }))
+         assertEquals(first.getString("assignment_id"), duplicate.getString("assignment_id"))
+         assertEquals(first.getString("bot_id"), duplicate.getString("bot_id"))
+         assertEquals(first.getLong("revision"), duplicate.getLong("revision"))
+@@ -186,7 +191,9 @@
+             store.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, "previous-process")
+         }
+         val reopened = freshCoordinator()
+-        val duplicate = delegate(scope, owner = reopened)
++        val duplicate = reopened.delegate(scope.workspaceId, "assignment", "custom", MISSION, emptyList(),
++            "Synthetic worker", "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), noAdmission)
++        WorkspaceRegistry(context).use { assertNull(WorkspaceTreeStore(it).findAssignment(scope.workspaceId, started.assignmentId)) }
+         assertEquals(started.assignmentId, duplicate.getString("assignment_id"))
+         assertEquals("STARTED", duplicate.getString("admission_state"))
+         assertEquals("INTERRUPTED_UNCERTAIN", duplicate.getString("status"))
+@@ -828,52 +835,66 @@
+ 
+     @Test fun delegatePreparedRetryKeepsOriginalSourceAndBoundRetryNeverRespawns() {
+         val scope = workspace("source-delegate")
+-        val original = centralSource()
+-        val prepared = WorkspaceRegistry(context).use { it.prepareAssignment(scope.workspaceId,
+-            "assignment", REQUEST_ID, ORIGINAL_REQUEST, "custom", MISSION, emptyList(), "Synthetic worker",
+-            CrewMissionAccess.STANDARD, noAdmission, original) }
+         val writes = AtomicInteger()
+         val workspaceMonitor = WorkspaceCoordinator::class.java.getDeclaredMethod("lock", String::class.java)
+             .apply { isAccessible = true }.invoke(coordinator, scope.workspaceId)
+         val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
++        var prepared: WorkspaceAssignment? = null
++        var first: JSONObject? = null
+         try {
+-            val invocation = com.jarvys.agent.EffectInvocation {
+-                // Cross-thread acquisition proves admission holds neither workspace nor SQLite monitor.
+-                pool.submit { synchronized(workspaceMonitor) {
+-                    WorkspaceRegistry(context).use { it.getAssignment(scope.workspaceId, prepared.assignmentId) }
+-                } }.get(3, TimeUnit.SECONDS)
+-                writes.incrementAndGet()
+-            }
+-            val mutation = WorkspaceMutationContext("delegate", scope.workspaceId, null, invocation, noAdmission)
+-            val result = coordinator.delegate(scope.workspaceId, "assignment", "custom", MISSION, emptyList(), "Synthetic worker",
+-                "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), noAdmission, mutation)
+-            await(bot(scope, result))
+-            val receipt = mutation.finish(com.jarvys.agent.CoreToolResult.success(result.toString())).effectReceipt
+-            assertEquals(com.jarvys.agent.EffectInvocation.CompletionSemantics.COORDINATION_ACCEPTED, receipt.completionSemantics)
+-            assertEquals(com.jarvys.agent.EffectInvocation.Outcome.OK, receipt.outcome)
+-            assertEquals(original, currentAssignment(scope, result).centralSource)
+-            assertEquals(1, writes.get()); assertEquals(1, modelCalls.get())
+-            val again = WorkspaceMutationContext("delegate", scope.workspaceId, null,
+-                com.jarvys.agent.EffectInvocation { error("Bound assignment replayed") }, noAdmission)
+-            val repeated = coordinator.delegate(scope.workspaceId, "assignment", "custom", MISSION, emptyList(), "Synthetic worker",
+-                "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), noAdmission, again)
+-            assertEquals(result.getString("assignment_id"), repeated.getString("assignment_id"))
+-            assertEquals(com.jarvys.agent.EffectInvocation.Outcome.NOT_EXECUTED,
+-                again.finish(com.jarvys.agent.CoreToolResult.success(repeated.toString())).effectReceipt.outcome)
+-            assertEquals(1, modelCalls.get())
++            episode(steps = arrayOf({
++                CrewMode.write(context, CrewMode.OFF)
++                assertThrows(WorkspacePreAdmissionException::class.java) { delegate(scope) }
++                prepared = WorkspaceRegistry(context).use { it.listAssignments(scope.workspaceId).single() }
++                assertNotNull(prepared!!.centralSource)
++                CrewMode.write(context, CrewMode.AUTO)
++            }, {
++                val frame = requireNotNull(liveFrame)
++                frame.invocation.addAdmissionWriter {
++                    pool.submit { synchronized(workspaceMonitor) {
++                        WorkspaceRegistry(context).use { it.getAssignment(scope.workspaceId, prepared!!.assignmentId) }
++                    } }.get(3, TimeUnit.SECONDS)
++                    writes.incrementAndGet()
++                }
++                val result = delegate(scope); first = result; await(bot(scope, result))
++                val receipt = frame.result!!.effectReceipt
++                assertEquals(com.jarvys.agent.EffectInvocation.CompletionSemantics.COORDINATION_ACCEPTED, receipt.completionSemantics)
++                assertEquals(com.jarvys.agent.EffectInvocation.Outcome.OK, receipt.outcome)
++                assertEquals(prepared!!.centralSource, currentAssignment(scope, result).centralSource)
++                assertEquals(1, writes.get()); assertEquals(1, modelCalls.get())
++            }, {
++                val frame = requireNotNull(liveFrame)
++                frame.invocation.addAdmissionWriter { error("Bound assignment replayed") }
++                val repeated = delegate(scope)
++                assertEquals(first!!.getString("assignment_id"), repeated.getString("assignment_id"))
++                assertEquals(com.jarvys.agent.EffectInvocation.Outcome.NOT_EXECUTED, frame.result!!.effectReceipt.outcome)
++                assertEquals(1, modelCalls.get())
++            }))
+         } finally { pool.shutdownNow() }
++    }
++
++    @Test fun historicalPreparedAssignmentCannotAcquireNewTreeAuthority() {
++        val scope = workspace("historical-prepared")
++        val prepared = WorkspaceRegistry(context).use { it.prepareAssignment(scope.workspaceId,
++            "assignment", REQUEST_ID, ORIGINAL_REQUEST, "custom", MISSION, emptyList(), "Synthetic worker",
++            CrewMissionAccess.STANDARD, noAdmission, centralSource()) }
++        assertThrows(IllegalArgumentException::class.java) { delegate(scope) }
++        WorkspaceRegistry(context).use {
++            assertEquals(prepared, it.getAssignment(scope.workspaceId, prepared.assignmentId))
++            assertNull(WorkspaceTreeStore(it).findAssignment(scope.workspaceId, prepared.assignmentId))
++        }
++        assertTrue(managerLookups.isEmpty()); assertEquals(0, modelCalls.get())
+     }
+ 
+     @Test fun revocationAfterAdmissionBeforeAssignmentInsertPreventsSpawn() {
+         val scope = workspace("source-revoked")
+         val revoked = AtomicBoolean(false)
+         val guard = Runnable { check(!revoked.get()) { "Synthetic revoked source" } }
+-        val invocation = com.jarvys.agent.EffectInvocation { revoked.set(true) }
+-        val mutation = WorkspaceMutationContext("delegate", scope.workspaceId, null, invocation, guard)
+-        assertThrows(IllegalStateException::class.java) {
+-            coordinator.delegate(scope.workspaceId, "assignment", "custom", MISSION, emptyList(), "Synthetic worker",
+-                "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), guard, mutation)
+-        }
++        episode(steps = arrayOf({
++            val frame = requireNotNull(liveFrame)
++            frame.invocation.addAdmissionWriter { revoked.set(true) }
++            assertThrows(IllegalStateException::class.java) { delegate(scope, admission = guard) }
++        }))
+         assertTrue(WorkspaceRegistry(context).use { it.listAssignments(scope.workspaceId).isEmpty() })
+         assertTrue(managerLookups.isEmpty()); assertEquals(0, modelCalls.get())
+     }
+@@ -890,25 +911,25 @@
+         }
+         val row = AtomicReference<JSONObject>()
+         val committed = AtomicReference<com.jarvys.agent.CentralInvocationSource>()
+-        val witness = com.jarvys.agent.CentralInvocationTestSource.runWithWitness(context) { invocation, source ->
+-            val guard = Runnable { source.requireInvocationCurrent() }
+-            val mutation = WorkspaceMutationContext("delegate", scope.workspaceId, source, invocation, guard)
+-            val result = coordinator.delegate(scope.workspaceId, "assignment", "custom", MISSION, emptyList(), "Synthetic worker",
+-                "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), guard, mutation)
++        var witness: com.jarvys.agent.CentralInvocationWitness? = null
++        episode(steps = arrayOf({
++            val frame = requireNotNull(liveFrame)
++            val source = requireNotNull(frame.invocation.centralSource())
++            witness = source
++            val result = delegate(scope)
+             row.set(result)
+             committed.set(currentAssignment(scope, result).centralSource)
+             assertEquals(source.source(), committed.get())
+-            assertEquals(com.jarvys.agent.EffectInvocation.Outcome.OK,
+-                mutation.finish(com.jarvys.agent.CoreToolResult.success(result.toString())).effectReceipt.outcome)
+-        }
++            assertEquals(com.jarvys.agent.EffectInvocation.Outcome.OK, frame.result!!.effectReceipt.outcome)
++        }))
+         val result = requireNotNull(row.get()) { "Real checkpoint dispatch did not complete the assignment" }
+         await(bot(scope, result))
+         assertTrue(outsideLease.get())
+-        assertEquals(witness.source(), committed.get())
++        assertEquals(witness!!.source(), committed.get())
+         assertNotEquals(com.jarvys.agent.StorageGeneration.NAME, committed.get().storageGeneration)
+         assertEquals(1, modelCalls.get())
+-        assertThrows(IllegalStateException::class.java) { witness.withCurrentWorkspaceTransaction { error("Sealed source reused") } }
+-        assertEquals(witness.source(), currentAssignment(scope, result).centralSource)
++        assertThrows(IllegalStateException::class.java) { witness!!.withCurrentWorkspaceTransaction { error("Sealed source reused") } }
++        assertEquals(witness!!.source(), currentAssignment(scope, result).centralSource)
+     }
+ 
+     private fun freshCoordinator(
+@@ -926,9 +947,36 @@
+         return WorkspaceRegistry(context).use { it.getWorkspace(id)!! }
+     }
+ 
++    private fun episode(token: CancellationToken = CancellationToken.cancellable(), vararg steps: () -> Unit) {
++        NativeCentralTreeEpisodeFixture.run(context, token, ORIGINAL_REQUEST, steps.map { step -> { frame: NativeCentralTreeEpisodeFixture.Frame ->
++            check(liveFrame == null)
++            liveFrame = frame
++            try { step() } finally { liveFrame = null }
++        } })
++    }
++
+     private fun delegate(scope: WorkspaceRecord, key: String = "assignment", token: CancellationToken = CancellationToken.cancellable(),
+-                         owner: WorkspaceCoordinator = coordinator): JSONObject = owner.delegate(scope.workspaceId, key,
+-        "custom", MISSION, emptyList(), "Synthetic worker", "standard", REQUEST_ID, ORIGINAL_REQUEST, token, noAdmission)
++                         owner: WorkspaceCoordinator = coordinator, role: String = "custom", selectedTools: List<String>? = emptyList(),
++                         workerName: String? = "Synthetic worker", admission: Runnable = noAdmission): JSONObject {
++        if (liveFrame == null) {
++            var result: JSONObject? = null
++            episode(token, { result = delegate(scope, key, token, owner, role, selectedTools, workerName, admission) })
++            return requireNotNull(result)
++        }
++        val frame = requireNotNull(liveFrame)
++        val witness = requireNotNull(frame.invocation.centralSource())
++        val guard = Runnable { witness.requireInvocationCurrent(); frame.authority.requireInvocationCurrent(frame.token); admission.run() }
++        val mutation = WorkspaceMutationContext("delegate", scope.workspaceId, witness, frame.invocation, guard, frame.authority, frame.token)
++        return try {
++            owner.delegate(scope.workspaceId, key, role, MISSION, selectedTools, workerName, "standard",
++                REQUEST_ID, ORIGINAL_REQUEST, frame.token, guard, mutation).also {
++                frame.result = mutation.finish(CoreToolResult.success(it.toString()))
++            }
++        } catch (failure: RuntimeException) {
++            frame.result = CoreToolResult.failure("Native fixture operation failed").withEffectReceipt(frame.invocation.resolveFailure(false))
++            throw failure
++        }
++    }
+ 
+     private fun prepare(store: WorkspaceRegistry, scope: WorkspaceRecord) = store.prepareAssignment(scope.workspaceId,
+         "assignment", REQUEST_ID, ORIGINAL_REQUEST, "custom", MISSION, emptyList(), "Synthetic worker", CrewMissionAccess.STANDARD)
+@@ -952,17 +1000,14 @@
+             CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null) }
+         val store = LocalRunStore(context)
+         return CrewManager(session, tools, { _, _ -> tools }, factory, null).also {
++            NativeCentralTreeEpisodeFixture.installManager(context, session, it)
+             it.configureResultEvidenceListener { evidence -> store.appendCrewResultEvidence(evidence) }
+             if (lifecycle != null) it.configure(tools, { _, _ -> tools }, factory, lifecycle)
+         }
+     }
+ 
+     private fun configureWorkspaceInputRecovery(manager: CrewManager, session: String) {
+-        manager.configureCheckpoints(object : CrewManager.CheckpointSupport {
+-            override fun canPersist(bot: CrewManager.Bot) = true
+-            override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) = Unit
+-            override fun reconcile(bot: CrewManager.Bot) = CrewManager.ResumePlan(bot.role, "Robolectric checkpoint reconciliation")
+-        })
++        NativeCentralTreeEpisodeFixture.installCheckpoints(context, session, manager)
+         manager.configureConversationInputPipeline(
+             { bot, message -> WorkspaceConversationInputStore.append(context, session, bot, message) },
+             { _, ids -> WorkspaceConversationInputStore.acknowledge(context, session, ids) },
+--- /dev/null
++++ b/app/app/src/test/java/com/jarvys/agent/NativeCentralTreeEpisodeFixture.kt
+@@ -0,0 +1,60 @@
++package com.jarvys.agent
++
++import android.content.Context
++import com.jarvys.agent.crew.*
++import com.jarvys.agent.workspaces.WorkspaceIdentity
++import java.util.UUID
++
++/** Real USER/root/process authority and a distinct committed invocation for each scripted step. */
++object NativeCentralTreeEpisodeFixture {
++    class Frame(val invocation: EffectInvocation, val authority: CentralTreeAdmission, val token: CancellationToken) {
++        var result: CoreToolResult? = null
++    }
++    @JvmStatic fun run(context: Context, token: CancellationToken, text: String, steps: List<(Frame) -> Unit>) {
++        val store = LocalRunStore(context)
++        val session = WorkspaceIdentity.CENTRAL_SESSION
++        val user = store.appendConversationMessage(session, "user", text)
++        val run = UUID.randomUUID().toString()
++        val writer = MainChatTranscriptStore(context.filesDir, session, store)
++        CentralTreeAdmission.beginUser(context, store, session, user, token).use { authority ->
++            var step = 0
++            var dispatched = 0
++            var failure: Throwable? = null
++            val probe = object : CoreTool {
++                override fun declaration() = ToolSpec("native_tree_probe", "test", "Native tree fixture", "test", ToolSpec.Status.IMPLEMENTED, emptyMap(), emptyList())
++                override fun effectClass() = CoreTool.EffectClass.WRITE
++                override fun execute(args: Map<String, Any>?, token: CancellationToken): CoreToolResult = error("execute4 required")
++                override fun execute(args: Map<String, Any>?, token: CancellationToken, progress: CoreTool.ProgressListener?, invocation: EffectInvocation?): CoreToolResult {
++                    val actual = requireNotNull(invocation)
++                    requireNotNull(actual.centralSource()).requireInvocationCurrent()
++                    authority.requireInvocationCurrent(token)
++                    val frame = Frame(actual, authority, token)
++                    try { steps[dispatched++](frame) }
++                    catch (caught: Throwable) { failure = caught }
++                    return frame.result ?: CoreToolResult.failure("Fixture callback completed without accepted effect")
++                }
++            }
++            val registry = CoreToolRegistry(listOf(probe)).withInvocationSourceProvider(writer.centralSourceProvider(user, run))
++            val loop = CoreAgentLoop(CoreAgentLoop.Model { _, _, _, _ ->
++                if (failure == null && step < steps.size) ModelReply("", listOf(ModelReply.Call("native-step-${step++}", "native_tree_probe", emptyMap())))
++                else ModelReply("Fixture finished", emptyList())
++            }, registry, "Use native fixture authority", session)
++            writer.attach(loop, emptyList(), user, run)
++            loop.run(text, emptyList(), emptyList(), token, null, user, run)
++            failure?.let { throw it }
++            check(dispatched == steps.size) { "Not every native invocation reached its assertion" }
++        }
++    }
++
++    /** Preserve fake provider/barriers; install the same durable adapters as CoreAgentRuntime. */
++    @JvmStatic fun installManager(context: Context, session: String, manager: CrewManager) {
++        val role = CrewRole("custom", "Synthetic worker", "general", "Synthetic general-purpose work", emptyList(), null,
++            "Synthetic native profile", 1, emptyList(), CrewProfile.WorkspaceMode.LEGACY_CHAT)
++        manager.configureProfiles({ id -> if (id == role.id) role else null }, emptyList())
++        manager.configureCheckpoints(CrewCheckpointCoordinator(context, session) { bot -> bot.role })
++        WorkspaceTreeWorkerCoordinator(context, session, manager).install()
++    }
++    @JvmStatic fun installCheckpoints(context: Context, session: String, manager: CrewManager) {
++        manager.configureCheckpoints(CrewCheckpointCoordinator(context, session) { bot -> bot.role })
++    }
++}

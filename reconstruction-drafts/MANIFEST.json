@@ -133,6 +133,16 @@
       "bytes": 4010
     },
     {
+      "path": "reconstruction-drafts/menu-test/PreservedCentralDrawerComposeTest.kt",
+      "sha256": "3793a330f7d96553a0c1e47f5c01be431757c31df5210d0d6067c147ee6c0bf8",
+      "bytes": 6419
+    },
+    {
+      "path": "reconstruction-drafts/native-fixture-draft/native-fixtures.patch",
+      "sha256": "9ab7c86a44707071f145d5356cda8beeb9218b7f4a7d13b79b2a62c1df9aef17",
+      "bytes": 25089
+    },
+    {
       "path": "reconstruction-drafts/preclaim/P1_PRECLAIM_INTEGRATION.patch",
       "sha256": "63deda2aaec2a09bbc03917e7fcad2a3d4db3145d93afc6e9c5e1cfd8b7d3f68",
       "bytes": 4177
