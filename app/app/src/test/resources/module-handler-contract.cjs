@@ -1,0 +1,1054 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+
+const moduleDirectory = path.resolve(process.argv[2] || path.join(__dirname, "../../main/assets/modules/presentation"));
+const manifest = JSON.parse(fs.readFileSync(path.join(moduleDirectory, "manifest.json"), "utf8"));
+const declaration = manifest.tools[0];
+const handlerFile = path.join(moduleDirectory, declaration.handler.split("#")[0]);
+const benchmarkOnly = process.env.PPTX_REPORT_BENCH_ONLY === "1";
+if (manifest.id === "com.jarvys.module.presentation" && !benchmarkOnly) {
+  const schema = declaration.inputSchema;
+  const elementSchema = schema.properties.slides.items.properties.elements.items;
+  assert.equal(elementSchema.properties.type.enum, undefined, "the host does not validate enum, so the manifest must not claim it does");
+  assert.match(elementSchema.properties.type.description, /text.*shape.*image.*chart.*table/,
+    "the compact schema describes the element types for callers");
+  assert.deepEqual(elementSchema.required, ["type", "x", "y", "w"], "h is type-specific and validated by the handler");
+  assert.match(elementSchema.properties.margin.description, /Text: points.*Table:/,
+    "the compact schema documents PptxGenJS margin units and orders");
+  assert.equal(elementSchema.additionalProperties, true, "the handler remains authoritative for secondary element options");
+  assert.equal(elementSchema.properties.options.additionalProperties, true, "chart options pass through the compact schema");
+  assert.doesNotMatch(JSON.stringify(schema), /valAxisLabelFontSize|catAxisLabelFontFace/,
+    "the compact manifest must not duplicate the chart option allowlist");
+}
+const thumbnailPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a1sAAAAASUVORK5CYII=";
+const canvases = [];
+const thumbnailDrawCalls = [];
+let thumbnailRendererInput = null;
+let thumbnailRendererOptions = null;
+let oversizedCanvasThumbnail = null;
+const thumbnailSlideSvgs = [0, 1, 2, 3].map((index) =>
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" data-slide="' + index + '"></svg>');
+
+function decodeXmlText(value) {
+  return value.replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(parseInt(code, 10)))
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+}
+
+class XmlElement {
+  constructor(name, attributes = {}) {
+    this.tagName = name;
+    this.localName = name.split(":").pop();
+    this.attributes = attributes;
+    this.children = [];
+    this.parentNode = null;
+    this.directText = "";
+    this.order = 0;
+  }
+  getAttribute(name) { return this.attributes[name] || ""; }
+  getAttributeNS(_namespace, name) {
+    return this.attributes[Object.keys(this.attributes).find((key) => key.endsWith(":" + name))] || this.attributes[name] || "";
+  }
+  get textContent() { return this.directText + this.children.map((child) => child.textContent).join(""); }
+  getElementsByTagNameNS(_namespace, name) {
+    const found = [];
+    const visit = (node) => node.children.forEach((child) => {
+      if (child.localName === name) found.push(child);
+      visit(child);
+    });
+    visit(this);
+    return found;
+  }
+  getElementsByTagName(name) { return this.getElementsByTagNameNS("*", name); }
+  compareDocumentPosition(other) { return this.order > other.order ? 2 : 4; }
+}
+
+function parseXml(source) {
+  const root = new XmlElement("#document");
+  const stack = [root];
+  let order = 0;
+  const tokens = source.match(/<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<[^>]+>|[^<]+/g) || [];
+  tokens.forEach((token) => {
+    if (token.startsWith("<!--") || token.startsWith("<?") || token.startsWith("<!DOCTYPE")) return;
+    if (token.startsWith("<![CDATA[")) {
+      stack[stack.length - 1].directText += token.slice(9, -3);
+      return;
+    }
+    if (token.startsWith("</")) { stack.pop(); return; }
+    if (token.startsWith("<")) {
+      const selfClosing = /\/\s*>$/.test(token);
+      const inner = token.slice(1, selfClosing ? token.lastIndexOf("/") : -1).trim();
+      const name = inner.match(/^([^\s/>]+)/)?.[1];
+      if (!name) return;
+      const attributes = {};
+      const attributeSource = inner.slice(name.length);
+      const pattern = /([^\s=]+)\s*=\s*"([^"]*)"/g;
+      let match;
+      while ((match = pattern.exec(attributeSource))) attributes[match[1]] = decodeXmlText(match[2]);
+      const element = new XmlElement(name, attributes);
+      element.order = ++order;
+      element.parentNode = stack[stack.length - 1];
+      element.parentNode.children.push(element);
+      if (!selfClosing) stack.push(element);
+      return;
+    }
+    stack[stack.length - 1].directText += decodeXmlText(token);
+  });
+  if (stack.length !== 1) throw new Error("Malformed OOXML document in test fixture");
+  return root;
+}
+
+function descendants(node) {
+  return node.children.reduce((found, child) => found.concat(child, descendants(child)), []);
+}
+
+function assertSlideElementsWithinHeight(xml, slideNumber) {
+  const root = parseXml(xml);
+  const emuTolerance = 1;
+  const slideWidthEmu = 12192000;
+  const slideHeightEmu = 6858000;
+  const boxes = descendants(root).filter((node) => ["sp", "graphicFrame", "pic", "cxnSp"].includes(node.localName)).map((element) => {
+    const transform = descendants(element).find((node) => node.localName === "xfrm");
+    if (!transform) return null;
+    const transformNodes = descendants(transform);
+    const offset = transformNodes.find((node) => node.localName === "off");
+    const extent = transformNodes.find((node) => node.localName === "ext");
+    if (!offset || !extent) return null;
+    const nonVisual = descendants(element).find((node) => node.localName === "cNvPr");
+    const text = descendants(element).filter((node) => node.localName === "t").map((node) => node.directText).join("");
+    const presetGeometry = descendants(element).find((node) => node.localName === "prstGeom")?.getAttribute("prst");
+    const box = {
+      element,
+      name: nonVisual?.getAttribute("name") || element.localName,
+      text,
+      isLine: element.localName === "cxnSp" || presetGeometry === "line",
+      x: Number(offset.getAttribute("x")),
+      y: Number(offset.getAttribute("y")),
+      w: Number(extent.getAttribute("cx")),
+      h: Number(extent.getAttribute("cy")),
+    };
+    assert.ok(box.x >= -emuTolerance && box.y >= -emuTolerance,
+      "slide " + slideNumber + " element " + box.name + " starts outside the slide");
+    assert.ok(box.w > 0 && box.h > 0 || box.isLine && box.w >= 0 && box.h >= 0 && (box.w > 0 || box.h > 0),
+      "slide " + slideNumber + " element " + box.name + " has an invalid zero-area transform");
+    assert.ok(box.x + box.w <= slideWidthEmu + emuTolerance,
+      "slide " + slideNumber + " element " + box.name + " exceeds the slide width");
+    assert.ok(box.y + box.h <= slideHeightEmu + emuTolerance,
+      "slide " + slideNumber + " element " + box.name + " exceeds the slide height");
+    return box;
+  }).filter(Boolean);
+
+  for (let firstIndex = 0; firstIndex < boxes.length; firstIndex += 1) {
+    for (let secondIndex = firstIndex + 1; secondIndex < boxes.length; secondIndex += 1) {
+      const first = boxes[firstIndex];
+      const second = boxes[secondIndex];
+      const overlapWidth = Math.min(first.x + first.w, second.x + second.w) - Math.max(first.x, second.x);
+      const overlapHeight = Math.min(first.y + first.h, second.y + second.h) - Math.max(first.y, second.y);
+      assert.ok(overlapWidth <= emuTolerance || overlapHeight <= emuTolerance,
+        "slide " + slideNumber + " elements " + first.name + " and " + second.name + " overlap");
+    }
+  }
+  return boxes;
+}
+
+function makeCanvas() {
+  const canvas = {
+    width: 1280,
+    height: 720,
+    clientWidth: 1280,
+    clientHeight: 720,
+    style: {},
+    setAttribute() {},
+    addEventListener() {},
+    removeEventListener() {},
+    getBoundingClientRect() { return { left: 0, top: 0, width: this.width, height: this.height }; },
+    toDataURL() { return "data:image/png;base64," + (oversizedCanvasThumbnail || thumbnailPng); },
+  };
+  canvases.push(canvas);
+  const context = new Proxy({
+    canvas,
+    measureText(text) {
+      // Node has no browser font rasterizer here. This deterministic width-only double exercises report structure;
+      // Android WebView instrumentation checks the same handler against real canvas font metrics.
+      const match = String(context.font || "").match(/([\d.]+)px/);
+      const fontPixels = match ? Number(match[1]) : 16;
+      return { width: String(text).length * fontPixels * 0.52 };
+    },
+    drawImage(image, ...args) {
+      if (image.tagName === "IMG") thumbnailDrawCalls.push({ image, args, canvas });
+    },
+    fillText() {},
+    fill() {},
+    getLineDash() { return []; },
+    getTransform() { return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }; },
+  }, {
+    get(target, key) { return key in target ? target[key] : () => {}; },
+    set(target, key, value) { target[key] = value; return true; },
+  });
+  context.getContext = () => context;
+  canvas.getContext = () => context;
+  return canvas;
+}
+
+function makeReportBenchInput() {
+  return {
+    title: "Report size 20 by 8",
+    slides: Array.from({ length: 20 }, (_, slideIndex) => ({
+      elements: Array.from({ length: 8 }, (_, elementIndex) => ({
+        type: "text",
+        text: "Slide " + (slideIndex + 1) + " item " + (elementIndex + 1),
+        x: 0.3 + (elementIndex % 4) * 3.2,
+        y: 0.3 + Math.floor(elementIndex / 4) * 1.0,
+        w: 3.0,
+        h: 0.7,
+        fontSize: 12,
+        fontFace: "Arial",
+        color: "111111",
+        margin: 0,
+      })),
+    })),
+  };
+}
+
+const document = {
+  body: { appendChild() {} },
+  head: { appendChild() {} },
+  createElement(tag) {
+    if (tag === "canvas") return makeCanvas();
+    if (tag === "img") {
+      let source = "";
+      return {
+        tagName: "IMG",
+        naturalWidth: 0,
+        naturalHeight: 0,
+        complete: false,
+        onload: null,
+        onerror: null,
+        set src(value) {
+          source = value;
+          const knownPng = value === "data:image/png;base64," + thumbnailPng;
+          const svgPayload = value.slice(value.indexOf(",") + 1);
+          const svgText = value.startsWith("data:image/svg+xml")
+            ? (value.slice(0, value.indexOf(",")).includes("base64")
+              ? Buffer.from(svgPayload, "base64").toString("utf8")
+              : decodeURIComponent(svgPayload))
+            : "";
+          const decodedSvg = svgText.includes("<svg");
+          queueMicrotask(() => {
+            if (knownPng || decodedSvg) {
+              this.naturalWidth = knownPng ? 1 : 1280;
+              this.naturalHeight = knownPng ? 1 : 720;
+              this.complete = true;
+              this.onload && this.onload();
+            } else {
+              this.complete = true;
+              this.onerror && this.onerror();
+            }
+          });
+        },
+        get src() { return source; },
+      };
+    }
+    return { setAttribute() {}, addEventListener() {} };
+  },
+};
+globalThis.window = globalThis;
+globalThis.document = document;
+globalThis.DOMParser = class { parseFromString(source) { return parseXml(source); } };
+Object.defineProperty(globalThis, "navigator", {
+  value: { userAgent: "node-module-contract" },
+  configurable: true,
+});
+globalThis.devicePixelRatio = 1;
+globalThis.requestAnimationFrame = (callback) => setTimeout(() => callback(Date.now()), 0);
+globalThis.cancelAnimationFrame = clearTimeout;
+globalThis.getComputedStyle = () => ({ getPropertyValue: () => "" });
+
+const deliveries = [];
+let deliveryOrdinal = 0;
+const host = {
+  newArtifactDeliveryId() {
+    deliveryOrdinal += 1;
+    return "00000000-0000-4000-8000-" + String(deliveryOrdinal).padStart(12, "0");
+  },
+  artifactDeliverBytes(base64, name, artifactType, title, thumbnailBase64, thumbnailMimeType, deliveryId) {
+    const delivery = {
+      bytes: Buffer.from(base64, "base64"),
+      name,
+      artifactType,
+      title,
+      thumbnail: Buffer.from(thumbnailBase64, "base64"),
+      thumbnailMimeType,
+      deliveryId,
+    };
+    deliveries.push(delivery);
+    return JSON.stringify({ id: "node-contract-artifact" });
+  },
+};
+
+async function assertFailureResult(promise, content, message) {
+  const result = await promise;
+  assert.deepEqual(result, { success: false, content }, message);
+}
+
+async function main() {
+  let argumentsObject;
+  let handlerDynamicImport;
+  let handlerSource;
+  if (manifest.id === "com.jarvys.module.chart") {
+    const chartBundle = require(path.join(moduleDirectory, "vendor/chart.umd.min.js"));
+    assert.equal(typeof chartBundle, "function");
+    globalThis.Chart = class {
+      constructor(context, config) {
+        assert.ok(context && context.canvas);
+        assert.equal(context.canvas.width, 1280);
+        assert.equal(context.canvas.height, 720);
+        assert.equal(config.type, "bar");
+        assert.equal(config.options.devicePixelRatio, 1);
+        this.context = context;
+      }
+      update() {}
+      draw() {}
+    };
+    argumentsObject = {
+      title: "Quarterly sales",
+      chartType: "bar",
+      labels: ["Q1", "Q2"],
+      datasets: [{ label: "Sales", data: [4, 7] }],
+    };
+  } else if (manifest.id === "com.jarvys.module.presentation") {
+    const skillMarkdown = fs.readFileSync(path.join(moduleDirectory, manifest.skills[0]));
+    assert.ok(skillMarkdown.byteLength < 256 * 1024, "module skill must fit the shared 256 KiB skill-reader limit");
+    globalThis.JSZip = require(path.join(moduleDirectory, "vendor/jszip.min.js"));
+    const glimpseContext = vm.createContext({});
+    const glimpseModule = new vm.SyntheticModule(["convertPptxToSvg"], function () {
+      this.setExport("convertPptxToSvg", async (bytes, options) => {
+        thumbnailRendererInput = Buffer.from(bytes);
+        thumbnailRendererOptions = options;
+        return { slides: thumbnailSlideSvgs.map((svg) => ({ svg })) };
+      });
+    }, { context: glimpseContext });
+    await glimpseModule.link(() => {});
+    await glimpseModule.evaluate();
+    handlerDynamicImport = (specifier) => {
+      assert.equal(specifier, "../vendor/pptx-glimpse.bundle.js",
+        "the thumbnail must use the same bundled PptxGlimpse module as the viewer");
+      return glimpseModule;
+    };
+    const generatorFile = path.join(moduleDirectory, "vendor/pptxgen.min.js");
+    vm.runInThisContext(fs.readFileSync(generatorFile, "utf8"), {
+      filename: generatorFile,
+      importModuleDynamically: (specifier) => import(specifier),
+    });
+    argumentsObject = {
+      title: "Quarterly review",
+      theme: { fonts: { headFontFace: "Arial", bodyFontFace: "Arial" }, colors: { accent1: "2459D3", accent2: "18A999" } },
+      slides: [
+        {
+          notes: "Cover slide notes",
+          elements: [
+            { type: "shape", shape: "ellipse", x: 10.0, y: 0.5, w: 2.2, h: 2.2, fill: { color: "DDEBFF" }, line: { color: "DDEBFF" } },
+            { type: "text", runs: [{ text: "Regional ", options: { bold: true, color: "18253A" } }, { text: "outlook", options: { italic: true, color: "2459D3" } }], x: 0.8, y: 2.0, w: 8.5, h: 1.2, fontSize: 34, fontFace: "Arial", color: "18253A", margin: 0 },
+          ],
+        },
+        {
+          elements: [
+            { type: "text", text: "A shared field playbook", x: 0.8, y: 1.0, w: 5.5, h: 0.8, fontSize: 27, fontFace: "Arial", color: "18253A", bold: true, margin: 0 },
+            { type: "text", text: "Local teams adapted the same approach to regional demand.", x: 0.8, y: 2.0, w: 5.5, h: 1.8, fontSize: 19, fontFace: "Arial", color: "344054", margin: 0 },
+            { type: "image", dataUrl: "data:image/png;base64," + thumbnailPng, x: 6.8, y: 1.0, w: 5.4, h: 4.2, sizing: "contain", altText: "Embedded PNG" },
+          ],
+        },
+        {
+          elements: [
+            { type: "chart", chartType: "bar", labels: ["North", "South", "West"], datasets: [{ name: "Revenue", values: [42, 57, 39], color: "2459D3" }], x: 0.8, y: 1.5, w: 6.0, h: 4.9, options: { title: "Quarterly revenue", showTitle: true, showValue: true, showLegend: false } },
+            { type: "text", text: "South led total revenue", x: 7.4, y: 1.6, w: 4.6, h: 0.8, fontSize: 20, fontFace: "Arial", color: "18253A", bold: true, margin: 0 },
+            { type: "text", text: "North delivered the next highest result", x: 7.4, y: 3.0, w: 4.6, h: 0.8, fontSize: 20, fontFace: "Arial", color: "18253A", margin: 0 },
+            { type: "text", text: "West remained close to the prior quarter", x: 7.4, y: 4.4, w: 4.6, h: 0.8, fontSize: 20, fontFace: "Arial", color: "18253A", margin: 0 },
+          ],
+        },
+        {
+          notes: ["Revenue sources: regional operating report."],
+          elements: [
+            { type: "text", text: "Every region improved while operating costs stayed within plan", x: 0.8, y: 0.4, w: 11.4, h: 1.3, fontSize: 29, fontFace: "Arial", color: "18253A", bold: true, margin: 0 },
+            { type: "text", text: "Quarterly operating summary", x: 0.8, y: 1.85, w: 8.0, h: 0.5, fontSize: 18, fontFace: "Arial", color: "344054", margin: 0 },
+            { type: "table", rows: [["Region", "Revenue", "Change"], ["North", "$42M", "+18%"], ["South", "$57M", "+27%"], ["West", "$39M", "+8%"]], x: 0.8, y: 2.6, w: 11.5, h: 3.6, colW: [4.2, 3.5, 3.8], fontSize: 16, fontFace: "Arial", color: "18253A", margin: 0.08 },
+          ],
+        },
+      ],
+    };  } else {
+    throw new Error("Unexpected bundled module id: " + manifest.id);
+  }
+
+  handlerSource = fs.readFileSync(handlerFile, "utf8");
+  const handlerOptions = { filename: handlerFile };
+  if (handlerDynamicImport) handlerOptions.importModuleDynamically = handlerDynamicImport;
+  new vm.Script(handlerSource, handlerOptions).runInThisContext();
+  const exportName = declaration.handler.split("#")[1];
+  assert.equal(typeof globalThis[exportName], "function");
+  if (!benchmarkOnly && manifest.id === "com.jarvys.module.presentation") {
+    assert.ok(Array.isArray(globalThis.presentationChartOptionProperties));
+    assert.ok(globalThis.presentationChartOptionProperties.includes("valAxisLabelFontSize"));
+    assert.ok(globalThis.presentationChartOptionProperties.includes("dataLabelFormatScatter"));
+    const skillMarkdown = fs.readFileSync(path.join(moduleDirectory, manifest.skills[0]), "utf8");
+    const documentedPropertyLists = Object.fromEntries(Array.from(skillMarkdown.matchAll(/^- `([^`]+)`: ([^\r\n]+)$/gm), (match) => [
+      match[1], Array.from(match[2].matchAll(/`([^`]+)`/g), (property) => property[1]),
+    ]));
+    const propertyListNames = ["text", "textRun", "textRunOptions", "shape", "image", "chart", "chartOptions", "table", "tableCell"];
+    assert.deepEqual(Object.keys(documentedPropertyLists).sort(), propertyListNames.slice().sort(),
+      "the skill documents each exported property list exactly once");
+    for (const name of propertyListNames) {
+      assert.deepEqual([...new Set(documentedPropertyLists[name])].sort(), [...new Set(globalThis.presentationPropertyLists[name])].sort(),
+        "the skill's " + name + " list matches the handler's accepted property list");
+    }
+  }
+  if (manifest.id === "com.jarvys.module.chart") {
+    await assertFailureResult(
+      globalThis[exportName]({ ...argumentsObject, chartType: "timeline" }, host),
+      "Chart: chartType is not supported by Chart.js; choose bar, bubble, doughnut, line, pie, polarArea, radar, or scatter.",
+      "an unsupported Chart.js type returns a correctable module failure",
+    );
+    assert.equal(deliveries.length, 0, "an unsupported chart type does not deliver an artifact");
+    oversizedCanvasThumbnail = "A".repeat(Math.ceil(1280 * 720 * 4 / 3) * 4 + 1);
+    const oversizedChart = await globalThis[exportName](argumentsObject, host);
+    oversizedCanvasThumbnail = null;
+    assert.deepEqual(oversizedChart, {
+      success: false,
+      content: "The chart thumbnail exceeds the displayed-card budget. Reduce the chart's data or visual complexity and retry.",
+    }, "a chart that cannot fit the thumbnail budget returns the exact correction");
+    assert.equal(deliveries.length, 0, "an oversized chart thumbnail does not deliver an artifact");
+  }
+  const result = await globalThis[exportName](argumentsObject, host);
+  assert.equal(result.success, true);
+  if (benchmarkOnly && manifest.id === "com.jarvys.module.presentation") {
+    const bench = await globalThis[exportName](makeReportBenchInput(), host);
+    const benchReport = JSON.parse(bench.content).measurementReport;
+    process.stdout.write("report-size-20x8=" + Buffer.byteLength(JSON.stringify(benchReport), "utf8") + " B\n");
+    return;
+  }
+  assert.equal(result.artifactType, manifest.artifactTypes[0].type);
+  assert.equal(deliveries.length, 1);
+
+  const delivery = deliveries[0];
+  assert.equal(delivery.artifactType, manifest.artifactTypes[0].type);
+  assert.equal(delivery.thumbnailMimeType, "image/png");
+  assert.match(delivery.deliveryId, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(Array.from(delivery.thumbnail.subarray(0, 4)), [0x89, 0x50, 0x4e, 0x47]);
+  assert.equal(canvases[canvases.length - 1].width, 1280);
+  assert.equal(canvases[canvases.length - 1].height, 720);
+
+  if (manifest.id === "com.jarvys.module.chart") {
+    const artifact = JSON.parse(delivery.bytes.toString("utf8"));
+    assert.equal(artifact.title, "Quarterly sales");
+    assert.equal(artifact.chartType, "bar");
+    assert.deepEqual(artifact.data.labels, ["Q1", "Q2"]);
+  } else {
+    assert.equal(delivery.name, "Quarterly review.pptx");
+    const response = JSON.parse(result.content);
+    assert.equal(response.artifactId, "node-contract-artifact");
+    assert.deepEqual(response.layout, { name: "LAYOUT_WIDE", width_in: 13.333333333333334, height_in: 7.5 });
+    assert.equal(response.measurementReport.slides.length, 4);
+    assert.equal(response.measurementReport.slides[0].elements.length, 2);
+    assert.deepEqual(thumbnailRendererInput, delivery.bytes,
+      "the generated PPTX bytes must reach the same PptxGlimpse renderer used by the viewer");
+    assert.deepEqual(thumbnailRendererOptions, { textOutput: "text", width: 1280, slides: [1] },
+      "the host artifact contract keeps the existing first-slide PNG thumbnail");
+    assert.equal(thumbnailDrawCalls.length, 1);
+    assert.deepEqual(thumbnailDrawCalls[0].args, [0, 0, 1280, 720]);
+
+    const zip = await globalThis.JSZip.loadAsync(delivery.bytes);
+    assert.ok(zip.file("[Content_Types].xml"));
+    const expectedSlides = argumentsObject.slides;
+    for (let slideNumber = 1; slideNumber <= expectedSlides.length; slideNumber += 1) {
+      const slideXml = await zip.file("ppt/slides/slide" + slideNumber + ".xml").async("string");
+      const boxes = assertSlideElementsWithinHeight(slideXml, slideNumber);
+      const reportSlide = response.measurementReport.slides[slideNumber - 1];
+      assert.equal(reportSlide.elements.length, expectedSlides[slideNumber - 1].elements.length);
+      expectedSlides[slideNumber - 1].elements.forEach((element, elementIndex) => {
+        const measured = reportSlide.elements[elementIndex];
+        assert.equal(measured.index, elementIndex);
+        assert.equal(measured.type, element.type);
+        assert.equal(boxes[elementIndex].x / 914400, element.x === undefined ? boxes[elementIndex].x / 914400 : element.x);
+        assert.equal(boxes[elementIndex].y / 914400, element.y);
+        if (element.type !== "table") {
+          assert.equal(boxes[elementIndex].w / 914400, element.w);
+          assert.equal(boxes[elementIndex].h / 914400, element.h);
+        } else {
+          assert.equal(boxes[elementIndex].w / 914400, element.w);
+        }
+        if (measured.box) assert.deepEqual(measured.box, {
+          x: boxes[elementIndex].x / 914400,
+          y: boxes[elementIndex].y / 914400,
+          w: boxes[elementIndex].w / 914400,
+          h: boxes[elementIndex].h / 914400,
+        });
+      });
+      assert.equal(reportSlide.outside_bounds?.length || 0, 0, "accepted explicit elements stay within slide bounds");
+      assert.equal(reportSlide.overlaps?.length || 0, 0, "the four authored examples have no intersecting boxes");
+    }
+
+    const coverXml = await zip.file("ppt/slides/slide1.xml").async("string");
+    assert.match(coverXml, /Regional/);
+    assert.match(coverXml, /outlook/);
+    assert.match(coverXml, /<a:prstGeom prst="ellipse"/);
+    assert.match(coverXml, /<a:rPr[^>]*b="1"/);
+    assert.match(coverXml, /<a:rPr[^>]*i="1"/);
+    assert.ok(response.measurementReport.slides[0].elements[1].contrast.ratio > 1);
+    assert.equal(response.measurementReport.slides[0].elements[1].contrast.runs.length, 2,
+      "different run ratios are reported per run");
+    assert.equal(response.measurementReport.metrics_source, "canvas-width-with-font-size-fallback");
+    assert.ok(response.measurementReport.slides[0].minimum_font_size_pt > 0);
+
+    const richRunResult = await globalThis.createPresentation({
+      title: "PptxGenJS rich-text run options",
+      slides: [{ elements: [{
+        type: "text",
+        runs: [{ text: "Styled run", options: { bold: true, color: "C00000", fontSize: 24 } }],
+        x: 0.8, y: 0.8, w: 4, h: 0.8, margin: 0,
+      }] }],
+    }, host);
+    assert.equal(richRunResult.success, true, "rich text runs in PptxGenJS options form are accepted");
+    const richRunXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    const richRunProperties = descendants(parseXml(richRunXml)).filter((node) => node.localName === "rPr");
+    assert.equal(richRunProperties[0].getAttribute("b"), "1");
+    assert.equal(richRunProperties[0].getAttribute("sz"), "2400");
+    assert.equal(descendants(richRunProperties[0]).find((node) => node.localName === "srgbClr").getAttribute("val"), "C00000");
+    await assertFailureResult(globalThis.createPresentation({
+      title: "Flat rich-text run form",
+      slides: [{ elements: [{ type: "text", runs: [{ text: "Flat", bold: true }], x: 0.8, y: 0.8, w: 4, h: 0.8 }] }],
+    }, host), "Slide 1, element 0 (text), run 0: unsupported property run.bold.",
+    "unsupported flat run properties return the exact slide, element, run and field context");
+
+    const imageXml = await zip.file("ppt/slides/slide2.xml").async("string");
+    assert.match(imageXml, /shared field playbook/i);
+    assert.ok(Object.keys(zip.files).some((name) => name.startsWith("ppt/media/") && name.endsWith(".png")),
+      "a PNG data URL becomes an embedded image part");
+
+    const chartXml = await zip.file("ppt/charts/chart1.xml").async("string");
+    assert.match(chartXml, /Quarterly revenue/);
+    assert.match(chartXml, /<c:v>North<\/c:v>/);
+    assert.match(chartXml, /<c:v>57<\/c:v>/);
+    const tableSlideXml = await zip.file("ppt/slides/slide4.xml").async("string");
+    assert.equal((tableSlideXml.match(/<a:tbl>/g) || []).length, 1, "table output remains native OOXML");
+    ["Every region improved while operating costs stayed within plan", "Quarterly operating summary", "Revenue", "$57M"].forEach((value) => {
+      assert.ok(tableSlideXml.includes(value), "the authored slide includes " + value);
+    });
+    assert.ok(Object.keys(zip.files).some((name) => name.startsWith("ppt/notesSlides/notesSlide") && name.endsWith(".xml")),
+      "slide notes are preserved in the PPTX package");
+
+    const ownerElements = [
+      { type: "text", text: "Regional growth accelerated this quarter", x: 0.8, y: 0.3, w: 6.0, h: 0.55, fontSize: 30, fontFace: "Arial", color: "000000", margin: 0 },
+      { type: "text", text: "Quarterly outlook", x: 0.8, y: 0.7, w: 5.0, h: 0.6, fontSize: 18, fontFace: "Arial", color: "000000", margin: 0 },
+      ...["North finished at 42", "South finished at 57", "West remained stable", "All regions exceeded plan"].map((text, index) => ({
+        type: "text", text, x: 0.8, y: 2.0 + index * 0.8, w: 7.5, h: 0.5, fontSize: 18, fontFace: "Arial", color: "000000", bullet: true, margin: 0,
+      })),
+    ];
+    const ownerResult = await globalThis.createPresentation({ title: "Owner overlap regression", slides: [{ elements: ownerElements }] }, host);
+    assert.equal(ownerResult.success, true, "overflow and overlap are feedback, not delivery errors");
+    const ownerReport = JSON.parse(ownerResult.content).measurementReport.slides[0];
+    assert.equal(ownerReport.elements[0].overflow, true);
+    assert.equal(ownerReport.elements[0].line_count, 2, "the owner regression title wraps onto two lines");
+    assert.ok(ownerReport.elements[0].needed_h > ownerReport.elements[0].box.h);
+    assert.deepEqual(ownerReport.overlaps.map((entry) => entry.elements), [[0, 1]]);
+    assert.ok(ownerReport.elements[0].contrast > 1);
+    assert.ok(ownerReport.minimum_font_size_pt > 0);
+
+    const correctedElements = ownerElements.map((element, index) => index === 0
+      ? { ...element, w: 11.5, h: 1.1 }
+      : index === 1 ? { ...element, y: 1.5 }
+        : { ...element, y: 2.7 + (index - 2) * 0.8 });
+    const correctedResult = await globalThis.createPresentation({ title: "Owner corrected layout", slides: [{ elements: correctedElements }] }, host);
+    const correctedReport = JSON.parse(correctedResult.content).measurementReport.slides[0];
+    assert.equal(correctedReport.elements[0].overflow, undefined);
+    assert.equal(correctedReport.overlaps?.length || 0, 0);
+
+    const generatedOutOfBounds = await globalThis.createPresentation({
+      title: "Generated table crosses slide edge",
+      slides: [{ elements: [{ type: "table", rows: [["A"], ["B"]], x: 0.8, y: 7.1, w: 4.0, rowH: [1.0, 1.0] }] }],
+    }, host);
+    const generatedBoundsReport = JSON.parse(generatedOutOfBounds.content).measurementReport.slides[0];
+    assert.equal(generatedBoundsReport.elements[0].box.y + generatedBoundsReport.elements[0].box.h > 7.5, true);
+    assert.equal(generatedBoundsReport.outside_bounds.length, 1);
+
+    const exactMargin = await globalThis.createPresentation({
+      title: "PptxGenJS margin order",
+      slides: [{ elements: [{ type: "text", text: "X", x: 0.8, y: 0.8, w: 0.6, h: 0.6, fontSize: 18, color: "000000", margin: [0, 0, 18, 18] }] }],
+    }, host);
+    const exactMarginReport = JSON.parse(exactMargin.content).measurementReport.slides[0].elements[0];
+    assert.equal(exactMarginReport.overflow, true, "bottom and top margin insets are included in required height");
+    assert.ok(exactMarginReport.needed_h > 0.7 && exactMarginReport.needed_h < 0.8,
+      "18 pt font plus 18 pt top and bottom insets needs about 0.75 in");
+    const exactMarginXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    const exactBodyPr = descendants(parseXml(exactMarginXml)).find((node) => node.localName === "bodyPr");
+    assert.equal(exactBodyPr.getAttribute("lIns"), "0");
+    assert.equal(exactBodyPr.getAttribute("rIns"), "0");
+    assert.equal(exactBodyPr.getAttribute("bIns"), "228600");
+    assert.equal(exactBodyPr.getAttribute("tIns"), "228600");
+
+    const scalarMargin = await globalThis.createPresentation({
+      title: "Scalar text margin",
+      slides: [{ elements: [{ type: "text", text: "Scalar margin", x: 0.8, y: 0.8, w: 4, h: 1, fontSize: 18, color: "000000", margin: 6 }] }],
+    }, host);
+    const scalarMarginXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    const scalarBodyPr = descendants(parseXml(scalarMarginXml)).find((node) => node.localName === "bodyPr");
+    assert.deepEqual(["lIns", "rIns", "bIns", "tIns"].map((key) => scalarBodyPr.getAttribute(key)),
+      ["76200", "76200", "76200", "76200"], "scalar margin is applied in points on all sides");
+
+    const bulletResult = await globalThis.createPresentation({
+      title: "Bullet indentation measurement",
+      slides: [{ elements: [
+        { type: "text", text: "alpha beta gamma delta epsilon zeta eta theta", x: 0.8, y: 1, w: 1.3, h: 2, fontSize: 12, color: "000000", margin: 0 },
+        { type: "text", text: "alpha beta gamma delta epsilon zeta eta theta", x: 4, y: 1, w: 1.3, h: 2, fontSize: 12, color: "000000", margin: 0, bullet: true },
+        { type: "text", text: "alpha beta gamma delta epsilon zeta eta theta", x: 7, y: 1, w: 2.5, h: 2, fontSize: 12, color: "000000", margin: 0, bullet: { indent: 36 }, indentLevel: 1 },
+      ] }],
+    }, host);
+    const bulletReport = JSON.parse(bulletResult.content).measurementReport.slides[0];
+    assert.ok(bulletReport.elements[1].line_count > bulletReport.elements[0].line_count,
+      "the default bullet hanging indent reduces the measured line width");
+    const bulletXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    const paragraphProperties = descendants(parseXml(bulletXml)).filter((node) => node.localName === "pPr");
+    assert.equal(paragraphProperties[1].getAttribute("marL"), "342900");
+    assert.equal(paragraphProperties[1].getAttribute("indent"), "-342900");
+    assert.equal(paragraphProperties[2].getAttribute("marL"), "914400");
+    assert.equal(paragraphProperties[2].getAttribute("indent"), "-457200");
+
+    const contrastResult = await globalThis.createPresentation({
+      title: "Effective background contrast",
+      slides: [{ background: "FFFFFF", elements: [
+        { type: "shape", shape: "rect", x: 1, y: 1, w: 4, h: 2, fill: { color: "112244" } },
+        { type: "text", text: "White on dark card", x: 1.5, y: 1.5, w: 3, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "text", text: "Light grey on white", x: 6, y: 1, w: 3, h: 0.5, fontSize: 18, color: "D8D8D8", margin: 0 },
+        { type: "image", dataUrl: "data:image/png;base64," + thumbnailPng, x: 1, y: 4, w: 4, h: 2 },
+        { type: "text", text: "Text over image", x: 1.5, y: 4.5, w: 3, h: 0.5, fontSize: 18, color: "000000", margin: 0 },
+      ] }],
+    }, host);
+    const contrastReport = JSON.parse(contrastResult.content).measurementReport.slides[0];
+    assert.ok(contrastReport.elements[1].contrast > 7, "white text inherits the preceding opaque dark shape fill");
+    assert.ok(contrastReport.elements[2].contrast < 4.5, "light grey text on white reports its low ratio");
+    assert.equal(contrastReport.elements[4].contrast, null, "the image does not produce a fabricated ratio");
+    assert.equal(contrastReport.elements[4].contrast_reason, "background is an image/unknown");
+
+    const coverageContrastResult = await globalThis.createPresentation({
+      title: "Background coverage and opacity",
+      slides: [{ background: "FFFFFF", elements: [
+        { type: "shape", shape: "rect", x: 1, y: 1, w: 0.6, h: 0.5, fill: { color: "112244" } },
+        { type: "text", text: "Sixty percent", x: 1, y: 1, w: 1, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "shape", shape: "rect", x: 3, y: 1, w: 0.3, h: 0.5, fill: { color: "112244" } },
+        { type: "text", text: "Thirty percent", x: 3, y: 1, w: 1, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "shape", shape: "rect", x: 5, y: 1, w: 1, h: 0.5, fill: { color: "112244" } },
+        { type: "text", text: "Full coverage", x: 5, y: 1, w: 1, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "shape", shape: "rect", x: 7, y: 1, w: 1, h: 0.5, fill: { color: "112244", transparency: 100 } },
+        { type: "text", text: "Transparent", x: 7, y: 1, w: 1, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "shape", shape: "rect", x: 9, y: 1, w: 1, h: 0.5, fill: { color: "112244", transparency: 50 } },
+        { type: "text", text: "Semitransparent", x: 9, y: 1, w: 1, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "chart", chartType: "bar", labels: ["North"], datasets: [{ name: "Sales", values: [1] }], x: 1, y: 3, w: 2, h: 1.5 },
+        { type: "text", text: "Over chart", x: 1.2, y: 3.2, w: 1, h: 0.5, fontSize: 18, color: "000000", margin: 0 },
+        { type: "table", rows: [["A", "B"], ["C", "D"]], x: 4, y: 3, w: 2, h: 1.5 },
+        { type: "text", text: "Over table", x: 4.2, y: 3.2, w: 1, h: 0.5, fontSize: 18, color: "000000", margin: 0 },
+      ] }],
+    }, host);
+    const coverageReport = JSON.parse(coverageContrastResult.content).measurementReport.slides[0];
+    for (const index of [1, 3]) {
+      assert.equal(coverageReport.elements[index].contrast, null, "a partly covering shape does not imply a single background color");
+      assert.equal(coverageReport.elements[index].contrast_reason, "background is mixed");
+    }
+    assert.ok(coverageReport.elements[5].contrast > 7, "a shape that fully covers the text box supplies its fill color");
+    for (const index of [7, 9]) {
+      assert.equal(coverageReport.elements[index].contrast, null, "transparent and semitransparent fills do not produce a fabricated ratio");
+      assert.equal(coverageReport.elements[index].contrast_reason, "background is transparent/unknown");
+    }
+    for (const index of [11, 13]) {
+      assert.equal(coverageReport.elements[index].contrast, null, "text over charts and tables has no known background color");
+      assert.equal(coverageReport.elements[index].contrast_reason, "background is a chart/table");
+    }
+
+    const tableSpans = await globalThis.createPresentation({
+      title: "Logical table spans",
+      slides: [{ elements: [
+        { type: "table", rows: [[{ text: "AB", options: { colspan: 2 } }], ["A", "B"]], x: 0.8, y: 0.8, w: 4, h: 1.4 },
+        { type: "table", rows: [[{ text: "A", options: { rowspan: 2 } }, "B"], ["C"]], x: 0.8, y: 3, w: 4, h: 1.4 },
+      ] }],
+    }, host);
+    const spanXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    assert.match(spanXml, /gridSpan="2"/, "a colspan cell occupies two logical columns");
+    assert.match(spanXml, /rowSpan="2"/, "a rowspan cell occupies a column in the next row");
+    assert.match(spanXml, /vMerge="1"/, "PptxGenJS writes the covered continuation cell");
+    const tableWithoutHeight = await globalThis.createPresentation({
+      title: "Table derives its height",
+      slides: [{ elements: [{ type: "table", rows: [["Region", "Sales"], ["North", "42"]], x: 0.8, y: 0.8, w: 4, rowH: [0.4, 0.4] }] }],
+    }, host);
+    assert.equal(tableWithoutHeight.success, true, "a table may omit h and derive its height from rows");
+    const tableWithoutHeightXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    assert.match(tableWithoutHeightXml, /<a:tbl>/);
+    await assertFailureResult(globalThis.createPresentation({
+      title: "Rowspan extends beyond table",
+      slides: [{ elements: [{ type: "table", rows: [[{ text: "A", options: { rowspan: 3 } }], ["B"]], x: 0.8, y: 0.8, w: 4 }] }],
+    }, host), "Slide 1, element 0 (table): rows[0][0].options.rowspan extends beyond the final table row.",
+    "a rowspan past the final table row returns the exact cell context");
+    await assertFailureResult(globalThis.createPresentation({
+      title: "Malformed table span",
+      slides: [{ elements: [{ type: "table", rows: [[{ text: "A", options: { rowspan: 2 } }, "B"], ["C", "D"]], x: 0.8, y: 0.8, w: 4 }] }],
+    }, host), "Slide 1, element 0 (table): rows[1] resolves to 3 logical columns; expected 2.",
+    "malformed table spans return the exact slide, element and row message");
+
+    const beforeInvalidInputs = deliveries.length;
+    const invalidCases = [
+      [{ type: "audio", x: 0, y: 0, w: 1, h: 1 }, "Slide 1, element 0 (audio): type is unknown."],
+      [{ type: "text", text: "Unknown prop", x: 0, y: 0, w: 1, h: 1, autoPlace: true }, "Slide 1, element 0 (text): unsupported property element.autoPlace."],
+      [{ type: "text", text: "No height", x: 0, y: 0, w: 1 }, "Slide 1, element 0 (text): element.h is required for this element type."],
+      [{ type: "shape", shape: "rect", x: 0, y: 0, w: 1 }, "Slide 1, element 0 (shape): element.h is required for this element type."],
+      [{ type: "image", dataUrl: "data:image/png;base64," + thumbnailPng, x: 0, y: 0, w: 1 }, "Slide 1, element 0 (image): element.h is required for this element type."],
+      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2 }, "Slide 1, element 0 (chart): element.h is required for this element type."],
+      [{ type: "text", text: "Non-finite", x: 0, y: 0, w: Infinity, h: 1 }, "Slide 1, element 0 (text): element.w must be a finite number."],
+      [{ type: "text", text: "Negative", x: 0, y: 0, w: -1, h: 1 }, "Slide 1, element 0 (text): element.w and .h must be positive; a line may have one zero dimension."],
+      [{ type: "text", text: "Negative height", x: 0, y: 0, w: 1, h: -1 }, "Slide 1, element 0 (text): element.w and .h must be positive; a line may have one zero dimension."],
+      [{ type: "text", text: "Outside", x: 13, y: 0, w: 1, h: 1 }, "Slide 1, element 0 (text): element is outside the slide bounds (13.333333333333334 × 7.5 in)."],
+      [{ type: "chart", chartType: "bar", labels: [], datasets: [], x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (chart): labels must contain chart data."],
+      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [], x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (chart): datasets must contain chart data."],
+      [{ type: "chart", chartType: "bar", labels: ["North", "South"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (chart): datasets[0].values has 1 entries but labels has 2."],
+      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [{ name: "Sales", values: [NaN] }], x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (chart): datasets[0].values[0] must be a finite number."],
+      [{ type: "chart", chartType: "scatter", labels: ["North"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (chart): chartType scatter is not supported by the labels and numeric values input format; use another chart type."],
+      [{ type: "image", dataUrl: "https://example.invalid/image.png", x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (image): dataUrl must be an image data URL."],
+      [{ type: "image", dataUrl: "data:image/png;base64,not-an-image", x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (image): dataUrl image data cannot be decoded."],
+      [{ type: "table", rows: [["A", "B"], ["only one"]], x: 0, y: 0, w: 3 }, "Slide 1, element 0 (table): rows[1] resolves to 1 logical columns; expected 2."]
+    ];
+    for (const [element, expectedMessage] of invalidCases) {
+      await assertFailureResult(
+        globalThis.createPresentation({ title: "Invalid input", slides: [{ elements: [element] }] }, host),
+        expectedMessage,
+        "invalid " + element.type + " input returns the exact slide, element, field and correction detail",
+      );
+    }
+    await assertFailureResult(
+      globalThis.createPresentation({ title: "Missing type", slides: [{ elements: [
+        { type: "text", text: "First", x: 0, y: 0, w: 1, h: 1 },
+        { text: "No type", x: 2, y: 0, w: 1, h: 1 },
+      ] }] }, host),
+      "Slide 1, element 1 (missing type): type is unknown.",
+      "a missing element type returns the exact slide and element context",
+    );
+    await assertFailureResult(globalThis.createPresentation({ title: "Legacy slide format", slides: [{
+      title: "Old title", body: "Old body", bullets: ["one"], shapes: [], images: [], chart: {}, table: {},
+    }] }, host),
+    "Slide 1: the old slide-level title/body/bullets/shapes/images/chart/table format is no longer supported; use slides[].elements[] and give each element explicit x, y, w, and h (tables may derive h).",
+    "the old slide-level format returns a direct correction to the current schema");
+    assert.equal(deliveries.length, beforeInvalidInputs, "invalid input never delivers a partial presentation");
+
+    const originalAddSlide = globalThis.PptxGenJS.prototype.addSlide;
+    assert.equal(typeof originalAddSlide, "function", "the generation API exposes addSlide for the construction-failure contract");
+    let constructionFailure;
+    try {
+      globalThis.PptxGenJS.prototype.addSlide = function (...args) {
+        const slide = originalAddSlide.apply(this, args);
+        slide.addText = function () { throw new Error("simulated build rejection"); };
+        return slide;
+      };
+      constructionFailure = await globalThis.createPresentation({
+        title: "Expected build rejection",
+        slides: [{ elements: [{ type: "text", text: "Valid input", x: 0.8, y: 0.8, w: 4, h: 0.8 }] }],
+      }, host);
+    } finally {
+      globalThis.PptxGenJS.prototype.addSlide = originalAddSlide;
+    }
+    assert.deepEqual(constructionFailure, {
+      success: false,
+      content: "Slide 1, element 0 (text): PptxGenJS rejected the element: simulated build rejection",
+    }, "an expected PptxGenJS construction rejection returns its exact element context");
+    assert.equal(deliveries.length, beforeInvalidInputs, "a failed construction never delivers a partial presentation");
+
+    const bugHost = {
+      ...host,
+      artifactDeliverBytes() { throw new Error("simulated internal module bug"); },
+    };
+    await assert.rejects(globalThis.createPresentation({
+      title: "Simulated internal failure",
+      slides: [{ elements: [{ type: "text", text: "Valid input", x: 0.8, y: 0.8, w: 4, h: 0.8 }] }],
+    }, bugHost), (error) => {
+      assert.equal(error.message, "simulated internal module bug");
+      return true;
+    }, "a non-validation exception still propagates unchanged from createPresentation");
+
+    const svgResult = await globalThis.createPresentation({
+      title: "SVG support notice",
+      slides: [{ elements: [{ type: "image", dataUrl: "data:image/svg+xml;base64," + Buffer.from("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\"></svg>").toString("base64"), x: 1, y: 1, w: 2, h: 2 }] }],
+    }, host);
+    const svgReport = JSON.parse(svgResult.content).measurementReport;
+    assert.equal(svgReport.warnings[0].field, "dataUrl");
+    assert.match(svgReport.warnings[0].fact, /SVG/);
+    const reportSizeResult = await globalThis.createPresentation(makeReportBenchInput(), host);
+    const reportSize = Buffer.byteLength(JSON.stringify(JSON.parse(reportSizeResult.content).measurementReport), "utf8");
+    process.stdout.write("report-size-20x8=" + reportSize + " B\n");
+    const viewerHtml = fs.readFileSync(path.join(moduleDirectory, "viewer/presentation.html"), "utf8");
+    assert.match(viewerHtml, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/);
+    assert.doesNotMatch(viewerHtml, /<h1\b/, "the host already provides the presentation title");
+    assert.ok(viewerHtml.indexOf("class=\"stage\"") < viewerHtml.indexOf("<nav"));
+    assert.doesNotMatch(viewerHtml.match(/nav\s*\{[^}]*\}/)?.[0] || "", /position\s*:\s*absolute/);
+    assert.match(viewerHtml, /<script src="presentation\.js"><\/script>/);
+    assert.match(viewerHtml, /<p class="loading" id="loading">Loading presentation…<\/p>/,
+      "the viewer must show its loading state before presentation.js runs");
+    const viewerJs = fs.readFileSync(path.join(moduleDirectory, "viewer/presentation.js"), "utf8");
+    assert.match(viewerJs, /loadingPresentation: "Cargando presentación…"/);
+    assert.match(viewerJs, /loadingPresentation: "Loading presentation…"/);
+    assert.match(viewerJs, /stage\.setAttribute\("aria-label", labels\.stage\)/);
+    assert.match(viewerHtml, /window\.addEventListener\("error"[\s\S]*window\.addEventListener\("unhandledrejection"/,
+      "the standalone HTML fallback must report script/global and unhandled promise failures");
+    assert.doesNotMatch(viewerHtml, /sizeViewport|window\.innerHeight/,
+      "the viewer layout must use its host's measured WebView bounds");
+    assert.doesNotMatch(viewerHtml, /setTimeout\([^]*?10000/,
+      "a slow render must keep its loading state instead of becoming an error");
+    assert.match(viewerHtml, /if \(ready \|\| failureShown\) return/,
+      "global errors after a successful render must not cover the working deck");
+    assert.match(viewerHtml, /window\.__presentationViewerReady = function \(\)/,
+      "the viewer script must report when the first slide has rendered");
+    assert.match(viewerJs, /slides:\s*\[index \+ 1\]/,
+      "the viewer must convert only the selected slide");
+    assert.match(viewerJs, /slideCache\.set\(index, result\.svg\)/,
+      "the viewer must retain SVGs it has already converted");
+    assert.match(viewerJs, /getElementsByTagNameNS/);
+    assert.match(viewerJs, /"sldId"/,
+      "the viewer must count slides from the PPTX manifest without converting each slide");
+    assert.match(viewerHtml, /data-error-es="No se pudo abrir la presentación\./);
+    assert.match(viewerHtml, /data-error-en="The presentation could not be opened\./);
+    assert.doesNotMatch(viewerHtml, /deck-renderer\.js/, "the user-visible viewer must have one renderer");
+    assert.equal(fs.existsSync(path.join(moduleDirectory, "viewer/deck-renderer.js")), false,
+      "the separate thumbnail renderer asset must be removed");
+    assert.doesNotMatch(handlerSource, /PptxDeckRenderer|deck-renderer\.js/,
+      "the handler must load no separate thumbnail renderer");
+
+    const fallbackSource = viewerHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    assert.ok(fallbackSource, "the page must carry its fallback independently of presentation.js and PptxGlimpse");
+    function runStandaloneFallback(language = "es-ES") {
+      const listeners = {};
+      const fallbackNodes = {
+        status: {
+          hidden: true,
+          textContent: "",
+          getAttribute(name) {
+            return name === "data-error-es"
+              ? "No se pudo abrir la presentación. Vuelve a intentarlo o abre el archivo en una aplicación compatible."
+              : "The presentation could not be opened. Try again or open the file in a compatible app.";
+          },
+        },
+        counter: { textContent: "Cargando…" },
+      };
+      const fallbackWindow = {
+        addEventListener(name, callback) { listeners[name] = callback; },
+      };
+      vm.runInNewContext(fallbackSource, {
+        window: fallbackWindow,
+        document: { getElementById: (id) => fallbackNodes[id] || null },
+        navigator: { language },
+      });
+      return { fallbackNodes, fallbackWindow, listeners };
+    }
+
+    const scriptFailureFallback = runStandaloneFallback();
+    scriptFailureFallback.listeners.error({
+      target: { tagName: "IMG", getAttribute: () => "" },
+    });
+    assert.equal(scriptFailureFallback.fallbackNodes.status.hidden, true,
+      "an unrelated image failure must not report a presentation load failure");
+    scriptFailureFallback.listeners.error({
+      target: { tagName: "SCRIPT", getAttribute: () => "presentation.js" },
+    });
+    assert.equal(scriptFailureFallback.fallbackNodes.status.hidden, false,
+      "a failed presentation.js load must display the standalone alert");
+    assert.match(scriptFailureFallback.fallbackNodes.status.textContent, /No se pudo abrir la presentación/);
+    assert.equal(scriptFailureFallback.fallbackNodes.counter.textContent, "");
+
+    const rejectionFallback = runStandaloneFallback("en-US");
+    rejectionFallback.listeners.unhandledrejection({ reason: new Error("fixture-rejection") });
+    assert.equal(rejectionFallback.fallbackNodes.status.hidden, false,
+      "an unhandled rejection must display the standalone alert");
+    assert.match(rejectionFallback.fallbackNodes.status.textContent, /The presentation could not be opened/);
+
+    const completedFallback = runStandaloneFallback();
+    completedFallback.fallbackWindow.__presentationViewerReady();
+    completedFallback.listeners.error({ target: completedFallback.fallbackWindow });
+    assert.equal(completedFallback.fallbackNodes.status.hidden, true,
+      "a later global error must not cover the successfully rendered presentation");
+
+    const viewerScript = path.join(moduleDirectory, "viewer/presentation.js");
+    const viewerSource = fs.readFileSync(viewerScript, "utf8");
+    let failSlideImageDecode = false;
+    let requestedArtifactUrl = "";
+    let convertedBytes = null;
+    let convertedOptions = null;
+    let renderedSlideIndices = [];
+    let viewerFallbackReadyCalls = 0;
+
+    function setupViewerNodes() {
+      const viewerNodes = {
+        stage: {
+          clientWidth: 320,
+          clientHeight: 210,
+          children: [],
+          setAttribute(name, value) { this[name] = value; },
+          replaceChildren(...children) { this.children = children; },
+        },
+        loading: { hidden: false, textContent: "" },
+        navigation: { setAttribute(name, value) { this[name] = value; } },
+        counter: { textContent: "" },
+        previous: { disabled: true, textContent: "", addEventListener(name, handler) { this[name] = handler; }, click() { if (!this.disabled) this.clickHandler && this.clickHandler(); } },
+        next: { disabled: true, textContent: "", addEventListener(name, handler) { this.clickHandler = handler; }, click() { if (!this.disabled) this.clickHandler(); } },
+        status: { hidden: true, textContent: "" },
+      };
+      viewerNodes.previous.addEventListener = function (name, handler) { this.clickHandler = handler; };
+      viewerNodes.stage.getBoundingClientRect = () => ({ width: 320, height: 210 });
+      document.documentElement = { lang: "es" };
+      document.title = "";
+      document.getElementById = (id) => viewerNodes[id];
+      document.createElement = (tag) => {
+        assert.equal(tag, "img");
+        const image = {
+          id: "",
+          className: "",
+          alt: "",
+          style: {},
+          naturalWidth: 1280,
+          naturalHeight: 720,
+          complete: false,
+          onload: null,
+          onerror: null,
+          _src: "",
+          set src(value) {
+            this._src = value;
+            const slideMatch = decodeURIComponent(value.slice(value.indexOf(",") + 1)).match(/data-slide="(\d+)"/);
+            if (slideMatch) renderedSlideIndices.push(Number(slideMatch[1]));
+            queueMicrotask(() => {
+              this.complete = !failSlideImageDecode;
+              if (failSlideImageDecode) this.onerror && this.onerror();
+              else this.onload && this.onload();
+            });
+          },
+          get src() { return this._src; },
+          getAttribute(name) { return name === "src" ? this.src : null; },
+        };
+        return image;
+      };
+      globalThis.getComputedStyle = () => ({
+        paddingLeft: "12px", paddingRight: "12px", paddingTop: "12px", paddingBottom: "12px",
+      });
+      return viewerNodes;
+    }
+
+    async function runViewer(converter, language = "es-ES", countedSlideCount = 4, failFetch = false) {
+      const viewerNodes = setupViewerNodes();
+      Object.defineProperty(globalThis, "navigator", {
+        value: { userAgent: "node-module-contract", language }, configurable: true,
+      });
+      globalThis.JarvysArtifact = { url: "https://modules.jarvys.invalid/module-artifacts/fixture" };
+      globalThis.DOMParser = class {
+        parseFromString(xml) {
+          return {
+            getElementsByTagName() { return []; },
+            getElementsByTagNameNS(namespace, name) {
+              assert.equal(name, "sldId");
+              return Array.from({ length: countedSlideCount });
+            },
+          };
+        }
+      };
+      viewerFallbackReadyCalls = 0;
+      globalThis.__presentationViewerReady = () => { viewerFallbackReadyCalls += 1; };
+      globalThis.fetch = async (url) => {
+        requestedArtifactUrl = url;
+        return {
+          ok: !failFetch,
+          arrayBuffer: async () => delivery.bytes.buffer.slice(delivery.bytes.byteOffset, delivery.bytes.byteOffset + delivery.bytes.byteLength),
+        };
+      };
+      globalThis.addEventListener = () => {};
+      const moduleContext = vm.createContext({});
+      const glimpseModule = new vm.SyntheticModule(["convertPptxToSvg"], function () {
+        this.setExport("convertPptxToSvg", converter);
+      }, { context: moduleContext });
+      await glimpseModule.link(() => {});
+      await glimpseModule.evaluate();
+      const script = new vm.Script(viewerSource, {
+        filename: viewerScript,
+        importModuleDynamically: () => glimpseModule,
+      });
+      script.runInThisContext();
+      await globalThis.PptxPresentationViewerReady;
+      return viewerNodes;
+    }
+
+    const convertedCalls = [];
+    const successfulViewerNodes = await runViewer(async (bytes, options) => {
+      convertedBytes = Buffer.from(bytes);
+      convertedOptions = options;
+      convertedCalls.push({ bytes: Buffer.from(bytes), options });
+      return {
+        slides: [{
+          slideNumber: options.slides[0],
+          svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" data-slide="' + (options.slides[0] - 1) + '"></svg>',
+        }],
+      };
+    });
+    assert.equal(requestedArtifactUrl, globalThis.JarvysArtifact.url);
+    assert.deepEqual(convertedBytes, delivery.bytes, "the viewer must pass the delivered PPTX bytes to PptxGlimpse");
+    assert.deepEqual(convertedOptions, { textOutput: "text", width: 1280, slides: [1] });
+    assert.equal(successfulViewerNodes.counter.textContent, "Diapositiva 1 de 4", "viewer error: " + successfulViewerNodes.status.textContent);
+    assert.equal(viewerFallbackReadyCalls, 1, "the first rendered slide must clear the loading state");
+    assert.equal(successfulViewerNodes.status.hidden, true);
+    assert.equal(document.title, "Presentación");
+    assert.equal(successfulViewerNodes.previous.disabled, true);
+    assert.equal(successfulViewerNodes.next.disabled, false);
+    assert.equal(successfulViewerNodes.stage.children.length, 1);
+    assert.equal(successfulViewerNodes.stage.children[0].style.width, "296px");
+    assert.equal(successfulViewerNodes.stage.children[0].style.height, "166.5px");
+    successfulViewerNodes.next.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(successfulViewerNodes.counter.textContent, "Diapositiva 2 de 4");
+    assert.equal(successfulViewerNodes.previous.disabled, false);
+    successfulViewerNodes.previous.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(successfulViewerNodes.counter.textContent, "Diapositiva 1 de 4");
+    assert.deepEqual(renderedSlideIndices, [0, 1, 0], "next and previous controls must render the selected slide");
+    assert.deepEqual(convertedCalls.map((call) => call.options.slides[0]), [1, 2],
+      "the viewer must convert the selected slide once and reuse its cached SVG when navigating back");
+
+    failSlideImageDecode = false;
+    const englishViewerNodes = await runViewer(async (_bytes, options) => ({
+      slides: [{ slideNumber: options.slides[0], svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
+    }), "en-US", 1);
+    assert.equal(document.title, "Presentation");
+    assert.equal(englishViewerNodes.counter.textContent, "Slide 1 of 1");
+    assert.equal(viewerFallbackReadyCalls, 1);
+    assert.equal(englishViewerNodes.previous.textContent, "Previous");
+    assert.equal(englishViewerNodes.next.textContent, "Next");
+
+    failSlideImageDecode = true;
+    const failedViewerNodes = await runViewer(async (_bytes, options) => ({
+      slides: [{ slideNumber: options.slides[0], svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
+    }), "es-ES", 1);
+    assert.equal(failedViewerNodes.status.hidden, false, "a failed slide render must show an on-screen alert");
+    assert.match(failedViewerNodes.status.textContent, /No se pudo mostrar la diapositiva/);
+    assert.equal(failedViewerNodes.stage.children.length, 0, "a failed render must not leave a silent empty slide");
+    assert.equal(viewerFallbackReadyCalls, 1, "a visible slide failure must stop the standalone watchdog");
+
+    const failedLoadViewerNodes = await runViewer(async () => { throw new Error("converter-should-not-run"); }, "es-ES", 1, true);
+    assert.equal(failedLoadViewerNodes.counter.textContent, "", "a failed presentation load must clear the loading counter");
+    assert.equal(failedLoadViewerNodes.status.hidden, false, "a failed presentation load must show its alert");
+    assert.equal(viewerFallbackReadyCalls, 1, "a visible load failure must stop the standalone watchdog");
+
+  }
+
+  process.stdout.write("node-module-ok " + manifest.id + " " + delivery.bytes.length + " bytes\n");
+}
+
+main().catch((error) => {
+  console.error(error && error.stack || error);
+  process.exitCode = 1;
+});

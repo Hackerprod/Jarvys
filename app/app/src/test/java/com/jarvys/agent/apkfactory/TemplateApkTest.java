@@ -1,0 +1,1083 @@
+package com.jarvys.agent.apkfactory;
+
+import static org.junit.Assert.*;
+
+import com.jarvys.factory.contract.CapabilityCatalog;
+import com.jarvys.factory.contract.ManifestAudit;
+import com.jarvys.factory.contract.ManifestPlan;
+import com.jarvys.factory.contract.ManifestXml;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TimeZone;
+import java.util.zip.CRC32;
+import java.util.zip.DeflaterOutputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
+import org.robolectric.annotation.Config;
+
+/** Structural/packaging tests against the real bundled runtime. No keys or installation are used. */
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk = 34)
+public class TemplateApkTest {
+    private byte[] template;
+    private byte[] icon;
+    private TemplateApk.Spec spec;
+    private Map<String, byte[]> assets;
+
+    @Before public void loadBundledRuntime() throws Exception {
+        try (InputStream in = RuntimeEnvironment.getApplication().getAssets().open("apk_factory/template.apk")) {
+            template = readAll(in);
+        }
+        icon = png(24, 24);
+        spec = new TemplateApk.Spec("org.example.factory.notes", "Factory notes", 1, "1.0");
+        assets = new LinkedHashMap<>();
+        assets.put("assets/www/index.html", utf8("<!doctype html><h1>Offline notes</h1>"));
+        assets.put("assets/factory-app.json", utf8("{\"schemaVersion\":1}"));
+        assets.put("assets/factory-provenance.json", utf8("{\"testFixture\":true}"));
+    }
+
+    @Test public void incomingPoliciesAreExactAuditedFiltersWithHistoricalIsolation() throws Exception {
+        for (boolean multiple : new boolean[]{false, true}) {
+            com.jarvys.factory.contract.IncomingSharePolicy policy = new com.jarvys.factory.contract.IncomingSharePolicy(Arrays.asList("image/*", "text/plain"), multiple);
+            TemplateApk.Spec requested = new TemplateApk.Spec(spec.appId, spec.label, 1, "1.0", Arrays.asList("documents", "incomingShare"), policy);
+            byte[] bytes = TemplateApk.build(template, requested, icon, assets);
+            TemplateApk.ManifestInfo verified = TemplateApk.verify(bytes, requested);
+            assertEquals(policy, verified.plan.incomingShare);
+            assertEquals(policy, TemplateApk.inspect(bytes).plan.incomingShare);
+            assertEquals(1, verified.plan.exportedComponents.size());
+            assertThrows(IOException.class, () -> TemplateApk.verifyExistingClosedV3(bytes, requested));
+            TemplateApk.Spec different = new TemplateApk.Spec(spec.appId, spec.label, 1, "1.0", requested.capabilities,
+                    new com.jarvys.factory.contract.IncomingSharePolicy(Arrays.asList("image/*", "text/plain"), !multiple));
+            assertThrows(IOException.class, () -> TemplateApk.verify(bytes, different));
+        }
+    }
+    @Test public void schedulingAuditBindsBothPrivateReceiversToPackagedDex() throws Exception {
+        for (boolean exact : new boolean[]{false, true}) {
+            com.jarvys.factory.contract.NotificationPolicy policy = new com.jarvys.factory.contract.NotificationPolicy(true, exact);
+            TemplateApk.Spec requested = new TemplateApk.Spec(spec.appId, spec.label, 1, "1.0", Collections.singletonList("notifications"), null, policy);
+            TemplateApk.ManifestInfo verified = TemplateApk.verify(TemplateApk.build(template, requested, icon, assets), requested);
+            assertEquals(policy, verified.plan.notifications);
+            assertTrue(verified.componentDex.containsKey(com.jarvys.factory.contract.NotificationPolicy.ALARM_RECEIVER));
+            assertTrue(verified.componentDex.containsKey(com.jarvys.factory.contract.NotificationPolicy.RECOVERY_RECEIVER));
+            assertEquals(Collections.singletonList(ManifestPlan.ACTIVITY), verified.plan.exportedComponents);
+            assertEquals(exact, verified.permissions.contains(com.jarvys.factory.contract.NotificationPolicy.EXACT_PERMISSION));
+        }
+    }
+    @Test public void runtimeUiCatalogSurvivesButCannotBeReplacedByProjectAssets() throws Exception {
+        Map<String,byte[]> original = com.jarvys.factory.runtime.FactoryUiAssets.fromApk(template);
+        Map<String,byte[]> output = com.jarvys.factory.runtime.FactoryUiAssets.fromApk(build());
+        for (String path : original.keySet()) {
+            assertArrayEquals(original.get(path), output.get(path));
+            Map<String,byte[]> replacement = new LinkedHashMap<>(assets);
+            replacement.put("assets/" + path, original.get(path));
+            rejects(() -> TemplateApk.build(template,spec,icon,replacement));
+        }
+    }
+    @Test public void realRuntimeBuildsTwoPackagesAndAnUpdateWithoutChangingDex() throws Exception {
+        Map<String, byte[]> original = unzip(template);
+        TemplateApk.Spec[] specs = {
+            spec,
+            new TemplateApk.Spec("org.example.factory.second", "Notas 🎉 日本語", 1, "v1.1"),
+            new TemplateApk.Spec(spec.appId, spec.label, 2, "v2")
+        };
+        Integer templateIconId = null;
+        for (TemplateApk.Spec requested : specs) {
+            byte[] apk = TemplateApk.build(template, requested, icon, assets);
+            TemplateApk.ManifestInfo actual = TemplateApk.inspect(apk);
+            assertEquals(requested.appId, actual.appId);
+            assertEquals(requested.label, actual.label);
+            assertEquals(requested.versionCode, actual.versionCode);
+            assertEquals(requested.versionName, actual.versionName);
+            assertEquals("com.jarvys.factory.runtime.FactoryActivity", actual.activityClass);
+            assertTrue(actual.permissions.isEmpty());
+            // Compare actual template/output IDs; never assume a numeric R value or shortened path.
+            if (templateIconId == null) templateIconId = actual.iconResourceId;
+            assertEquals(templateIconId.intValue(), actual.iconResourceId);
+            Map<String, byte[]> generated = unzip(apk);
+            assertArrayEquals(original.get("classes.dex"), generated.get("classes.dex"));
+            assertEquals(requested.appId, resourcePackageName(generated.get("resources.arsc")));
+            int replacedImages = 0;
+            for (String name : original.keySet()) {
+                if (name.startsWith("res/") && name.endsWith(".png") && Arrays.equals(icon, generated.get(name))) replacedImages++;
+                if (name.endsWith(".dex")) assertArrayEquals("DEX changed: " + name, original.get(name), generated.get(name));
+            }
+            assertEquals(1, replacedImages);
+            assertArrayEquals(assets.get("assets/factory-provenance.json"), generated.get("assets/factory-provenance.json"));
+            assertStoredEntriesAligned(apk);
+        }
+    }
+
+
+    /** Exhaustive 2x2x2 original manifest dependency axes, plus regression samples of all
+     * original singletons/pairs and the full original set. The latter samples are not exhaustive. */
+    private static java.util.List<java.util.List<String>> legacyManifestSelections() {
+        java.util.List<String> original=java.util.Arrays.asList("storage","export","share","clipboard","haptics","device","documents","photos","audio","browser","maps","phone","email","sms","contacts","calendar","database","presentation","sensors","biometrics");
+        java.util.Set<java.util.List<String>> cases=new java.util.LinkedHashSet<>();
+        for(int axes=0;axes<8;axes++) {
+            java.util.List<String> selected=new java.util.ArrayList<>();
+            if((axes&1)!=0)selected.add("biometrics"); if((axes&2)!=0)selected.add("documents"); if((axes&4)!=0)selected.add("sensors");
+            java.util.Collections.sort(selected);cases.add(selected);
+        }
+        for(int i=0;i<original.size();i++) {
+            cases.add(java.util.Collections.singletonList(original.get(i)));
+            for(int j=i+1;j<original.size();j++) {java.util.List<String> pair=new java.util.ArrayList<>(java.util.Arrays.asList(original.get(i),original.get(j)));java.util.Collections.sort(pair);cases.add(pair);}
+        }
+        java.util.List<String> full=new java.util.ArrayList<>(original);java.util.Collections.sort(full);cases.add(full);
+        return new java.util.ArrayList<>(cases);
+    }
+
+    @Test public void originalManifestDependencyAxesRetainEightCurrentArtifactShapes() throws Exception {
+        byte[] apk=build();
+        com.jarvys.factory.contract.ManifestPlan base=TemplateApk.inspect(apk).plan;
+        com.jarvys.factory.contract.ManifestAudit.Document decoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(apk).get("AndroidManifest.xml"));
+        byte[] docs=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Collections.singletonList("documents")),icon,assets);
+        com.jarvys.factory.contract.ManifestAudit.Document documentDecoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(docs).get("AndroidManifest.xml"));
+        byte[] biometric=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Collections.singletonList("biometrics")),icon,assets);
+        ManifestAudit.Document biometricDecoded=ManifestAudit.read(unzip(biometric).get("AndroidManifest.xml"));
+        byte[] combined=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Arrays.asList("biometrics","documents")),icon,assets);
+        ManifestAudit.Document combinedDecoded=ManifestAudit.read(unzip(combined).get("AndroidManifest.xml"));
+        byte[] sensors=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Collections.singletonList("sensors")),icon,assets);
+        ManifestAudit.Document sensorsDecoded=ManifestAudit.read(unzip(sensors).get("AndroidManifest.xml"));
+        byte[] sensorsBiometric=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Arrays.asList("biometrics","sensors")),icon,assets);
+        ManifestAudit.Document sensorsBiometricDecoded=ManifestAudit.read(unzip(sensorsBiometric).get("AndroidManifest.xml"));
+        byte[] sensorsDocuments=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Arrays.asList("documents","sensors")),icon,assets);
+        ManifestAudit.Document sensorsDocumentsDecoded=ManifestAudit.read(unzip(sensorsDocuments).get("AndroidManifest.xml"));
+        byte[] sensorsDocumentsBiometric=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Arrays.asList("biometrics","documents","sensors")),icon,assets);
+        ManifestAudit.Document sensorsDocumentsBiometricDecoded=ManifestAudit.read(unzip(sensorsDocumentsBiometric).get("AndroidManifest.xml"));
+        assertEquals(33, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
+        int checked=0;
+        for(List<String> selected:legacyManifestSelections()) {
+            List<String> requested=new ArrayList<>(selected);
+            com.jarvys.factory.contract.ManifestPlan plan=new com.jarvys.factory.contract.ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,base.iconResourceId,base.backupResourceId,requested);
+            boolean hasSensors=requested.contains("sensors");
+            boolean hasQueries=CapabilityCatalog.requiresHostBroker(requested);
+            boolean hasBiometrics=requested.contains("biometrics");
+            (hasSensors ? (hasQueries ? (hasBiometrics ? sensorsDocumentsBiometricDecoded : sensorsDocumentsDecoded)
+                    : hasBiometrics ? sensorsBiometricDecoded : sensorsDecoded)
+                    : hasBiometrics ? (hasQueries ? combinedDecoded : biometricDecoded)
+                    : (hasQueries ? documentDecoded : decoded)).verify(plan);
+            List<String> permissions=new ArrayList<>();if(hasSensors)permissions.add(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION);if(hasBiometrics)permissions.add(CapabilityCatalog.BIOMETRIC_PERMISSION);
+            assertEquals(permissions,plan.permissions);
+            assertEquals(hasQueries ? Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest") : Collections.emptyList(),plan.queries);
+            assertEquals(7+(hasQueries?3:0)+(hasBiometrics?1:0)+(hasSensors?1:0),plan.nodes.size());
+            assertTrue(plan.features.isEmpty()); assertTrue(plan.hosts.isEmpty()); assertEquals(Collections.singletonList(ManifestPlan.ACTIVITY),plan.exportedComponents);
+            List<String> snapshot=new ArrayList<>(plan.capabilities); requested.clear(); assertEquals(snapshot,plan.capabilities);
+            assertThrows(UnsupportedOperationException.class,()->plan.nodes.clear());
+            assertThrows(UnsupportedOperationException.class,()->plan.nodes.get(0).attributes.clear());
+            assertThrows(UnsupportedOperationException.class,()->plan.capabilities.clear());
+            checked++;
+        }
+        assertEquals(213,checked);
+        FactoryApkEvidence.write("profile-zero-unsigned.apk",apk);
+        FactoryApkEvidence.write("profile-queries-unsigned.apk",docs);
+        FactoryApkEvidence.write("profile-biometrics-unsigned.apk",biometric);
+        FactoryApkEvidence.write("profile-biometrics-queries-unsigned.apk",combined);
+        org.json.JSONArray profiles=new org.json.JSONArray();
+        FactoryApkEvidence.write("profile-sensors-unsigned.apk",sensors);
+        FactoryApkEvidence.write("profile-sensors-biometrics-unsigned.apk",sensorsBiometric);
+        FactoryApkEvidence.write("profile-sensors-queries-unsigned.apk",sensorsDocuments);
+        FactoryApkEvidence.write("profile-sensors-biometrics-queries-unsigned.apk",sensorsDocumentsBiometric);
+        String[] names={"zero","queries","biometrics","biometrics-queries","sensors","sensors-biometrics","sensors-queries","sensors-biometrics-queries"};
+        byte[][] artifacts={apk,docs,biometric,combined,sensors,sensorsBiometric,sensorsDocuments,sensorsDocumentsBiometric};
+        for(int index=0;index<names.length;index++) {
+            TemplateApk.ManifestInfo evidence=TemplateApk.inspect(artifacts[index]);
+            profiles.put(new org.json.JSONObject().put("name",names[index]).put("file","profile-"+names[index]+"-unsigned.apk")
+                    .put("appId",evidence.appId).put("versionCode",evidence.versionCode)
+                    .put("capabilities",new org.json.JSONArray(evidence.plan.capabilities))
+                    .put("permissions",new org.json.JSONArray(evidence.permissions))
+                    .put("queries",new org.json.JSONArray(evidence.plan.queries))
+                    .put("features",new org.json.JSONArray(evidence.plan.features)).put("nodeCount",evidence.plan.nodes.size())
+                    .put("sha256",com.jarvys.agent.coding.ProjectScope.sha256(artifacts[index])));
+        }
+        FactoryApkEvidence.write("manifest-profiles.json",utf8(new org.json.JSONObject().put("schemaVersion",1)
+                .put("testFixtureOnly",true).put("exhaustiveManifestAxisCases",8).put("regressionSelectionCases",checked)
+                .put("capabilityDomain",new org.json.JSONArray(CapabilityCatalog.NAMES.subList(0,20))).put("profiles",profiles).toString()));
+    }
+    @Test public void typedExternalOnlyAndCombinedAppsBuildWithOneSharedZeroPermissionQueryProfile() throws Exception {
+        byte[] browserManifest = null;
+        for (List<String> capabilities : Arrays.asList(Collections.singletonList("browser"), Collections.singletonList("clipboard"), Collections.singletonList("maps"), Collections.singletonList("phone"), Arrays.asList("browser", "clipboard", "documents", "maps", "phone"))) {
+            TemplateApk.Spec browser = new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,capabilities);
+            byte[] generated = TemplateApk.build(template,browser,icon,assets);
+            TemplateApk.ManifestInfo info = TemplateApk.verify(generated,browser);
+            assertEquals(capabilities,info.plan.capabilities);
+            assertEquals(Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest"),info.plan.queries);
+            assertEquals(10,info.plan.nodes.size()); assertEquals(1,info.plan.exportedComponents.size());
+            assertTrue(info.permissions.isEmpty()); assertTrue(info.plan.features.isEmpty());
+            byte[] actual = unzip(generated).get("AndroidManifest.xml");
+            if (browserManifest == null) browserManifest = actual; else assertArrayEquals(browserManifest,actual);
+            assertStoredEntriesAligned(generated);
+        }
+    }
+    @Test public void all32NativeSurfaceBasisArtifactsPreserveDexAndExactDeclarations() throws Exception {
+        List<String> basis = Arrays.asList("biometrics", "documents", "network", "notifications", "speech");
+        Map<String,String> originalDex = TemplateApk.inspect(template).dexSha256;
+        java.util.Set<String> shapes = new java.util.HashSet<>();
+        org.json.JSONArray profiles = new org.json.JSONArray();
+        for (int mask = 0; mask < 32; mask++) {
+            List<String> caps = new ArrayList<>();
+            for (int bit = 0; bit < basis.size(); bit++) if ((mask & (1 << bit)) != 0) caps.add(basis.get(bit));
+            TemplateApk.Spec selected = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode, spec.versionName, caps);
+            byte[] generated = TemplateApk.build(template, selected, icon, assets);
+            TemplateApk.ManifestInfo info = TemplateApk.verify(generated, selected);
+            TemplateApk.ManifestInfo inspected = TemplateApk.inspect(generated);
+            assertEquals(originalDex, info.dexSha256); assertEquals(info.dexSha256, inspected.dexSha256);
+            assertEquals(info.permissions, inspected.permissions); assertEquals(info.plan.queries, inspected.plan.queries);
+            assertEquals(info.plan.queryActions, inspected.plan.queryActions);
+            assertEquals(caps.contains("speech") ? Collections.singletonList(CapabilityCatalog.TTS_SERVICE_ACTION) : Collections.emptyList(), info.plan.queryActions);
+            List<String> permissions = new ArrayList<>();
+            if (caps.contains("network")) permissions.add(CapabilityCatalog.INTERNET_PERMISSION);
+            if (caps.contains("notifications")) permissions.add(CapabilityCatalog.NOTIFICATION_PERMISSION);
+            if (caps.contains("biometrics")) permissions.add(CapabilityCatalog.BIOMETRIC_PERMISSION);
+            assertEquals(permissions, info.permissions);
+            byte[] manifest = unzip(generated).get("AndroidManifest.xml");
+            ManifestAudit.Document decoded = ManifestAudit.read(manifest); decoded.verify(info.plan);
+            assertEquals(caps.contains("network") ? -1 : 0,
+                    decoded.attribute("manifest/application", ManifestPlan.ANDROID, "usesCleartextTraffic").value);
+            assertStoredEntriesAligned(generated);
+            String shape = com.jarvys.agent.coding.ProjectScope.sha256(manifest);
+            if (shapes.add(shape)) {
+                String filename = "profile-native-" + mask + "-unsigned.apk";
+                FactoryApkEvidence.write(filename, generated);
+                profiles.put(new org.json.JSONObject().put("file", filename).put("capabilities", new org.json.JSONArray(caps))
+                        .put("permissions", new org.json.JSONArray(info.permissions)).put("queries", new org.json.JSONArray(info.plan.queries))
+                        .put("queryActions", new org.json.JSONArray(info.plan.queryActions)).put("nodeCount", info.plan.nodes.size())
+                        .put("sha256", com.jarvys.agent.coding.ProjectScope.sha256(generated)));
+            }
+        }
+        assertEquals(32, shapes.size());
+        FactoryApkEvidence.write("native-manifest-profiles.json", utf8(new org.json.JSONObject().put("schemaVersion", 1)
+                .put("testFixtureOnly", true).put("surfaceBasisSelections", 32).put("profiles", profiles).toString()));
+    }
+    @Test public void documentQueriesRemainAnExactZeroPermissionAdditiveProfile() throws Exception {
+        TemplateApk.Spec docs = new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",Collections.singletonList("documents"));
+        byte[] apk = TemplateApk.build(template,docs,icon,assets);
+        TemplateApk.ManifestInfo info = TemplateApk.inspect(apk);
+        assertEquals(Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest"),info.plan.queries);
+        assertTrue(info.permissions.isEmpty()); assertTrue(info.plan.features.isEmpty());
+        assertEquals(10,info.plan.nodes.size()); assertEquals(1,info.plan.exportedComponents.size());
+        TemplateApk.verify(apk,docs);
+        rejects(() -> TemplateApk.verify(apk,spec));
+        byte[] original = unzip(apk).get("AndroidManifest.xml");
+        // Change one allowed package while retaining perfectly valid binary XML.
+        Map<String,byte[]> wrong = unzip(apk);
+        wrong.put("AndroidManifest.xml",renamePoolString(original,"com.jarvys.agent.recoverytest","com.jarvys.agent.untrusted"));
+        rejects(() -> TemplateApk.inspect(zip(wrong,false)));
+        int packageStart = -1, packageEnd = -1;
+        int index = 0;
+        for (int at=8;at<original.length;at+=int32(original,at+4)) {
+            if (u16(original,at)==0x102) {
+                if (index++==8) packageStart=at;
+            } else if (u16(original,at)==0x103 && packageStart>=0 && packageEnd<0) packageEnd=at+int32(original,at+4);
+        }
+        assertTrue(packageEnd>packageStart);
+        Map<String,byte[]> duplicate=unzip(apk);
+        duplicate.put("AndroidManifest.xml",insert(original,packageStart,Arrays.copyOfRange(original,packageStart,packageEnd)));
+        rejects(() -> TemplateApk.inspect(zip(duplicate,false)));
+        byte[] missing = new byte[original.length-(packageEnd-packageStart)];
+        System.arraycopy(original,0,missing,0,packageStart);
+        System.arraycopy(original,packageEnd,missing,packageStart,original.length-packageEnd);
+        set32(missing,4,missing.length);
+        Map<String,byte[]> absent=unzip(apk);absent.put("AndroidManifest.xml",missing);
+        rejects(() -> TemplateApk.inspect(zip(absent,false)));
+        // Extra attributes on the queries parent cannot be hidden behind the approved package list.
+        int queries=-1; index=0;
+        for(int at=8;at<original.length;at+=int32(original,at+4))
+            if(u16(original,at)==0x102 && index++==7) { queries=at;break; }
+        assertTrue(queries>=0);
+        byte[] extra=insert(original,queries+36,Arrays.copyOfRange(original,packageStart+36,packageStart+56));
+        set32(extra,queries+4,56);set16(extra,queries+28,1);
+        Map<String,byte[]> attrs=unzip(apk);attrs.put("AndroidManifest.xml",extra);
+        rejects(() -> TemplateApk.inspect(zip(attrs,false)));
+    }
+
+    @Test public void selectiveBiometricsBuildsWithOrWithoutBrokerQueriesAndRetainsEveryDexByte() throws Exception {
+        TemplateApk.ManifestInfo compiled=TemplateApk.inspect(template);
+        assertTrue(compiled.permissions.isEmpty()); assertTrue(compiled.plan.features.isEmpty());
+        Map<String,byte[]> original=unzip(template);
+        for(List<String> capabilities:Arrays.asList(Collections.singletonList("biometrics"),
+                Arrays.asList("biometrics","documents"),Arrays.asList("biometrics","sensors"),
+                Arrays.asList("biometrics","browser","sensors"))) {
+            TemplateApk.Spec selected=new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",capabilities);
+            byte[] generated=TemplateApk.build(template,selected,icon,assets);
+            TemplateApk.ManifestInfo verified=TemplateApk.verify(generated,selected),inferred=TemplateApk.inspect(generated);
+            boolean sensors=capabilities.contains("sensors");
+            boolean broker=capabilities.contains("documents") || capabilities.contains("browser");
+            assertEquals(selected.capabilities,verified.plan.capabilities);
+            assertEquals(sensors?Arrays.asList(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION,CapabilityCatalog.BIOMETRIC_PERMISSION)
+                    :Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION),verified.permissions);
+            assertEquals(verified.permissions,inferred.permissions);
+            java.util.Set<String> inferredCapabilities=new java.util.LinkedHashSet<>();
+            inferredCapabilities.add("biometrics");
+            if(sensors) inferredCapabilities.add("sensors");
+            if(broker) inferredCapabilities.add("documents");
+            assertEquals(inferredCapabilities,new java.util.LinkedHashSet<>(inferred.plan.capabilities));
+            assertEquals(broker?Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest"):Collections.emptyList(),verified.plan.queries);
+            assertEquals(verified.plan.queries,inferred.plan.queries);
+            assertTrue(verified.plan.queryActions.isEmpty());
+            assertEquals((broker?11:8)+(sensors?1:0),verified.plan.nodes.size());
+            assertTrue(verified.plan.features.isEmpty()); assertTrue(verified.plan.hosts.isEmpty());
+            assertEquals(Collections.singletonList(ManifestPlan.ACTIVITY),verified.plan.exportedComponents);
+            assertEquals(compiled.dexSha256,verified.dexSha256);
+            Map<String,byte[]> output=unzip(generated);
+            for(String name:compiled.dexSha256.keySet()) assertArrayEquals(original.get(name),output.get(name));
+            assertStoredEntriesAligned(generated);
+            List<String> withoutBiometricsCapabilities=new ArrayList<>(capabilities);
+            withoutBiometricsCapabilities.remove("biometrics");
+            TemplateApk.Spec withoutBiometrics=new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",withoutBiometricsCapabilities);
+            // Inspection may infer a closed profile, but cannot override an explicit caller plan.
+            rejects(()->TemplateApk.verify(generated,withoutBiometrics));
+            ManifestPlan mismatched=new ManifestPlan(spec.appId,spec.label,1,"1.0",verified.plan.iconResourceId,verified.plan.backupResourceId,withoutBiometrics.capabilities);
+            rejects(()->TemplateApk.verifyAgainstPlan(generated,mismatched));
+            byte[] absent=TemplateApk.build(template,withoutBiometrics,icon,assets);
+            assertEquals(sensors?Collections.singletonList(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION)
+                    :Collections.emptyList(),TemplateApk.inspect(absent).permissions);
+            rejects(()->TemplateApk.verify(absent,selected));
+            rejects(()->TemplateApk.verifyAgainstPlan(absent,verified.plan));
+        }
+    }
+
+    @Test public void approvedIntentQueriesNeedNoHostPackageAndKeepAClosedActionList() throws Exception {
+        for(String capability:new String[]{"speech","voiceRecognition"}) {
+            TemplateApk.Spec selected=new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",Collections.singletonList(capability));
+            byte[] generated=TemplateApk.build(template,selected,icon,assets);
+            TemplateApk.ManifestInfo verified=TemplateApk.verify(generated,selected);
+            TemplateApk.ManifestInfo inspected=TemplateApk.inspect(generated);
+            String action="speech".equals(capability)?CapabilityCatalog.TTS_SERVICE_ACTION:CapabilityCatalog.RECOGNIZE_SPEECH_ACTION;
+            assertTrue(verified.plan.queries.isEmpty());
+            assertEquals(Collections.singletonList(action),verified.plan.queryActions);
+            assertTrue(inspected.plan.queries.isEmpty());
+            assertEquals(Collections.singletonList(capability),inspected.plan.capabilities);
+
+            Map<String,byte[]> files=unzip(generated);
+            files.put("AndroidManifest.xml",renamePoolString(files.get("AndroidManifest.xml"),action,"android.intent.action.SEND"));
+            byte[] unapproved=alignedZip(files);
+            rejects(()->TemplateApk.verify(unapproved,selected));
+            rejects(()->TemplateApk.inspect(unapproved));
+        }
+    }
+
+    @Test public void trustedTemplateCannotAcquireTheSelectiveBiometricPermission() throws Exception {
+        ManifestPlan compiled=TemplateApk.inspect(template).plan;
+        ManifestPlan altered=new ManifestPlan(compiled.appId,compiled.label,compiled.versionCode,compiled.versionName,
+                compiled.iconResourceId,compiled.backupResourceId,Collections.singletonList("biometrics"));
+        Map<String,byte[]> files=unzip(template); files.put("AndroidManifest.xml",ManifestXml.encode(altered));
+        rejects(()->TemplateApk.build(alignedZip(files),spec,icon,assets));
+    }
+
+    @Test public void biometricPermissionTamperingFailsClosedWithAndWithoutBrokerQueries() throws Exception {
+        for(List<String> capabilities:Arrays.asList(Collections.singletonList("biometrics"),Arrays.asList("biometrics","documents"))) {
+            TemplateApk.Spec selected=new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",capabilities);
+            byte[] generated=TemplateApk.build(template,selected,icon,assets);
+            ManifestPlan approved=TemplateApk.verify(generated,selected).plan;
+            byte[] original=unzip(generated).get("AndroidManifest.xml");
+            int permission=elementStart(original,"manifest/uses-permission");
+            int permissionEnd=permission+int32(original,permission+4)+24;
+            assertEquals(56,int32(original,permission+4));
+            List<byte[]> rejected=new ArrayList<>();
+            rejected.add(renamePoolString(original,CapabilityCatalog.BIOMETRIC_PERMISSION,"android.permission.INTERNET"));
+            rejected.add(renamePoolString(original,"uses-permission","uses-permission-sdk-23"));
+            rejected.add(insert(original,permission,Arrays.copyOfRange(original,permission,permissionEnd)));
+            byte[] missingName=removeRange(original,permission+36,permission+56);
+            set32(missingName,permission+4,36);set16(missingName,permission+28,0);rejected.add(missingName);
+            byte[] duplicateName=insert(original,permission+36,Arrays.copyOfRange(original,permission+36,permission+56));
+            set32(duplicateName,permission+4,76);set16(duplicateName,permission+28,2);rejected.add(duplicateName);
+            int application=elementStart(original,"manifest/application");
+            byte[] extra=insert(original,permission+36,Arrays.copyOfRange(original,application+36,application+56));
+            set32(extra,permission+4,76);set16(extra,permission+28,2);rejected.add(extra);
+            for(int field:new int[]{0,4,8,16}) {
+                byte[] mutated=original.clone();set32(mutated,permission+36+field,0x7fffffff);rejected.add(mutated);
+            }
+            byte[] wrongType=original.clone();wrongType[permission+51]=16;rejected.add(wrongType);
+            for(byte[] candidate:rejected) {
+                rejects(()->ManifestAudit.read(candidate).verify(approved));
+                Map<String,byte[]> files=unzip(generated);files.put("AndroidManifest.xml",candidate);
+                byte[] tampered=alignedZip(files);
+                rejects(()->TemplateApk.inspect(tampered));
+                rejects(()->TemplateApk.verify(tampered,selected));
+            }
+            // Removing the whole permission gives a different valid profile only when no
+            // external expectation is supplied; signing verification must still reject it.
+            Map<String,byte[]> missing=unzip(generated);
+            missing.put("AndroidManifest.xml",removeRange(original,permission,permissionEnd));
+            byte[] absent=alignedZip(missing);
+            assertTrue(TemplateApk.inspect(absent).permissions.isEmpty());
+            rejects(()->TemplateApk.verify(absent,selected));
+            rejects(()->TemplateApk.verifyAgainstPlan(absent,approved));
+            byte[] historical=removeAttributeById(original,0x0101022b);
+            Map<String,byte[]> old=unzip(generated);old.put("AndroidManifest.xml",historical);
+            rejects(()->TemplateApk.verifyExistingV1(alignedZip(old),selected));
+        }
+    }
+
+    private static int elementStart(byte[] xml,String path) throws IOException {
+        ManifestAudit.Document decoded=ManifestAudit.read(xml);int index=0;
+        for(int at=8;at<xml.length;at+=int32(xml,at+4)) if(u16(xml,at)==0x102)
+            if(decoded.nodes.get(index++).path.equals(path)) return at;
+        throw new AssertionError("Missing test element: "+path);
+    }
+    private static byte[] removeRange(byte[] bytes,int start,int end) {
+        byte[] result=new byte[bytes.length-(end-start)];
+        System.arraycopy(bytes,0,result,0,start);System.arraycopy(bytes,end,result,start,bytes.length-end);
+        set32(result,4,result.length);return result;
+    }
+
+    @Test public void callerIdentityVersionAndResourcePlanCannotBeSubstituted() throws Exception {
+        byte[] apk=build();
+        for(TemplateApk.Spec wrong:new TemplateApk.Spec[]{new TemplateApk.Spec("org.example.other","Factory notes",1,"1.0"),
+                new TemplateApk.Spec(spec.appId,"Wrong",1,"1.0"),new TemplateApk.Spec(spec.appId,spec.label,2,"1.0"),
+                new TemplateApk.Spec(spec.appId,spec.label,1,"wrong")}) rejects(()->TemplateApk.verify(apk,wrong));
+        com.jarvys.factory.contract.ManifestPlan base=TemplateApk.inspect(apk).plan;
+        com.jarvys.factory.contract.ManifestPlan wrong=new com.jarvys.factory.contract.ManifestPlan(spec.appId,spec.label,1,"1.0",base.backupResourceId,base.iconResourceId,Collections.emptyList());
+        rejects(()->com.jarvys.factory.contract.ManifestAudit.read(unzip(apk).get("AndroidManifest.xml")).verify(wrong));
+    }
+    @Test public void independentReaderRejectsEveryAttributeTypeResourceIdAndValueMutation() throws Exception {
+        byte[] original=unzip(template).get("AndroidManifest.xml"); int count=0;
+        for(int p=8;p<original.length;p+=int32(original,p+4)) if(u16(original,p)==0x102) {
+            for(int a=p+36;a<p+int32(original,p+4);a+=20) {
+                byte[] wrongType=original.clone();wrongType[a+15]=(byte)0x7f;rejectManifest(wrongType);
+                byte[] wrongData=original.clone();set32(wrongData,a+16,int32(original,a+16)^0x40000000);rejectManifest(wrongData);
+                byte[] invalidRaw=original.clone();set32(invalidRaw,a+8,0x7fffffff);rejectManifest(invalidRaw);count++;
+            }
+        }
+        assertEquals(23,count);
+        int resourceCount=0;
+        for(int p=8;p<original.length;p+=int32(original,p+4)) if(u16(original,p)==0x180)
+            for(int a=p+8;a<p+int32(original,p+4);a+=4) {
+                byte[] bad=original.clone();set32(bad,a,int32(bad,a)^1);rejectManifest(bad);resourceCount++;
+            }
+        assertTrue(resourceCount>=16);
+    }
+    @Test public void independentReaderRejectsMissingDuplicateAndUnexpectedAttributes() throws Exception {
+        byte[] original=unzip(template).get("AndroidManifest.xml");
+        int root=-1,application=-1;
+        for(int p=8;p<original.length;p+=int32(original,p+4)) if(u16(original,p)==0x102) {
+            if(root<0) root=p; else if(u16(original,p+28)>5) application=p;
+        }
+        assertTrue(root>=0 && application>=0);
+        int copied=root+36;
+        for(int a=root+36;a<root+int32(original,root+4);a+=20) if(int32(original,a)==-1 && (original[a+15]&255)==3) copied=a;
+        byte[] unknown=insert(original,application+int32(original,application+4),Arrays.copyOfRange(original,copied,copied+20));
+        set32(unknown,application+4,int32(original,application+4)+20);set16(unknown,application+28,u16(original,application+28)+1);rejectManifest(unknown);
+        byte[] duplicate=insert(original,application+36,Arrays.copyOfRange(original,application+36,application+56));
+        set32(duplicate,application+4,int32(original,application+4)+20);set16(duplicate,application+28,u16(original,application+28)+1);rejectManifest(duplicate);
+        byte[] missing=new byte[original.length-20];System.arraycopy(original,0,missing,0,application+36);
+        System.arraycopy(original,application+56,missing,application+36,original.length-application-56);
+        set32(missing,4,missing.length);set32(missing,application+4,int32(original,application+4)-20);set16(missing,application+28,u16(original,application+28)-1);rejectManifest(missing);
+    }
+    @Test public void independentReaderRejectsDuplicateNodesNamespacesAndSpecialIndexes() throws Exception {
+        byte[] original=unzip(template).get("AndroidManifest.xml");
+        for(int p=8;p<original.length;p+=int32(original,p+4)) {
+            int kind=u16(original,p),size=int32(original,p+4);
+            if(kind==0x102) {
+                byte[] bad=original.clone();set16(bad,p+30,1);rejectManifest(bad);
+                byte[] wrongNamespace=original.clone();set32(wrongNamespace,p+16,int32(original,p+20));rejectManifest(wrongNamespace);
+                if(p+size<original.length && u16(original,p+size)==0x103) {
+                    int complete=size+int32(original,p+size+4);
+                    rejectManifest(insert(original,p,Arrays.copyOfRange(original,p,p+complete)));
+                }
+            }
+            if(kind==0x100 || kind==0x101) rejectManifest(insert(original,p,Arrays.copyOfRange(original,p,p+size)));
+        }
+    }
+    @Test public void independentReaderRejectsEveryTruncationWithCheckedErrors() throws Exception {
+        byte[] original=unzip(template).get("AndroidManifest.xml");
+        for(int length=0;length<original.length;length++) {
+            byte[] bad=Arrays.copyOf(original,length);
+            rejects(()->com.jarvys.factory.contract.ManifestAudit.read(bad));
+        }
+        for(int p=8;p<original.length;p+=int32(original,p+4)) {
+            byte[] bad=original.clone();set32(bad,p+4,0x7ffffffc);rejectManifest(bad);
+        }
+    }
+    @Test public void secondaryDexInventoryIsCompleteImmutableAndExactlyPreserved() throws Exception {
+        Map<String,byte[]> files=unzip(template);
+        // Synthetic packaging fixture only; not an installable multidex compatibility claim.
+        files.put("classes2.dex",DexBindingsTest.secondaryFixture());
+        byte[] apk=TemplateApk.build(zip(files,false),spec,icon,assets);
+        TemplateApk.ManifestInfo info=TemplateApk.inspect(apk);
+        assertEquals(2,info.dexSha256.size());assertArrayEquals(files.get("classes2.dex"),unzip(apk).get("classes2.dex"));
+        assertThrows(UnsupportedOperationException.class,()->info.dexSha256.clear());
+        for(String name:new String[]{"classes1.dex","classes02.dex","classes3.dex","assets/classes2.dex","other.dex","CLASSES.DEX"}) {
+            Map<String,byte[]> invalid=unzip(template);invalid.put(name,files.get("classes.dex"));
+            rejects(()->TemplateApk.build(zip(invalid,false),spec,icon,assets));
+        }
+        for(int offset:new int[]{0,7,32,36,40}) {
+            Map<String,byte[]> invalid=unzip(template);byte[] corrupt=files.get("classes.dex").clone();corrupt[offset]^=1;invalid.put("classes2.dex",corrupt);
+            rejects(()->TemplateApk.build(zip(invalid,false),spec,icon,assets));
+        }
+    }
+    @Test public void compiledBindingEvidenceIsDerivedImmutableAndStableAcrossPackages() throws Exception {
+        TemplateApk.ManifestInfo original=TemplateApk.inspect(template),generated=TemplateApk.inspect(build());
+        assertEquals(2,generated.resourceBindings.size());
+        assertEquals("drawable",generated.resourceBindings.get("icon").type);
+        assertEquals("factory_icon",generated.resourceBindings.get("icon").name);
+        assertEquals(generated.iconResourceId,generated.resourceBindings.get("icon").id);
+        assertEquals("xml",generated.resourceBindings.get("backup").type);
+        assertEquals("factory_backup_rules",generated.resourceBindings.get("backup").name);
+        assertEquals(generated.plan.backupResourceId,generated.resourceBindings.get("backup").id);
+        assertEquals(original.resourceBindings.get("backup").path,generated.resourceBindings.get("backup").path);
+        assertEquals(original.componentDex,generated.componentDex);
+        assertEquals(2,generated.componentDex.size());
+        assertEquals("classes.dex",generated.componentDex.get("com.jarvys.factory.runtime.FactoryActivity"));
+        assertEquals("classes.dex",generated.componentDex.get("androidx.core.app.CoreComponentFactory"));
+        assertThrows(UnsupportedOperationException.class,()->generated.resourceBindings.clear());
+        assertThrows(UnsupportedOperationException.class,()->generated.componentDex.clear());
+    }
+    @Test public void duplicateDexDefinitionsAndMissingCompiledPayloadAreRejected() throws Exception {
+        Map<String,byte[]> files=unzip(template);files.put("classes2.dex",files.get("classes.dex").clone());
+        rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+        TemplateApk.ManifestInfo info=TemplateApk.inspect(template);
+        for(TemplateApk.ResourceBinding binding:info.resourceBindings.values()) {
+            Map<String,byte[]> missing=unzip(template);missing.remove(binding.path);
+            rejects(()->TemplateApk.build(zip(missing,false),spec,icon,assets));
+        }
+    }
+    @Test public void completeResourceTableRejectsMalformedSpecificationsAndUnknownChildren() throws Exception {
+        for(String mutation:new String[]{"chunkCount","startAlignment","specCount","specType","specReserved","unknownChild","duplicateSpec","missingSpec","poolPayload","poolAlias","entryAlias","duplicateSymbol"}) {
+            Map<String,byte[]> files=unzip(template);
+            files.put("resources.arsc",hostileResourceTable(files.get("resources.arsc"),mutation));
+            rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+        }
+    }
+    private static byte[] hostileResourceTable(byte[] source,String mutation) {
+        byte[] b=source.clone();int pkg=-1;
+        for(int p=12;p<b.length;p+=int32(b,p+4))if(u16(b,p)==0x200){pkg=p;break;}
+        assertTrue(pkg>=0);
+        if(mutation.equals("poolPayload")){set32(b,pkg+268,int32(b,pkg+268)+4);return b;}
+        if(mutation.equals("poolAlias")){set32(b,pkg+276,int32(b,pkg+268));return b;}
+        for(int q=pkg+u16(b,pkg+2);q<pkg+int32(b,pkg+4);q+=int32(b,q+4)) {
+            if(u16(b,q)==0x202) {
+                if(mutation.equals("chunkCount")){set16(b,q+10,0xffff);return b;}
+                if(mutation.equals("specCount")){set32(b,q+12,int32(b,q+12)+1);return b;}
+                if(mutation.equals("specType")){b[q+8]=0;return b;}
+                if(mutation.equals("specReserved")){b[q+9]=1;return b;}
+                if(mutation.equals("unknownChild")){set16(b,q,0x203);return b;}
+                if(mutation.equals("duplicateSpec")){
+                    byte[] result=insert(b,q,Arrays.copyOfRange(b,q,q+int32(b,q+4)));
+                    set32(result,pkg+4,int32(b,pkg+4)+int32(b,q+4));return result;
+                }
+                if(mutation.equals("missingSpec")) {
+                    int n=int32(b,q+4);byte[] result=new byte[b.length-n];
+                    System.arraycopy(b,0,result,0,q);System.arraycopy(b,q+n,result,q,b.length-q-n);
+                    set32(result,4,result.length);set32(result,pkg+4,int32(b,pkg+4)-n);return result;
+                }
+            }
+            if(u16(b,q)==0x201 && mutation.equals("startAlignment")){set32(b,q+16,int32(b,q+16)+1);return b;}
+            if(u16(b,q)==0x201 && (mutation.equals("entryAlias") || mutation.equals("duplicateSymbol"))) {
+                int first=-1,count=int32(b,q+12),start=int32(b,q+16),offsets=q+u16(b,q+2);
+                for(int i=0;i<count;i++) {
+                    int relative=int32(b,offsets+4*i);if(relative==-1)continue;
+                    if(first<0){first=i;continue;}
+                    if(mutation.equals("entryAlias")) set32(b,offsets+4*i,int32(b,offsets+4*first));
+                    else set32(b,q+start+relative+4,int32(b,q+start+int32(b,offsets+4*first)+4));
+                    return b;
+                }
+            }
+        }
+        throw new AssertionError(mutation);
+    }
+    @Test public void missingOrWrongBackupResourceCannotMatchTheClosedPlan() throws Exception {
+        byte[] apk=build();int backupId=TemplateApk.inspect(apk).plan.backupResourceId;
+        Map<String,byte[]> files=unzip(template);byte[] xml=files.get("AndroidManifest.xml");
+        boolean found=false;
+        for(int p=8;p<xml.length;p+=int32(xml,p+4)) if(u16(xml,p)==0x102)
+            for(int a=p+36;a<p+int32(xml,p+4);a+=20) if((xml[a+15]&255)==1 && int32(xml,a+16)==backupId) {
+                set32(xml,a+16,TemplateApk.inspect(apk).iconResourceId);found=true;
+            }
+        assertTrue(found);rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+    }
+
+    @Test public void slashNamedElementCannotImpersonateTheExpectedParentTree() throws Exception {
+        byte[] original=unzip(template).get("AndroidManifest.xml");int application=-1,endApplication=-1;
+        for(int p=8;p<original.length;p+=int32(original,p+4)) if(u16(original,p)==0x102 && u16(original,p+28)>7) application=p;
+        assertTrue(application>=0);int name=int32(original,application+20);
+        for(int p=application;p<original.length;p+=int32(original,p+4)) if(u16(original,p)==0x103 && int32(original,p+20)==name) endApplication=p;
+        int insertAt=application+int32(original,application+4);assertTrue(endApplication>insertAt);
+        ByteArrayOutputStream changed=new ByteArrayOutputStream();changed.write(original,0,insertAt);
+        changed.write(original,endApplication,24);changed.write(original,insertAt,endApplication-insertAt);
+        changed.write(original,endApplication+24,original.length-endApplication-24);
+        rejectManifest(renamePoolString(changed.toByteArray(),"activity","application/activity"));
+    }
+    @Test public void backupIncludesTraversalMissingDomainsAndQualifiedResourcesAreRejected() throws Exception {
+        TemplateApk.ManifestInfo info=TemplateApk.inspect(template);
+        Map<String,byte[]> original=unzip(template);String backupPath=null;
+        for(Map.Entry<String,byte[]> e:original.entrySet()) if(e.getKey().endsWith(".xml") && !e.getKey().equals("AndroidManifest.xml")) {
+            try { com.jarvys.factory.contract.ManifestAudit.verifyBackupRules(e.getValue());backupPath=e.getKey(); } catch(IOException ignored) { }
+        }
+        assertNotNull(backupPath);byte[] backup=original.get(backupPath);
+        for(String[] mutation:new String[][]{{"exclude","include"},{".",".."},{"root","unknown"},{"device-transfer","unexpected"}}) {
+            byte[] bad=renamePoolString(backup,mutation[0],mutation[1]);
+            rejects(()->com.jarvys.factory.contract.ManifestAudit.verifyBackupRules(bad));
+            Map<String,byte[]> files=unzip(template);files.put(backupPath,bad);
+            rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+        }
+        for(int resourceId:new int[]{info.plan.iconResourceId,info.plan.backupResourceId}) {
+            Map<String,byte[]> files=unzip(template);mutateResource(files.get("resources.arsc"),resourceId,"locale");
+            rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+        }
+    }
+    @Test public void signingCannotChangeAnyResourceOrWebsiteEntry() throws Exception {
+        byte[] apk=build();TemplateApk.verifyUnchangedPayload(apk,apk);TemplateApk.verifyUnchangedPayload(apk,alignedZip(unzip(apk)));
+        for(String name:new String[]{"resources.arsc","assets/www/index.html","classes.dex"}) {
+            Map<String,byte[]> files=unzip(apk);byte[] changed=files.get(name).clone();changed[changed.length-1]^=1;files.put(name,changed);
+            byte[] different=alignedZip(files);rejects(()->TemplateApk.verifyUnchangedPayload(apk,different));
+        }
+        Map<String,byte[]> extra=unzip(apk);extra.put("assets/extra.txt",utf8("extra"));
+        rejects(()->TemplateApk.verifyUnchangedPayload(apk,alignedZip(extra)));
+    }
+    private static byte[] alignedZip(Map<String,byte[]> files) throws IOException {
+        ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+        try(ZipOutputStream out=new ZipOutputStream(bytes)) {
+            for(Map.Entry<String,byte[]> e:files.entrySet()) {
+                ZipEntry entry=new ZipEntry(e.getKey());entry.setTime(946728000000L);entry.setMethod(ZipEntry.STORED);
+                CRC32 crc=new CRC32();crc.update(e.getValue());entry.setSize(e.getValue().length);entry.setCompressedSize(e.getValue().length);entry.setCrc(crc.getValue());
+                int padding=(4-(bytes.size()+30+utf8(e.getKey()).length+4)%4)%4;byte[] extra=new byte[4+padding];
+                set16(extra,0,0xf17e);set16(extra,2,padding);entry.setExtra(extra);
+                out.putNextEntry(entry);out.write(e.getValue());out.closeEntry();
+            }
+        }
+        return bytes.toByteArray();
+    }
+    private static byte[] renamePoolString(byte[] xml,String old,String replacement) throws IOException {
+        int pool=8,size=int32(xml,pool+4),count=int32(xml,pool+8),flags=int32(xml,pool+16),start=int32(xml,pool+20);boolean utf8=(flags&256)!=0;
+        List<String> values=new ArrayList<>();boolean found=false;
+        for(int i=0;i<count;i++) {
+            int[] at={pool+start+int32(xml,pool+28+4*i)};int units=poolLength(xml,at,utf8),length=utf8?poolLength(xml,at,true):units*2;
+            String value=new String(xml,at[0],length,utf8?StandardCharsets.UTF_8:StandardCharsets.UTF_16LE);
+            if(value.equals(old)){value=replacement;found=true;}values.add(value);
+        }
+        assertTrue("Pool string absent: "+old,found);
+        ByteArrayOutputStream data=new ByteArrayOutputStream();int[] offsets=new int[count];
+        for(int i=0;i<count;i++) {
+            String value=values.get(i);byte[] encoded=value.getBytes(utf8?StandardCharsets.UTF_8:StandardCharsets.UTF_16LE);offsets[i]=data.size();
+            emitPoolLength(data,value.length(),utf8);if(utf8)emitPoolLength(data,encoded.length,true);data.write(encoded);data.write(0);if(!utf8)data.write(0);
+        }
+        while(data.size()%4!=0)data.write(0);byte[] next=new byte[28+count*4+data.size()];
+        set16(next,0,1);set16(next,2,28);set32(next,4,next.length);set32(next,8,count);set32(next,16,utf8?256:0);set32(next,20,28+count*4);
+        for(int i=0;i<count;i++)set32(next,28+i*4,offsets[i]);System.arraycopy(data.toByteArray(),0,next,28+count*4,data.size());
+        byte[] result=new byte[xml.length-size+next.length];System.arraycopy(xml,0,result,0,8);System.arraycopy(next,0,result,8,next.length);
+        System.arraycopy(xml,8+size,result,8+next.length,xml.length-8-size);set32(result,4,result.length);return result;
+    }
+
+    @Test public void clipboardManifestRequiresQueriesOnlyForNewContractAndLegacyRemainsExact() throws Exception {
+        TemplateApk.Spec clipboard = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode,
+                spec.versionName, Collections.singletonList("clipboard"));
+        byte[] current = TemplateApk.build(template, clipboard, icon, assets);
+        TemplateApk.ManifestInfo modern = TemplateApk.verify(current, clipboard);
+        assertEquals(ManifestPlan.Profile.CURRENT, modern.plan.profile);
+        assertEquals(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES), modern.plan.queries);
+        rejects(() -> TemplateApk.verifyExistingClosedV1(current, clipboard));
+        rejects(() -> TemplateApk.verifyExistingV1(current, clipboard));
+
+        ManifestPlan oldPlan = new ManifestPlan(clipboard.appId, clipboard.label, clipboard.versionCode,
+                clipboard.versionName, modern.plan.iconResourceId, modern.plan.backupResourceId,
+                clipboard.capabilities, ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER);
+        byte[] oldManifest = ManifestXml.encode(oldPlan);
+        byte[] historical = legacyClosedV1ArtifactFixture(current, clipboard);
+        Map<String, byte[]> files = unzip(historical);
+        assertArrayEquals(oldManifest, files.get("AndroidManifest.xml"));
+        rejects(() -> TemplateApk.verify(historical, clipboard));
+        TemplateApk.ManifestInfo accepted = TemplateApk.verifyExistingClosedV1(historical, clipboard);
+        assertEquals(ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER, accepted.plan.profile);
+        assertTrue(accepted.plan.queries.isEmpty()); assertEquals(modern.dexSha256, accepted.dexSha256);
+        assertEquals(16, ManifestAudit.read(oldManifest).attribute("manifest/application/activity", ManifestPlan.ANDROID, "windowSoftInputMode").value);
+        TemplateApk.verifyAgainstPlan(historical, accepted.plan);
+        assertEquals(ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER, TemplateApk.verifyExistingV1(historical, clipboard).plan.profile);
+        rejects(() -> TemplateApk.verifyExistingClosedV1(historical,
+                new TemplateApk.Spec(clipboard.appId, clipboard.label, 2, clipboard.versionName, clipboard.capabilities)));
+
+        ManifestPlan extraPermission = new ManifestPlan(clipboard.appId, clipboard.label, clipboard.versionCode,
+                clipboard.versionName, modern.plan.iconResourceId, modern.plan.backupResourceId,
+                Arrays.asList("biometrics", "clipboard"), ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER);
+        files.put("AndroidManifest.xml", ManifestXml.encode(extraPermission));
+        rejects(() -> TemplateApk.verifyExistingClosedV1(alignedZip(files), clipboard));
+        files.put("AndroidManifest.xml", renamePoolString(oldManifest, "android.intent.action.MAIN", "android.intent.action.VIEW"));
+        rejects(() -> TemplateApk.verifyExistingClosedV1(alignedZip(files), clipboard));
+        files.put("AndroidManifest.xml", removeAttributeById(oldManifest, 0x0101022b));
+        byte[] ancient = alignedZip(files);
+        rejects(() -> TemplateApk.verifyExistingClosedV1(ancient, clipboard));
+        assertEquals(ManifestPlan.Profile.V1_BEFORE_SAFE_AREA, TemplateApk.verifyExistingV1(ancient, clipboard).plan.profile);
+
+        TemplateApk.Spec mixed = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode, spec.versionName,
+                Arrays.asList("biometrics", "clipboard", "documents"));
+        byte[] sharedQueries = TemplateApk.build(template, mixed, icon, assets);
+        TemplateApk.ManifestInfo oldMixed = TemplateApk.verifyExistingClosedV1(sharedQueries, mixed);
+        assertEquals(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES), oldMixed.plan.queries);
+        assertEquals(Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION), oldMixed.plan.permissions);
+    }
+    @Test public void closedV2PreservesOldShareExportAndRejectsNativeOrUnexpectedDeclarations() throws Exception {
+        for (List<String> caps : Arrays.asList(Collections.singletonList("share"), Collections.singletonList("export"),
+                Arrays.asList("export", "share"), Arrays.asList("clipboard", "share"))) {
+            TemplateApk.Spec selected = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode, spec.versionName, caps);
+            byte[] current = TemplateApk.build(template, selected, icon, assets);
+            byte[] historical = legacyClosedV2ArtifactFixture(current, selected);
+            TemplateApk.ManifestInfo accepted = TemplateApk.verifyExistingClosedV2(historical, selected);
+            assertEquals(ManifestPlan.Profile.V2_BEFORE_NATIVE_OPERATIONS, accepted.plan.profile);
+            assertEquals(TemplateApk.verify(current, selected).dexSha256, accepted.dexSha256);
+            assertTrue(accepted.permissions.isEmpty()); assertTrue(accepted.plan.queryActions.isEmpty());
+            if (!caps.contains("clipboard")) {
+                assertTrue(accepted.plan.queries.isEmpty());
+                rejects(() -> TemplateApk.verify(historical, selected));
+                rejects(() -> TemplateApk.verifyExistingClosedV2(current, selected));
+            } else assertEquals(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES), accepted.plan.queries);
+            Map<String, byte[]> files = unzip(historical);
+            files.put("AndroidManifest.xml", renamePoolString(files.get("AndroidManifest.xml"), "android.intent.action.MAIN", "android.intent.action.VIEW"));
+            rejects(() -> TemplateApk.verifyExistingClosedV2(alignedZip(files), selected));
+        }
+        for (String cap : Arrays.asList("network", "notifications", "speech")) {
+            TemplateApk.Spec selected = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode, spec.versionName, Collections.singletonList(cap));
+            byte[] generated = TemplateApk.build(template, selected, icon, assets);
+            rejects(() -> TemplateApk.verifyExistingClosedV2(generated, selected));
+            rejects(() -> TemplateApk.verifyExistingClosedV1(generated, selected));
+            rejects(() -> TemplateApk.verifyExistingV1(generated, selected));
+            rejects(() -> TemplateApk.verify(generated, spec));
+        }
+        TemplateApk.Spec speech = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode, spec.versionName, Collections.singletonList("speech"));
+        Map<String, byte[]> wrongSpeech = unzip(TemplateApk.build(template, speech, icon, assets));
+        wrongSpeech.put("AndroidManifest.xml", renamePoolString(wrongSpeech.get("AndroidManifest.xml"), CapabilityCatalog.TTS_SERVICE_ACTION, "android.intent.action.SEND"));
+        rejects(() -> TemplateApk.verify(alignedZip(wrongSpeech), speech));
+        rejects(() -> TemplateApk.inspect(alignedZip(wrongSpeech)));
+    }
+    @Test public void legacyV1LayoutIsAcceptedOnlyThroughExplicitReceiptCompatibility() throws Exception {
+        Map<String,byte[]> files=unzip(build());
+        byte[] old=removeAttributeById(files.get("AndroidManifest.xml"),0x0101022b);files.put("AndroidManifest.xml",old);
+        byte[] legacy=alignedZip(files);
+        rejects(()->TemplateApk.verify(legacy,spec));
+        TemplateApk.ManifestInfo accepted=TemplateApk.verifyExistingV1(legacy,spec);
+        assertEquals(com.jarvys.factory.contract.ManifestPlan.Profile.V1_BEFORE_SAFE_AREA,accepted.plan.profile);
+        TemplateApk.verifyAgainstPlan(legacy,accepted.plan);
+        rejects(()->TemplateApk.verifyExistingV1(legacy,new TemplateApk.Spec(spec.appId,spec.label,2,spec.versionName)));
+        byte[] unsafe=renamePoolString(old,"android.intent.action.MAIN","android.intent.action.VIEW");
+        files.put("AndroidManifest.xml",unsafe);
+        rejects(()->TemplateApk.verifyExistingV1(alignedZip(files),spec));
+        assertEquals(com.jarvys.factory.contract.ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER,TemplateApk.verifyExistingV1(build(),spec).plan.profile);
+    }
+    /** Exact old-current manifest, preserving safe-area fields, DEX, resources and assets. */
+    public static byte[] legacyClosedV1ArtifactFixture(byte[] current, TemplateApk.Spec expected) throws IOException {
+        return legacyContractArtifactFixture(current, expected, ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER);
+    }
+    /** Exact old clipboard-broker contract; share/export did not yet contribute visibility. */
+    public static byte[] legacyClosedV2ArtifactFixture(byte[] current, TemplateApk.Spec expected) throws IOException {
+        return legacyContractArtifactFixture(current, expected, ManifestPlan.Profile.V2_BEFORE_NATIVE_OPERATIONS);
+    }
+    private static byte[] legacyContractArtifactFixture(byte[] current, TemplateApk.Spec expected, ManifestPlan.Profile profile) throws IOException {
+        TemplateApk.ManifestInfo verified = TemplateApk.verify(current, expected);
+        ManifestPlan legacy = new ManifestPlan(expected.appId, expected.label, expected.versionCode,
+                expected.versionName, verified.plan.iconResourceId, verified.plan.backupResourceId,
+                expected.capabilities, profile);
+        Map<String, byte[]> files = unzip(current);
+        files.put("AndroidManifest.xml", ManifestXml.encode(legacy));
+        return alignedZip(files);
+    }
+    public static byte[] legacyArtifactFixture(byte[] current) throws IOException {
+        Map<String,byte[]> files=unzip(current);
+        // Historical apps did not bundle the v81 library. Signing must not require it.
+        files.keySet().removeIf(name -> name.startsWith("assets/factory-ui/"));
+        files.put("AndroidManifest.xml",removeAttributeById(files.get("AndroidManifest.xml"),0x0101022b));
+        return alignedZip(files);
+    }
+    /** Ancient fixture with its exact approved capabilities, before any broker declarations. */
+    public static byte[] legacyArtifactFixture(byte[] current, TemplateApk.Spec expected) throws IOException {
+        Map<String, byte[]> files = unzip(legacyContractArtifactFixture(current, expected, ManifestPlan.Profile.V1_BEFORE_SAFE_AREA));
+        files.keySet().removeIf(name -> name.startsWith("assets/factory-ui/"));
+        return alignedZip(files);
+    }
+    private static byte[] removeAttributeById(byte[] xml,int id) throws IOException {
+        int nameIndex=-1;
+        for(int p=8;p<xml.length;p+=int32(xml,p+4)) if(u16(xml,p)==0x180)
+            for(int a=p+8;a<p+int32(xml,p+4);a+=4) if(int32(xml,a)==id) nameIndex=(a-p-8)/4;
+        assertTrue(nameIndex>=0);
+        for(int p=8;p<xml.length;p+=int32(xml,p+4)) if(u16(xml,p)==0x102)
+            for(int a=p+36;a<p+int32(xml,p+4);a+=20) if(int32(xml,a+4)==nameIndex) {
+                byte[] result=new byte[xml.length-20];System.arraycopy(xml,0,result,0,a);
+                System.arraycopy(xml,a+20,result,a,xml.length-a-20);set32(result,4,result.length);
+                set32(result,p+4,int32(xml,p+4)-20);set16(result,p+28,u16(xml,p+28)-1);return result;
+            }
+        throw new AssertionError("Attribute absent");
+    }
+    private void rejectManifest(byte[] candidate) throws Exception {
+        com.jarvys.factory.contract.ManifestPlan plan=TemplateApk.inspect(template).plan;
+        rejects(()->com.jarvys.factory.contract.ManifestAudit.read(candidate).verify(plan));
+        Map<String,byte[]> files=unzip(template);files.put("AndroidManifest.xml",candidate);
+        rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+    }
+    private static byte[] insert(byte[] original,int offset,byte[] added) {
+        byte[] result=new byte[original.length+added.length];System.arraycopy(original,0,result,0,offset);
+        System.arraycopy(added,0,result,offset,added.length);System.arraycopy(original,offset,result,offset+added.length,original.length-offset);
+        set32(result,4,result.length);return result;
+    }
+    @Test public void deterministicZipDoesNotDependOnMapInsertionOrderOrTimezone() throws Exception {
+        byte[] first = build();
+        Map<String, byte[]> reverse = new LinkedHashMap<>();
+        List<String> names = new ArrayList<>(assets.keySet()); Collections.reverse(names);
+        for (String name : names) reverse.put(name, assets.get(name));
+        TimeZone old = TimeZone.getDefault();
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("Pacific/Honolulu"));
+            assertArrayEquals(first, TemplateApk.build(template, spec, icon, reverse));
+            TimeZone.setDefault(TimeZone.getTimeZone("Asia/Tokyo"));
+            assertArrayEquals(first, TemplateApk.build(template, spec, icon, assets));
+        } finally { TimeZone.setDefault(old); }
+    }
+
+    @Test public void streamingDeflatedTemplateWithDataDescriptorsIsAccepted() throws Exception {
+        byte[] streaming = zip(unzip(template), false);
+        assertEquals(spec.appId, TemplateApk.inspect(TemplateApk.build(streaming, spec, icon, assets)).appId);
+    }
+
+    @Test public void bothBinaryXmlStringPoolEncodingsAreAccepted() throws Exception {
+        Map<String, byte[]> files = unzip(template);
+        files.put("AndroidManifest.xml", oppositePool(files.get("AndroidManifest.xml")));
+        TemplateApk.Spec unicode = new TemplateApk.Spec(spec.appId, "Notas 🎉 日本語", 1, "1.0.β");
+        byte[] transformed = TemplateApk.build(zip(files, false), unicode, icon, assets);
+        assertEquals(unicode.label, TemplateApk.inspect(transformed).label);
+        assertEquals(unicode.versionName, TemplateApk.inspect(transformed).versionName);
+    }
+
+    @Test public void siteReplacementRemovesStaleTemplateFiles() throws Exception {
+        Map<String, byte[]> source = unzip(template);
+        source.put("assets/www/stale.js", utf8("throw new Error('stale')"));
+        source.put("assets/factory-provenance.json", utf8("old"));
+        Map<String, byte[]> generated = unzip(TemplateApk.build(zip(source, false), spec, icon, assets));
+        assertFalse(generated.containsKey("assets/www/stale.js"));
+        assertArrayEquals(assets.get("assets/factory-provenance.json"), generated.get("assets/factory-provenance.json"));
+    }
+
+    @Test public void reservedMalformedOrTooLongIdentitiesAreRejected() throws Exception {
+        for (String id : new String[]{"android", "bad..name", "1bad.name", "org.example/x", "com.jarvys.agent", "com.jarvys.factory.template", "org." + repeat("a", 128)}) {
+            final TemplateApk.Spec bad = new TemplateApk.Spec(id, "Test", 1, "1");
+            rejects(() -> TemplateApk.build(template, bad, icon, assets));
+        }
+    }
+
+    @Test public void invalidLabelsVersionsAndUnpairedUnicodeAreRejected() throws Exception {
+        for (String label : new String[]{"", "bad\nlabel", "\ud800", repeat("x", 81)}) {
+            final TemplateApk.Spec bad = new TemplateApk.Spec(spec.appId, label, 1, "1");
+            rejects(() -> TemplateApk.build(template, bad, icon, assets));
+        }
+        for (int code : new int[]{0, -1}) {
+            final TemplateApk.Spec bad = new TemplateApk.Spec(spec.appId, "Test", code, "1");
+            rejects(() -> TemplateApk.build(template, bad, icon, assets));
+        }
+        rejects(() -> TemplateApk.build(template, new TemplateApk.Spec(spec.appId, "Test", 1, ""), icon, assets));
+    }
+
+    @Test public void onlyExactApprovedAssetRootsCanBeReplaced() throws Exception {
+        for (String path : new String[]{"classes.dex", "resources.arsc", "assets/other.json", "assets/www/../escape", "assets/www//file", "/assets/www/file", "assets/www/evil.so"}) {
+            Map<String, byte[]> invalid = new HashMap<>(assets); invalid.put(path, new byte[1]);
+            rejects(() -> TemplateApk.build(template, spec, icon, invalid));
+        }
+        for (String required : new String[]{"assets/www/index.html", "assets/factory-app.json"}) {
+            Map<String, byte[]> missing = new HashMap<>(assets); missing.remove(required);
+            rejects(() -> TemplateApk.build(template, spec, icon, missing));
+        }
+    }
+
+    @Test public void archiveTraversalNativeLibrariesAndSymlinksAreRejected() throws Exception {
+        for (String path : new String[]{"assets/../escape", "lib/arm64-v8a/evil.so", "assets/evil.so"}) {
+            Map<String, byte[]> invalid = unzip(template); invalid.put(path, new byte[1]);
+            byte[] candidate = zip(invalid, false);
+            rejects(() -> TemplateApk.build(candidate, spec, icon, assets));
+        }
+        byte[] symlink = template.clone(); int central = findCentral(symlink, "classes.dex");
+        set16(symlink, central + 4, 0x0314); set32(symlink, central + 38, 0120777L << 16);
+        rejects(() -> TemplateApk.build(symlink, spec, icon, assets));
+    }
+
+    @Test public void duplicatePathsAndLocalCentralDisagreementAreRejected() throws Exception {
+        Map<String, byte[]> files = unzip(template); files.put("classes.dey", files.get("classes.dex"));
+        byte[] duplicate = zip(files, false); int central = findCentral(duplicate, "classes.dey");
+        int local = int32(duplicate, central + 42);
+        duplicate[central + 46 + "classes.de".length()] = 'x';
+        duplicate[local + 30 + "classes.de".length()] = 'x';
+        rejects(() -> TemplateApk.build(duplicate, spec, icon, assets));
+        byte[] mismatch = template.clone(); central = findCentral(mismatch, "classes.dex"); local = int32(mismatch, central + 42);
+        mismatch[local + 30] ^= 1;
+        rejects(() -> TemplateApk.build(mismatch, spec, icon, assets));
+    }
+
+    @Test public void signatureBearingTemplatesAreNeverReused() throws Exception {
+        Map<String, byte[]> files = unzip(template); files.put("META-INF/CERT.SF", utf8("signature"));
+        byte[] v1 = zip(files, false); rejects(() -> TemplateApk.build(v1, spec, icon, assets));
+        int end = eocd(template), directory = int32(template, end + 16);
+        byte[] v2 = new byte[template.length + 32];
+        System.arraycopy(template, 0, v2, 0, directory);
+        set32(v2, directory, 24); set32(v2, directory + 8, 24);
+        System.arraycopy(utf8("APK Sig Block 42"), 0, v2, directory + 16, 16);
+        System.arraycopy(template, directory, v2, directory + 32, template.length - directory);
+        set32(v2, end + 32 + 16, directory + 32);
+        rejects(() -> TemplateApk.build(v2, spec, icon, assets));
+    }
+
+    @Test public void compressedOrUnalignedGeneratedResourcesFailInspection() throws Exception {
+        Map<String, byte[]> generated = unzip(build());
+        byte[] deflated = zip(generated, false), unaligned = zip(generated, true);
+        rejects(() -> TemplateApk.inspect(deflated));
+        rejects(() -> TemplateApk.inspect(unaligned));
+    }
+
+    @Test public void oversizeAndTruncatedArchivesFailWithCheckedErrors() throws Exception {
+        rejects(() -> TemplateApk.inspect(new byte[TemplateApk.MAX_APK_BYTES + 1]));
+        byte[] oversized = template.clone(); set32(oversized, findCentral(oversized, "classes.dex") + 24, 17 * 1024 * 1024);
+        rejects(() -> TemplateApk.build(oversized, spec, icon, assets));
+        // Bounded matrix includes the beginning, interior and every last-64-byte boundary.
+        for (int n : new int[]{0, 1, 8, 21, 100, template.length / 2}) {
+            byte[] shortened = Arrays.copyOf(template, n); rejects(() -> TemplateApk.inspect(shortened));
+        }
+        for (int n = template.length - 64; n < template.length; n++) {
+            byte[] shortened = Arrays.copyOf(template, n); rejects(() -> TemplateApk.inspect(shortened));
+        }
+    }
+
+    @Test public void crcCorruptionAndMissingOrInvalidDexAreRejected() throws Exception {
+        byte[] corrupt = template.clone(); int c = findCentral(corrupt, "classes.dex"), local = int32(corrupt, c + 42);
+        int data = local + 30 + u16(corrupt, local + 26) + u16(corrupt, local + 28); corrupt[data] ^= 1;
+        rejects(() -> TemplateApk.build(corrupt, spec, icon, assets));
+        Map<String, byte[]> missing = unzip(template); missing.remove("classes.dex");
+        byte[] without = zip(missing, false); rejects(() -> TemplateApk.build(without, spec, icon, assets));
+        Map<String, byte[]> invalid = unzip(template); invalid.get("classes.dex")[0] = 0;
+        byte[] bad = zip(invalid, false); rejects(() -> TemplateApk.build(bad, spec, icon, assets));
+    }
+
+    @Test public void malformedXmlBoundsStringOffsetsAndAttributeIdsAreRejected() throws Exception {
+        for (int kind = 0; kind < 3; kind++) {
+            Map<String, byte[]> files = unzip(template); byte[] xml = files.get("AndroidManifest.xml");
+            if (kind == 0) set32(xml, 4, xml.length + 4);
+            if (kind == 1) set32(xml, 8 + 28, 0xffffffffL);
+            if (kind == 2) {
+                boolean changed = false;
+                for (int p = 8; p < xml.length; p += int32(xml, p + 4)) if (u16(xml, p) == 0x180) {
+                    for (int i = p + 8; i < p + int32(xml, p + 4); i += 4) if (int32(xml, i) == 0x0101021b) {
+                        set32(xml, i, 0x0101021c); changed = true; break;
+                    }
+                }
+                assertTrue("versionCode resource map not found", changed);
+            }
+            byte[] bad = zip(files, false); rejects(() -> TemplateApk.build(bad, spec, icon, assets));
+        }
+    }
+
+    @Test public void malformedResourcePackagesAndIconEntriesAreRejected() throws Exception {
+        int iconId = TemplateApk.inspect(build()).iconResourceId;
+        for (String kind : new String[]{"count", "size", "name", "pool", "header", "sparse", "compact", "key", "value"}) {
+            Map<String, byte[]> files = unzip(template); byte[] arsc = files.get("resources.arsc");
+            mutateResource(arsc, iconId, kind);
+            byte[] bad = zip(files, false); rejects(() -> TemplateApk.build(bad, spec, icon, assets));
+        }
+    }
+
+    @Test public void pngChecksRejectCrcDimensionsEncodingAndInflatedSizeMismatch() throws Exception {
+        byte[] crc = icon.clone(); crc[crc.length - 1] ^= 1;
+        rejects(() -> TemplateApk.build(template, spec, crc, assets));
+        rejects(() -> TemplateApk.build(template, spec, new byte[45], assets));
+        rejects(() -> TemplateApk.build(template, spec, new byte[1024 * 1024 + 1], assets));
+        byte[] dimensions = png(1025, 1); rejects(() -> TemplateApk.build(template, spec, dimensions, assets));
+        byte[] inconsistent = icon.clone(); inconsistent[16 + 3] = 23; repairPngCrc(inconsistent, 8);
+        rejects(() -> TemplateApk.build(template, spec, inconsistent, assets));
+    }
+
+    private byte[] build() throws IOException { return TemplateApk.build(template, spec, icon, assets); }
+    private interface Checked { void run() throws Exception; }
+    private static void rejects(Checked action) throws Exception {
+        try { action.run(); fail("Malformed input was accepted"); } catch (IOException expected) { /* expected checked failure */ }
+    }
+    private static byte[] utf8(String value) { return value.getBytes(StandardCharsets.UTF_8); }
+    private static String repeat(String value, int count) { StringBuilder out = new StringBuilder(); for (int i=0;i<count;i++) out.append(value); return out.toString(); }
+    private static byte[] readAll(InputStream in) throws IOException { ByteArrayOutputStream out=new ByteArrayOutputStream(); byte[] buf=new byte[8192]; int n; while((n=in.read(buf))!=-1) out.write(buf,0,n); return out.toByteArray(); }
+    private static Map<String,byte[]> unzip(byte[] zip) throws IOException {
+        Map<String,byte[]> files=new LinkedHashMap<>();
+        try(ZipInputStream in=new ZipInputStream(new ByteArrayInputStream(zip))) { ZipEntry e; while((e=in.getNextEntry())!=null) files.put(e.getName(),readAll(in)); }
+        return files;
+    }
+    private static byte[] zip(Map<String,byte[]> files,boolean stored) throws IOException {
+        ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+        try(ZipOutputStream out=new ZipOutputStream(bytes)) {
+            for(Map.Entry<String,byte[]> e:files.entrySet()) {
+                ZipEntry entry=new ZipEntry(e.getKey()); entry.setTime(315532800000L);
+                if(stored) { CRC32 crc=new CRC32();crc.update(e.getValue());entry.setMethod(ZipEntry.STORED);entry.setSize(e.getValue().length);entry.setCompressedSize(e.getValue().length);entry.setCrc(crc.getValue()); }
+                out.putNextEntry(entry);out.write(e.getValue());out.closeEntry();
+            }
+        }
+        return bytes.toByteArray();
+    }
+    private static int u16(byte[] b,int p) {return (b[p]&255)|((b[p+1]&255)<<8);}
+    private static int int32(byte[] b,int p) {return u16(b,p)|(u16(b,p+2)<<16);}
+    private static void set16(byte[] b,int p,int v) {b[p]=(byte)v;b[p+1]=(byte)(v>>>8);}
+    private static void set32(byte[] b,int p,long v) {for(int i=0;i<4;i++)b[p+i]=(byte)(v>>>(8*i));}
+    private static int eocd(byte[] apk) {for(int p=apk.length-22;p>=0;p--)if(int32(apk,p)==0x06054b50 && p+22+u16(apk,p+20)==apk.length)return p;throw new AssertionError("No EOCD");}
+    private static int findCentral(byte[] apk,String name) {
+        int end=eocd(apk);for(int p=int32(apk,end+16);p<end;p+=46+u16(apk,p+28)+u16(apk,p+30)+u16(apk,p+32)) {
+            if(name.equals(new String(apk,p+46,u16(apk,p+28),StandardCharsets.UTF_8)))return p;
+        }
+        throw new AssertionError("Missing ZIP entry: "+name);
+    }
+    private static void assertStoredEntriesAligned(byte[] apk) {
+        int end=eocd(apk);for(int p=int32(apk,end+16);p<end;p+=46+u16(apk,p+28)+u16(apk,p+30)+u16(apk,p+32)) {
+            assertEquals(0,u16(apk,p+10));int local=int32(apk,p+42);assertEquals(0,(local+30+u16(apk,local+26)+u16(apk,local+28))%4);
+        }
+    }
+    private static String resourcePackageName(byte[] b) {
+        for(int p=12;p<b.length;p+=int32(b,p+4))if(u16(b,p)==0x200){int n=0;while(n<256&&u16(b,p+12+n)!=0)n+=2;return new String(b,p+12,n,StandardCharsets.UTF_16LE);}
+        throw new AssertionError("No resource package");
+    }
+    private static void mutateResource(byte[] b,int iconId,String kind) {
+        int wantedType=(iconId>>>16)&255,wantedEntry=iconId&65535;
+        if(kind.equals("count")){set32(b,8,2);return;}if(kind.equals("size")){set32(b,4,b.length+4);return;}
+        for(int p=12;p<b.length;p+=int32(b,p+4))if(u16(b,p)==0x200){
+            int size=int32(b,p+4),header=u16(b,p+2);
+            if(kind.equals("name")){b[p+12]='x';return;}if(kind.equals("pool")){set32(b,p+268,size+4);return;}
+            for(int q=p+header;q<p+size;q+=int32(b,q+4))if(u16(b,q)==0x201&&(b[q+8]&255)==wantedType){
+                if(kind.equals("header")){set16(b,q+2,8);return;}if(kind.equals("sparse")){b[q+9]=1;return;}
+                int entryCount=int32(b,q+12),start=int32(b,q+16),offsets=q+u16(b,q+2);
+                for(int i=0;i<entryCount;i++){int relative=int32(b,offsets+4*i);if(relative==-1)continue;
+                    // Use the entry index from the real manifest reference, never a guessed numeric ID.
+                    if(i!=wantedEntry)continue;int e=q+start+relative;
+                    if(kind.equals("locale"))b[q+28]=101;else if(kind.equals("compact"))set16(b,e+2,8);else if(kind.equals("key"))set32(b,e+4,0x7fffffff);else if(kind.equals("value"))b[e+11]=1;else throw new AssertionError(kind);
+                    return;
+                }
+            }
+        }
+        throw new AssertionError("No matching launcher entry: "+kind);
+    }
+    private static byte[] png(int width,int height) throws IOException {
+        ByteArrayOutputStream out=new ByteArrayOutputStream();out.write(new byte[]{(byte)137,80,78,71,13,10,26,10});
+        ByteArrayOutputStream h=new ByteArrayOutputStream();DataOutputStream hd=new DataOutputStream(h);hd.writeInt(width);hd.writeInt(height);hd.write(new byte[]{8,6,0,0,0});pngChunk(out,"IHDR",h.toByteArray());
+        ByteArrayOutputStream compressed=new ByteArrayOutputStream();try(DeflaterOutputStream z=new DeflaterOutputStream(compressed)){for(int y=0;y<height;y++){z.write(0);for(int x=0;x<width;x++)z.write(new byte[]{40,100,(byte)180,(byte)255});}}
+        pngChunk(out,"IDAT",compressed.toByteArray());pngChunk(out,"IEND",new byte[0]);return out.toByteArray();
+    }
+    private static void pngChunk(ByteArrayOutputStream out,String name,byte[] data) throws IOException {
+        DataOutputStream stream=new DataOutputStream(out);byte[] type=utf8(name);stream.writeInt(data.length);stream.write(type);stream.write(data);CRC32 crc=new CRC32();crc.update(type);crc.update(data);stream.writeInt((int)crc.getValue());
+    }
+    private static void repairPngCrc(byte[] b,int p){int size=((b[p]&255)<<24)|((b[p+1]&255)<<16)|((b[p+2]&255)<<8)|(b[p+3]&255);CRC32 crc=new CRC32();crc.update(b,p+4,size+4);long v=crc.getValue();for(int i=0;i<4;i++)b[p+8+size+i]=(byte)(v>>>(24-8*i));}
+    private static byte[] oppositePool(byte[] xml) throws IOException {
+        int pool=8,size=int32(xml,pool+4),count=int32(xml,pool+8),flags=int32(xml,pool+16),start=int32(xml,pool+20);boolean oldUtf8=(flags&256)!=0,newUtf8=!oldUtf8;
+        List<String> strings=new ArrayList<>();for(int i=0;i<count;i++){
+            int[] at={pool+start+int32(xml,pool+28+4*i)};int units=poolLength(xml,at,oldUtf8),length=oldUtf8?poolLength(xml,at,true):units*2;
+            strings.add(new String(xml,at[0],length,oldUtf8?StandardCharsets.UTF_8:StandardCharsets.UTF_16LE));
+        }
+        ByteArrayOutputStream data=new ByteArrayOutputStream();int[] offsets=new int[count];for(int i=0;i<count;i++){
+            String s=strings.get(i);byte[] encoded=s.getBytes(newUtf8?StandardCharsets.UTF_8:StandardCharsets.UTF_16LE);offsets[i]=data.size();emitPoolLength(data,s.length(),newUtf8);if(newUtf8)emitPoolLength(data,encoded.length,true);data.write(encoded);data.write(0);if(!newUtf8)data.write(0);
+        }
+        while(data.size()%4!=0)data.write(0);byte[] replacement=new byte[28+4*count+data.size()];set16(replacement,0,1);set16(replacement,2,28);set32(replacement,4,replacement.length);set32(replacement,8,count);set32(replacement,16,newUtf8?256:0);set32(replacement,20,28+4*count);for(int i=0;i<count;i++)set32(replacement,28+4*i,offsets[i]);System.arraycopy(data.toByteArray(),0,replacement,28+4*count,data.size());
+        byte[] result=new byte[xml.length-size+replacement.length];System.arraycopy(xml,0,result,0,8);System.arraycopy(replacement,0,result,8,replacement.length);System.arraycopy(xml,8+size,result,8+replacement.length,xml.length-8-size);set32(result,4,result.length);return result;
+    }
+    private static int poolLength(byte[] b,int[] at,boolean utf8){if(utf8){int v=b[at[0]++]&255;if((v&128)!=0)v=((v&127)<<8)|(b[at[0]++]&255);return v;}int v=u16(b,at[0]);at[0]+=2;if((v&32768)!=0){v=((v&32767)<<16)|u16(b,at[0]);at[0]+=2;}return v;}
+    private static void emitPoolLength(ByteArrayOutputStream b,int n,boolean utf8){if(utf8){if(n>=128)b.write((n>>>8)|128);b.write(n);}else{if(n>=32768){b.write(0);b.write(128);}b.write(n);b.write(n>>>8);}}
+}

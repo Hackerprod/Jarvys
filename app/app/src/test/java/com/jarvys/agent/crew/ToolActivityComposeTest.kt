@@ -1,0 +1,240 @@
+package com.jarvys.agent.crew
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.view.View
+import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import com.jarvys.agent.*
+import com.jarvys.agent.R
+import com.jarvys.agent.skills.SkillRepository
+import com.jarvys.agent.connectors.ConnectorConnectionPreferences
+import com.jarvys.agent.connectors.ConnectorRegistry
+import com.jarvys.agent.ui.chat.ConversationTimeline
+import com.jarvys.agent.ui.jarvysColorScheme
+import com.jarvys.agent.ui.motion.LocalReducedMotion
+import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import java.io.File
+
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk=[34],qualifiers="en-rUS-w360dp-h800dp-port-mdpi")
+class ToolActivityComposeTest {
+    @get:Rule val compose=createAndroidComposeRule<ComponentActivity>()
+    @get:Rule val testSecrets=TestSecretStoreRule()
+    private fun activity(stage:String="tool_call",detail:String="",skill:Boolean=false)=ToolActivity("event-$stage","execution","raw-call",
+        if(skill) "read_skill" else "read", "Read",if(skill) "skill.garden" else "",if(skill) "Garden Planning" else "",
+        stage,detail,"","","workspace",1)
+    private fun bot(state:String="RUNNING")=CrewBotSnapshot("bot","coding","Coding","Coding","coding","Inspect",state,"","","",emptyList(),0,0)
+    private fun local(a:ToolActivity,id:String="local")=CrewMessage(id,"chat","bot","bot",CrewMessage.Type.STATUS,"Read",emptyList(),1,a)
+    private fun snapshot(state:String="RUNNING",messages:List<CrewMessage>)=CrewMissionSnapshot("mission","chat","process","Inspect source",state,"",0,0,listOf(bot(state)),messages)
+    private fun semanticsSnapshot():String {
+        fun collect(node:SemanticsNode):String=node.config.toString()+node.children.joinToString("") { collect(it) }
+        return collect(compose.onRoot(useUnmergedTree=true).fetchSemanticsNode())
+    }
+    private fun assertInternalSkillNotExposed(id:String,name:String,bodyPhrase:String) {
+        val semantics=semanticsSnapshot()
+        listOf(id,name,bodyPhrase).forEach { value ->
+            assertFalse("Internal skill data appeared in UI semantics: $value",semantics.contains(value))
+        }
+    }
+    private val fixtureBoard by lazy {
+        val constructor=WorkspaceStore::class.java.getDeclaredConstructor(File::class.java,String::class.java).apply { isAccessible=true }
+        CrewBoard(constructor.newInstance(TestCaptureDirectories.create("ux37-board"),WorkspaceStore.projectIdForSession("chat")))
+    }
+    private fun board()=fixtureBoard
+
+    @Test fun oneCrewRowTransitionsAndOnlyRealMessageHasDirection() {
+        val start=local(activity());var value by mutableStateOf(snapshot(messages=listOf(start,
+            CrewMessage("real","chat","bot","chief",CrewMessage.Type.STATUS,"Ready for review",emptyList(),2))))
+        compose.setContent { MaterialTheme { CrewMissionScreen(value,board(),true,{},{_,_->},{}) } }
+        compose.onAllNodesWithText("To Jarvys").assertCountEquals(1)
+        compose.onNodeWithText("Using Read").assertIsDisplayed()
+        compose.runOnIdle { value=snapshot(messages=value.messages+local(activity("tool_result","Read result"),"done")) }
+        compose.onNodeWithText("Used Read").assertIsDisplayed();compose.onAllNodesWithText("Using Read").assertCountEquals(0)
+        compose.onAllNodesWithTag("activity-execution").assertCountEquals(1)
+        compose.onNodeWithText("Read result").assertDoesNotExist()
+        compose.onNodeWithTag("activity-details-execution").performClick();compose.onNodeWithText("Read result").assertIsDisplayed()
+        compose.onAllNodesWithText("To Jarvys").assertCountEquals(1)
+    }
+    @Test fun failedAndPreviewDetailsStayInsideTheExpandedRow() {
+        val failed = ToolActivity("event", "execution", "call", "read", "Read", "", "", "tool_error",
+            "Read failed with a partial result", "preview", "", "workspace", 1)
+        compose.setContent { MaterialTheme { ToolActivityLine(failed, onOpenPreview = {}) } }
+        compose.onNodeWithText(compose.activity.getString(R.string.connector_tool_failed, "Read")).assertIsDisplayed()
+        compose.onNodeWithText("Read failed with a partial result").assertDoesNotExist()
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_open_preview)).assertDoesNotExist()
+        compose.onNodeWithTag("activity-details-execution").performClick()
+        compose.onNodeWithText("Read failed with a partial result").assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_open_preview)).assertIsDisplayed()
+    }
+    @Test fun interruptionExplanationIsHiddenUntilExpanded() {
+        val interrupted = activity("tool_interrupted", "Partial execution evidence")
+        compose.setContent { MaterialTheme { ToolActivityLine(interrupted) } }
+        val explanation = compose.activity.getString(R.string.activity_unconfirmed_detail)
+        compose.onNodeWithText(explanation).assertDoesNotExist()
+        compose.onNodeWithText("Partial execution evidence").assertDoesNotExist()
+        compose.onNodeWithTag("activity-details-execution").performClick()
+        compose.onNodeWithText(explanation).assertIsDisplayed()
+        compose.onNodeWithText("Partial execution evidence").assertIsDisplayed()
+    }
+    @Test fun internalBundledSkillActivityHidesRealReadSkillResultOnActivityAndChatTimelines() {
+        val internal = SkillRepository.get(compose.activity).also { it.refresh() }.skills.value
+            .first { SkillRepository.isInternalBundledSkill(it) }
+        val bodyPhrase = internal.body.lineSequence().map(String::trim)
+            .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("> Source:") }
+            .maxByOrNull(String::length) ?: error("The internal skill must contain a non-heading body line")
+        val load = LoadSkillTool(listOf(internal), CorePromptBudget.standard().loadedSkillChars)
+            .execute(mapOf("skill_id" to internal.metadata.id), CancellationToken.uncancellable())
+        assertTrue("A real internal read_skill load should succeed: ${load.content}",load.success)
+        assertTrue(load.content.contains(internal.metadata.id))
+        assertTrue(load.content.contains(internal.metadata.name))
+        assertTrue(load.content.contains("\n$bodyPhrase"))
+        assertTrue(load.content.contains(bodyPhrase))
+        val internalActivity = ToolActivity("event-internal", "execution-internal", "call", "read_skill",
+            "Read Skill", internal.metadata.id, internal.metadata.name, "tool_call", "", "", "", "workspace", 1)
+        var state by mutableStateOf(internalActivity)
+        val connectors=ConnectorRegistry.createForTests(object:ConnectorConnectionPreferences {
+            override fun isConnected(id:String)=false
+            override fun setConnected(id:String,connected:Boolean)=Unit
+        },{true})
+        val loadedActivity=internalActivity.event("tool_result",load.content,"")
+        val reopenedEvent=AgentRunUiEvent.activityEvent(1L,loadedActivity)
+        var surface by mutableStateOf(0)
+        compose.setContent { MaterialTheme {
+            when (surface) {
+                0 -> ToolActivityLine(state)
+                1 -> ConversationTimeline("reopened-internal-skill",events=listOf(reopenedEvent),isRunning=false,
+                    connectorRegistry=connectors,onOpenPreview={},onOpenSkillFile={})
+                else -> CrewMissionScreen(snapshot(messages = listOf(local(loadedActivity, "crew-internal-skill"))),
+                    board(), true, {}, { _, _ -> }, {})
+            }
+        } }
+
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loading_generic)).assertIsDisplayed()
+        assertInternalSkillNotExposed(internal.metadata.id,internal.metadata.name,bodyPhrase)
+        compose.runOnIdle { state = internalActivity.event("tool_result", load.content, "") }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loaded_generic)).assertIsDisplayed()
+        compose.onNodeWithTag("activity-details-execution-internal").assertDoesNotExist()
+        assertInternalSkillNotExposed(internal.metadata.id,internal.metadata.name,bodyPhrase)
+
+        compose.runOnIdle { surface = 1 }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loaded_generic)).assertIsDisplayed()
+        compose.onNodeWithTag("tool-output-toggle-execution-internal").assertDoesNotExist()
+        assertInternalSkillNotExposed(internal.metadata.id,internal.metadata.name,bodyPhrase)
+
+        compose.runOnIdle { surface = 2 }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loaded_generic)).assertIsDisplayed()
+        compose.onNodeWithTag("activity-details-execution-internal").assertDoesNotExist()
+        assertInternalSkillNotExposed(internal.metadata.id,internal.metadata.name,bodyPhrase)
+
+        compose.runOnIdle {
+            surface = 0
+            state = internalActivity.event("tool_not_started", "Reference database was not loaded", "")
+        }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_not_started_generic)).assertIsDisplayed()
+        assertInternalSkillNotExposed(internal.metadata.id,internal.metadata.name,bodyPhrase)
+    }
+
+    @Test fun visibleSkillActivityNamesTheRequestedReference() {
+        val reference = ToolActivity("event-reference", "execution-reference", "call-reference", "read_skill",
+            "Read Skill", "external.factory", "APK Factory · database", "tool_result", "", "", "", "workspace", 1)
+        compose.setContent { MaterialTheme { ToolActivityLine(reference) } }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loaded, "APK Factory · database"))
+            .assertIsDisplayed()
+    }
+    @Test fun botStatusOnlyChangeMarksPendingOperationUnconfirmed() {
+        val messages=listOf(local(activity()));var value by mutableStateOf(snapshot(messages=messages))
+        compose.setContent { MaterialTheme { CrewBotDetailScreen(value,"bot",board(),true,{_,_->},{_,_->},{},{}) } }
+        compose.onNodeWithText("Using Read").assertExists()
+        compose.runOnIdle { value=snapshot("STOPPED",messages) }
+        compose.onAllNodesWithText("Using Read").assertCountEquals(0)
+        compose.onNodeWithText(compose.activity.getString(R.string.connector_tool_unconfirmed,"Read")).assertExists()
+    }
+    @Test fun principalUsesOriginalMascotOnApi34WithoutClickAuthority() {
+        var role by mutableStateOf("chief")
+        compose.setContent { MaterialTheme { CrewBotAvatar("Jarvys",role,"periwinkle","IDLE",modifier=Modifier.size(72.dp),testTag="principal-identity") } }
+        fun sources(node:androidx.compose.ui.semantics.SemanticsNode):List<String> =
+            (if(node.config.contains(BotIconSourceKey)) listOf(node.config[BotIconSourceKey]) else emptyList())+node.children.flatMap(::sources)
+        for(id in listOf("chief","captain")) {
+            compose.runOnIdle { role=id }
+            compose.onNodeWithTag("principal-identity").assertIsDisplayed()
+            assertTrue(sources(compose.onRoot(useUnmergedTree=true).fetchSemanticsNode()).contains("principal:jarvys-mascot"))
+            compose.onNodeWithTag("principal-identity").assertHasNoClickAction()
+        }
+    }
+    @Test fun principalMissionHeaderUsesOriginalMascotWithoutAddingNewBotEntries() {
+        compose.setContent { MaterialTheme { CrewMissionScreen(snapshot(messages=emptyList()),board(),true,{},{_,_->},{}) } }
+        fun sources(node:androidx.compose.ui.semantics.SemanticsNode):List<String> =
+            (if(node.config.contains(BotIconSourceKey)) listOf(node.config[BotIconSourceKey]) else emptyList())+node.children.flatMap(::sources)
+        assertTrue(sources(compose.onRoot(useUnmergedTree=true).fetchSemanticsNode()).contains("principal:jarvys-mascot"))
+        compose.onNodeWithTag("crew-tab-bots").performClick()
+        compose.onNodeWithTag("crew-bot-row-bot").assertIsDisplayed()
+        compose.onNodeWithTag("crew-bot-principal").assertDoesNotExist()
+    }
+    @Test fun mainChatPartialEvidenceRemainsReachableAfterInterruption() {
+        val projected=ToolActivity.project(listOf(activity(),activity("tool_progress","Partial evidence"),activity("tool_interrupted")),false)
+        val registry=com.jarvys.agent.connectors.ConnectorRegistry.createForTests(object:com.jarvys.agent.connectors.ConnectorConnectionPreferences {
+            override fun isConnected(id:String)=false
+            override fun setConnected(id:String,connected:Boolean)=Unit
+        },{true})
+        compose.setContent { MaterialTheme {
+            AgentRunScreen(conversationKey="chat",events=listOf(AgentRunUiEvent.activityEvent(1,projected)),isRunning=false,
+                emptyReport=null,connectorRegistry=registry,onOpenPreview={},onOpenSkillFile={})
+        } }
+        compose.onNodeWithTag("tool-output-toggle-execution").performClick()
+        compose.onNodeWithText("Partial evidence").assertIsDisplayed()
+    }
+    @Test fun englishLightNormal()=matrix("en",false,1f)
+    @Test fun englishDarkNormal()=matrix("en",true,1f)
+    @Test fun englishLightLarge()=matrix("en",false,2f)
+    @Test fun englishDarkLarge()=matrix("en",true,2f)
+    @Test @Config(qualifiers="es-rES-w360dp-h800dp-port-mdpi") fun spanishLightNormal()=matrix("es",false,1f)
+    @Test @Config(qualifiers="es-rES-w360dp-h800dp-port-mdpi") fun spanishDarkNormal()=matrix("es",true,1f)
+    @Test @Config(qualifiers="es-rES-w360dp-h800dp-port-mdpi") fun spanishLightLarge()=matrix("es",false,2f)
+    @Test @Config(qualifiers="es-rES-w360dp-h800dp-port-mdpi") fun spanishDarkLarge()=matrix("es",true,2f)
+    private fun matrix(language:String,dark:Boolean,font:Float) {
+        var state by mutableStateOf(activity(skill=true))
+        compose.setContent { CompositionLocalProvider(LocalReducedMotion provides true,LocalDensity provides Density(1f,font)) {
+            MaterialTheme(colorScheme=jarvysColorScheme(dark)) { Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(16.dp)) {
+                CrewBotAvatar("Jarvys","chief","periwinkle","RUNNING",modifier=Modifier.size(64.dp))
+                ToolActivityLine(state)
+            } }
+        } }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loading,"Garden Planning")).assertIsDisplayed()
+        compose.runOnIdle { state=activity("tool_result","Synthetic instructions available for selection.",true) }
+        val label=compose.activity.getString(R.string.activity_skill_loaded,"Garden Planning")
+        compose.onNodeWithText(label).assertIsDisplayed()
+        val text=compose.onNodeWithText(label).fetchSemanticsNode()
+        assertEquals(label,text.config[SemanticsProperties.StateDescription])
+        compose.onNodeWithTag("activity-details-execution").performClick()
+        compose.onNodeWithText("Synthetic instructions available for selection.").assertIsDisplayed()
+        val bounds=compose.onNodeWithTag("activity-details-execution").fetchSemanticsNode().boundsInRoot
+        assertTrue(bounds.width>=48f && bounds.height>=48f)
+        awaitReactionDrawIdle(compose)
+        val root=compose.activity.findViewById<View>(android.R.id.content)
+        val pixels=Bitmap.createBitmap(root.width,root.height,Bitmap.Config.ARGB_8888)
+        compose.runOnIdle { root.draw(Canvas(pixels)) }
+        val file=File(TestCaptureDirectories.named("ux37-${BuildConfig.FLAVOR}"),"$language-${if(dark) "dark" else "light"}-$font.png")
+        file.outputStream().use { pixels.compress(Bitmap.CompressFormat.PNG,100,it) };pixels.recycle()
+        println("UX37_CAPTURE=${file.absolutePath}")
+    }
+}

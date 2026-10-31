@@ -1,0 +1,283 @@
+{
+  "name": "Tallo",
+  "nodes": [
+    {
+      "kind": "group",
+      "name": "Body",
+      "parent": "Artboard",
+      "x": 128,
+      "y": 161
+    },
+    {
+      "kind": "group",
+      "name": "Stem",
+      "parent": "Body",
+      "x": 0,
+      "y": -10
+    },
+    {
+      "kind": "group",
+      "name": "LeafL",
+      "parent": "Stem",
+      "x": -3,
+      "y": -49
+    },
+    {
+      "kind": "ellipse",
+      "name": "LeafLBlade",
+      "parent": "LeafL",
+      "x": -19,
+      "y": -8,
+      "width": 51,
+      "height": 23,
+      "color": 4284004235,
+      "rotation": 0.4
+    },
+    {
+      "kind": "group",
+      "name": "LeafR",
+      "parent": "Stem",
+      "x": 3,
+      "y": -62
+    },
+    {
+      "kind": "ellipse",
+      "name": "LeafRBlade",
+      "parent": "LeafR",
+      "x": 20,
+      "y": -11,
+      "width": 54,
+      "height": 25,
+      "color": 4286830228,
+      "rotation": -0.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "Stalk",
+      "parent": "Stem",
+      "x": 0,
+      "y": -31,
+      "width": 8,
+      "height": 70,
+      "color": 4283079286,
+      "radius": 4
+    },
+    {
+      "kind": "ellipse",
+      "name": "EyeL",
+      "parent": "Body",
+      "x": -15,
+      "y": 7,
+      "width": 7,
+      "height": 10,
+      "color": 4283514466
+    },
+    {
+      "kind": "ellipse",
+      "name": "EyeR",
+      "parent": "Body",
+      "x": 15,
+      "y": 7,
+      "width": 7,
+      "height": 10,
+      "color": 4283514466
+    },
+    {
+      "kind": "rectangle",
+      "name": "Smile",
+      "parent": "Body",
+      "x": 0,
+      "y": 23,
+      "width": 13,
+      "height": 4,
+      "color": 4283514466,
+      "radius": 2
+    },
+    {
+      "kind": "rectangle",
+      "name": "PotRim",
+      "parent": "Body",
+      "x": 0,
+      "y": -13,
+      "width": 104,
+      "height": 18,
+      "color": 4291206871,
+      "radius": 5
+    },
+    {
+      "kind": "rectangle",
+      "name": "Pot",
+      "parent": "Body",
+      "x": 0,
+      "y": 14,
+      "width": 89,
+      "height": 69,
+      "color": 4292591846,
+      "radius": 18
+    },
+    {
+      "kind": "ellipse",
+      "name": "Shadow",
+      "parent": "Artboard",
+      "x": 128,
+      "y": 221,
+      "width": 97,
+      "height": 12,
+      "color": 4292402917
+    }
+  ],
+  "animations": {
+    "Idle": {
+      "duration": 180,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "Stem",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.035
+            ],
+            [
+              90,
+              0.035
+            ],
+            [
+              180,
+              -0.035
+            ]
+          ]
+        },
+        {
+          "node": "LeafL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "LeafR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    "Active": {
+      "duration": 72,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "Stem",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.11
+            ],
+            [
+              36,
+              0.11
+            ],
+            [
+              72,
+              -0.11
+            ]
+          ]
+        },
+        {
+          "node": "LeafL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.25
+            ],
+            [
+              18,
+              0.3
+            ],
+            [
+              36,
+              -0.25
+            ],
+            [
+              54,
+              0.3
+            ],
+            [
+              72,
+              -0.25
+            ]
+          ]
+        },
+        {
+          "node": "LeafR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.3
+            ],
+            [
+              24,
+              -0.35
+            ],
+            [
+              48,
+              0.3
+            ],
+            [
+              72,
+              0.3
+            ]
+          ]
+        }
+      ]
+    },
+    "Reduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "Stem",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "LeafL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "LeafR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,135 @@
+package com.jarvys.agent.apkfactory
+
+import android.content.ComponentName
+import android.content.ContentProviderOperation
+import android.content.ContentValues
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.PackageManager
+import android.content.pm.ProviderInfo
+import android.net.Uri
+import android.os.Binder
+import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
+import android.system.Os
+import androidx.core.content.FileProvider
+import androidx.test.core.app.ApplicationProvider
+import org.junit.After
+import org.junit.Assert.*
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSystemClock
+import java.io.File
+import java.security.MessageDigest
+import java.time.Duration
+
+class ShareTestContext(base: Context) : ContextWrapper(base) {
+    val revocations = mutableListOf<Pair<Uri, Int>>()
+    var failRevocation = false
+    override fun getApplicationContext(): Context = this
+    override fun revokeUriPermission(uri: Uri, modeFlags: Int) {
+        revocations += uri to modeFlags
+        check(!failRevocation) { "Synthetic revocation failure" }
+    }
+}
+
+internal abstract class FactoryFileShareTestSupport {
+    protected lateinit var context: ShareTestContext
+    protected lateinit var provider: FactoryFileShareProvider
+    protected val root get() = File(context.cacheDir.canonicalFile, "factory-file-shares")
+    protected val bytes = "private generated export\n".toByteArray()
+    protected val nonce = "a".repeat(64)
+    protected fun digest(value: ByteArray) = MessageDigest.getInstance("SHA-256").digest(value).joinToString("") { "%02x".format(it) }
+    protected fun store(value: ByteArray = bytes) = FactoryFileShareStore(context) { _, _, _, _, output, active -> active.run(); output.write(value) }
+    protected fun stage(store: FactoryFileShareStore = store(), filename: String = "report.txt", size: Int = bytes.size,
+                        sha256: String = digest(bytes), checkActive: () -> Unit = {}) =
+        store.stage(nonce, filename, "text/plain", size, sha256, Binder(), checkActive)
+    protected fun reject(block: () -> Unit) { assertTrue("Expected fail-closed rejection", runCatching(block).isFailure) }
+    protected fun read(uri: Uri): ByteArray = ParcelFileDescriptor.AutoCloseInputStream(provider.openFile(uri, "r")).use { it.readBytes() }
+    protected fun snapshotFile(snapshot: FactoryFileShareStore.Snapshot) = File(root, snapshot.uri.lastPathSegment!!)
+
+    @Before fun setUpShare() {
+        // Direct-javac runners do not generate a shadow resetter service. Keep each fixture isolated.
+        FactoryFileShareOsShadow.reset()
+        context = ShareTestContext(ApplicationProvider.getApplicationContext())
+        root.deleteRecursively()
+        FactoryFileShareStore(context).cleanup()
+        val info = context.packageManager.getProviderInfo(ComponentName(context, FactoryFileShareProvider::class.java), PackageManager.GET_META_DATA)
+        provider = FactoryFileShareProvider()
+        provider.attachInfo(context, info)
+    }
+    @After fun tearDownShare() {
+        context.failRevocation = false
+        root.deleteRecursively()
+        FactoryFileShareStore(context).cleanup()
+    }
+}
+
+/** Synthetic host tests. Real resolver grants, chooser forwarding and receiver FDs require device QA. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = android.app.Application::class, shadows = [FactoryFileShareOsShadow::class])
+internal class FactoryFileShareProviderTest : FactoryFileShareTestSupport() {
+
+    @Test fun exactSnapshotReturnsKnownMetadataAndReadOnlyBytes() {
+        val snapshot = stage()
+        assertArrayEquals(bytes, read(snapshot.uri))
+        assertEquals("text/plain", provider.getType(snapshot.uri))
+        assertEquals("text/plain", provider.getTypeAnonymous(snapshot.uri))
+        assertArrayEquals(arrayOf("text/plain"), provider.getStreamTypes(snapshot.uri, "text/*"))
+        provider.query(snapshot.uri, null, null, null, null).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("report.txt", it.getString(it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)))
+            assertEquals(bytes.size.toLong(), it.getLong(it.getColumnIndexOrThrow(OpenableColumns.SIZE)))
+            assertFalse(it.moveToNext())
+        }
+        assertFalse(snapshot.uri.toString().contains("report.txt"))
+        assertEquals(256, Os.lstat(snapshotFile(snapshot).path).st_mode and 511)
+    }
+
+    @Test fun queryRejectsUnboundedDuplicateAndUnknownProjections() {
+        val uri = stage().uri
+        for (projection in listOf(emptyArray(), arrayOf("_data"),
+            arrayOf(OpenableColumns.SIZE, OpenableColumns.SIZE),
+            Array(4096) { OpenableColumns.DISPLAY_NAME })) {
+            reject { provider.query(uri, projection, null, null, null) }
+        }
+        provider.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null).use {
+            assertEquals(1, it.columnCount)
+            assertTrue(it.moveToFirst())
+            assertEquals(bytes.size.toLong(), it.getLong(0))
+        }
+    }
+
+    @Test fun expiryIsMonotonicAndAppliesAtTheExactFiveMinuteBoundary() {
+        val snapshot = stage()
+        ShadowSystemClock.advanceBy(Duration.ofMillis(FactoryFileShareStore.LIFETIME_MILLIS - 1))
+        assertEquals("text/plain", provider.getType(snapshot.uri))
+        ShadowSystemClock.advanceBy(Duration.ofMillis(1))
+        reject { provider.openFile(snapshot.uri, "r") }
+        reject { provider.query(snapshot.uri, null, null, null, null) }
+        reject { provider.getType(snapshot.uri) }
+        reject { provider.getTypeAnonymous(snapshot.uri) }
+    }
+
+    @Test fun symlinkSubstitutionAndReplacedInodeFailClosed() {
+        val snapshot = stage()
+        val file = snapshotFile(snapshot)
+        val elsewhere = File(context.cacheDir, "share-test-private-target").apply { writeText("never reveal") }
+        try {
+            assertTrue(file.delete())
+            Os.symlink(elsewhere.path, file.path)
+            reject { provider.openFile(snapshot.uri, "r") }
+            reject { provider.getType(snapshot.uri) }
+            assertTrue(file.delete())
+            file.writeBytes(bytes)
+            Os.chmod(file.path, 256)
+            reject { provider.query(snapshot.uri, null, null, null, null) }
+            reject { provider.openFile(snapshot.uri, "r") }
+        } finally { elsewhere.delete() }
+    }
+}

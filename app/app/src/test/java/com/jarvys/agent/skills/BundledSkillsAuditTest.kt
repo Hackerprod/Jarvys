@@ -1,0 +1,171 @@
+package com.jarvys.agent.skills
+
+import android.content.Context
+import android.content.Context.MODE_PRIVATE
+import androidx.test.core.app.ApplicationProvider
+import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.ChatTestStore
+import com.jarvys.agent.CorePromptBudget
+import com.jarvys.agent.LoadSkillTool
+import com.jarvys.agent.TestSecretStoreRule
+import com.jarvys.agent.modules.ModuleRegistry
+import java.lang.reflect.Field
+import java.security.MessageDigest
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class BundledSkillsAuditTest {
+    @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @get:Rule val testSecrets = TestSecretStoreRule()
+
+    private val context: Context get() = ApplicationProvider.getApplicationContext()
+    private val instanceField: Field = SkillRepository::class.java.getDeclaredField("instance").apply { isAccessible = true }
+    private var previousRepository: Any? = null
+
+    @Before fun isolateRepository() {
+        previousRepository = instanceField.get(null)
+        instanceField.set(null, null)
+        context.getSharedPreferences("jarvys_skill_settings", MODE_PRIVATE).edit().clear().commit()
+    }
+
+    @After fun restoreRepository() {
+        instanceField.set(null, previousRepository)
+    }
+
+    @Test fun everyInternalBundledAssetBodyMatchesUpstreamFingerprint() {
+        val internalAssets = bundledSkillDirectoryNames(context.assets.list("skills").orEmpty().toList())
+            .map { directory ->
+                val markdown = context.assets.open("skills/$directory/SKILL.md")
+                    .bufferedReader(Charsets.UTF_8).use { it.readText() }
+                SkillMarkdownParser.parse(markdown)
+            }
+            .filter { SkillRepository.INTERNAL_SKILL_VISIBILITY_TAG in it.metadata.tags }
+        val expectedBodies = expectedUpstreamBodyFingerprints()
+        assertEquals("Fingerprint manifest must cover each imported upstream skill exactly once",
+            expectedBodies.keys, internalAssets.map { it.metadata.id }.toSet())
+        internalAssets.forEach { parsed ->
+            val expected = expectedBodies.getValue(parsed.metadata.id)
+            assertEquals("Imported body differs from upstream ${expected.upstreamPath}",
+                expected.sha256, sha256(parsed.body))
+        }
+    }
+
+    @Test fun everyBundledSkillParsesMatchesItsAssetLocationAndRemainsRuntimeReadable() {
+        val rootDirectories = bundledSkillDirectoryNames(context.assets.list("skills").orEmpty().toList())
+        val rootParsed = rootDirectories.map { directory ->
+            val markdown = context.assets.open("skills/$directory/SKILL.md")
+                .bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val parsed = SkillMarkdownParser.parse(markdown)
+            assertEquals("Asset directory must match SKILL.md id", directory, parsed.metadata.id)
+            parsed
+        }
+        val moduleParsed = ModuleRegistry.fromAssets(context).modules().flatMap { module ->
+            module.skills.map { relativePath ->
+                val markdown = context.assets.open("${module.bundleAssetDirectory}/$relativePath")
+                    .bufferedReader(Charsets.UTF_8).use { it.readText() }
+                SkillMarkdownParser.parse(markdown)
+            }
+        }
+        val allParsed = rootParsed + moduleParsed
+        val allAssetIds = allParsed.map { it.metadata.id }
+        assertTrue("Bundled skill ids must be unique across app and module assets", allAssetIds.size == allAssetIds.toSet().size)
+
+        val repositorySkills = SkillRepository.get(context).skills.value.filter { it.source == SkillSource.BUNDLED }
+        assertEquals(allAssetIds.toSet(), repositorySkills.map { it.metadata.id }.toSet())
+        assertEquals(allAssetIds.size, repositorySkills.size)
+        assertTrue(repositorySkills.all { !it.source.userConfigurable })
+        assertTrue(repositorySkills.all { it.validationError == null })
+        assertTrue("Bundled skills must not appear in the user-managed Skills UI", userConfigurableSkillEntries(repositorySkills).isEmpty())
+
+        val hidden = repositorySkills.filter { SkillRepository.isInternalBundledSkill(it) }
+        assertTrue("Expected the imported upstream skills to carry the internal visibility tag", hidden.isNotEmpty())
+        assertTrue(botPickerSkillEntries(repositorySkills).none { SkillRepository.isInternalBundledSkill(it) })
+        assertEquals(hidden.map { it.metadata.id }.toSet(), botPickerHiddenSkillIds(repositorySkills))
+        val hiddenIds = hidden.map { it.metadata.id }.toSet()
+        assertEquals(hiddenIds, SkillRepository.get(context).internalSkillsForProfile(null).map { it.metadata.id }.toSet())
+        assertEquals(hiddenIds, SkillRepository.get(context).internalSkillsForProfile("custom-profile").map { it.metadata.id }.toSet())
+        assertEquals(hiddenIds, SkillRepository.get(context)
+            .availableForAgentProfile(emptyList(), "custom-profile").map { it.metadata.id }.toSet())
+
+        val skill = hidden.first()
+        val tool = LoadSkillTool(
+            SkillRepository.get(context).availableForAgentProfile(emptyList(), "custom-profile"),
+            CorePromptBudget.standard().loadedSkillChars,
+        )
+        val result = tool.execute(mapOf("skill_id" to skill.metadata.id), CancellationToken.uncancellable())
+        assertTrue("Internal bundled skill must remain available through read_skill: ${result.content}", result.success)
+        assertTrue(result.content.contains(skill.body.take(80)))
+        hidden.forEach { entry ->
+            assertTrue(tool.declaration().description.contains(entry.metadata.id))
+            assertTrue(entry.metadata.id, tool.execute(mapOf("skill_id" to entry.metadata.id), CancellationToken.uncancellable()).success)
+        }
+    }
+
+    @Test fun internalTagDoesNotHideUserImportedSkillsFromBotPicker() {
+        val imported = SkillEntry(
+            metadata = SkillMetadata("user.internal", "Imported", "User skill", 1, emptyList(), listOf(SkillRepository.INTERNAL_SKILL_VISIBILITY_TAG)),
+            body = "User instructions",
+            source = SkillSource.IMPORTED,
+            enabled = true,
+            usageCount = 0,
+        )
+
+        assertEquals(listOf(imported), botPickerSkillEntries(listOf(imported)))
+        assertFalse(imported.metadata.id in botPickerHiddenSkillIds(listOf(imported)))
+    }
+
+    @Test fun presentationSkillLoadsWithinTheStandardReadSkillBudget() {
+        val repository = SkillRepository.get(context)
+        repository.refresh()
+        val skill = repository.enabledForRun().single { it.metadata.id == "jarvys-presentation" }
+        val budget = CorePromptBudget.standard().loadedSkillChars
+        val result = LoadSkillTool(listOf(skill), budget).execute(
+            mapOf("skill_id" to skill.metadata.id), CancellationToken.uncancellable(),
+        )
+
+        assertTrue("Presentation skill must fit the real read_skill payload budget: ${result.content}", result.success)
+        assertTrue(result.content.length <= budget)
+    }
+
+    private data class UpstreamBodyFingerprint(val upstreamPath: String, val sha256: String)
+
+    private fun expectedUpstreamBodyFingerprints(): Map<String, UpstreamBodyFingerprint> {
+        val stream = requireNotNull(javaClass.getResourceAsStream("/ai-agent-skills-body-sha256.tsv")) {
+            "Missing audited upstream body fingerprints"
+        }
+        return stream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+            val fingerprints = linkedMapOf<String, UpstreamBodyFingerprint>()
+            lines.filter { it.isNotBlank() && !it.startsWith("#") }.forEach { line ->
+                val fields = line.split('\t')
+                require(fields.size == 3 && fields.all(String::isNotBlank)) { "Invalid upstream fingerprint row: $line" }
+                require(fingerprints.put(fields[0], UpstreamBodyFingerprint(fields[1], fields[2])) == null) {
+                    "Duplicate upstream fingerprint for ${fields[0]}"
+                }
+            }
+            fingerprints
+        }
+    }
+
+    private fun sha256(value: String): String {
+        val digits = "0123456789abcdef"
+        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+        return buildString(digest.size * 2) {
+            digest.forEach { byte ->
+                val unsigned = byte.toInt() and 0xff
+                append(digits[unsigned ushr 4])
+                append(digits[unsigned and 0x0f])
+            }
+        }
+    }
+
+}

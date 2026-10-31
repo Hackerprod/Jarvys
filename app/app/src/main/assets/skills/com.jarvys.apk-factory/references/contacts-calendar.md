@@ -1,0 +1,8 @@
+# Factory guidance factory-guidance-v90 / contacts-calendar
+
+## Selected contact
+contacts.pick({kind:"phone"|"email"}): contacts capability,exact keys/no default. Opens the Android contact selector, where the user chooses a datum. Returns only {kind,value}: unchanged nonblank paired Unicode≤256codepoints/1024UTF8bytes,no ISO/format/bidi/line/paragraph controls. No name/ID/URI/normalization/dialability/existence proof. Selected row/temporary grant/existing host READ_CONTACTS only,no broad query/new permission/fallback. An interrupted interaction is closed automatically when a new contact interaction starts; uncertain delivery is not replayed. No implied call/send/calendar authority.
+
+## Calendar editor
+calendar.insert({title,location,description,startTimeMillis,endTimeMillis,timeZone,allDay}): calendar capability,seven required keys. Title nonblank≤256codepoints/1024UTF8bytes,location same bound may be empty,description≤4096bytes may be empty. Editor Unicode/control rules; description alone permits LF/TAB. Millis JSON integers0..4102444800000,end>start,duration≤31622400000. timeZone exact installed TimeZone ID,no fallback. allDay Boolean;true requires literal UTC,both UTC midnight,exclusive end. JSON≤32KiB.
+Only ACTION_INSERT content://com.android.calendar/events + vnd.android.cursor.dir/event + fixed extras. No attendees/recurrence/calendar-ID/DB access/permission. Opening shares fields; recipient can ignore/change/save/sync. The action launches the Android editor and never auto-presses Save; {launchRequested,actionConfirmed:false} is not event creation proof. Preview UNAVAILABLE; actual OEM/provider acceptance unverified.

@@ -1,0 +1,27 @@
+import groovy.json.JsonOutput
+// AGP registers variant Test tasks after project evaluation; resolve only once all projects are ready.
+gradle.projectsEvaluated {
+    def project = gradle.rootProject.findProject(':app')
+    if (project == null) throw new GradleException('Expected :app project')
+    ['Full', 'Play'].each { flavor ->
+        def testProvider = project.tasks.named("test${flavor}DebugUnitTest", Test)
+        project.tasks.register("export${flavor}OfflineJUnit") {
+            // Compile/resource prerequisites only; never execute a Test action.
+            dependsOn { testProvider.get().taskDependencies.getDependencies(testProvider.get()) }
+            doLast {
+                def test = testProvider.get()
+                def outputRoot = project.findProperty('offlineJUnitExportDir')
+                if (!outputRoot) throw new GradleException('Set -PofflineJUnitExportDir to a local output directory')
+                def target = new File(outputRoot.toString(), "${flavor}.json")
+                target.parentFile.mkdirs()
+                def props = test.systemProperties.collectEntries { k,v -> [(k.toString()):v.toString()] }
+                target.text = JsonOutput.prettyPrint(JsonOutput.toJson([
+                    flavor:flavor, classpath:test.classpath.files.collect{it.absolutePath},
+                    systemProperties:props, workingDir:test.workingDir.absolutePath,
+                    jvmArgs:test.jvmArgs, enableAssertions:test.enableAssertions,
+                    testClassesDirs:test.testClassesDirs.files.collect{it.absolutePath}
+                ]))
+            }
+        }
+    }
+}
