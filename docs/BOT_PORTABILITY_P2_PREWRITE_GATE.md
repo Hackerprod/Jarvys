@@ -10,3 +10,7 @@ The exact seven classes in `BOT_PORTABILITY_P2_PREWRITE_CLASSES.json` are select
 Admission remains OFF. No app-open upgrade is enabled. A focused failure blocks the gate; broader fixture/compilation failures are reported separately, never relabeled PASS. Gate success authorizes only local implementation validation; all changed checkpoint/authority code requires corresponding new tests and final-source repetition before independent implementation PASS. New typed worker-wait/control source is still an uncompiled draft outside app source at this checkpoint.
 
 Version2 is an additive extension of the current generation, not a legacy import or destructive repair. Existing rows are not deleted/backfilled. Old-binary downgrade after new writes is unsupported; keeping the v98 APK is not a rollback guarantee.
+
+## First execution diagnostic (not PASS)
+
+Fresh Full cohort executed 81 cases: 57 failures, no skipped/error cases. All 57 failed during current-generation fixture initialization (schema6, Registry32, durability12, codec7). Inspection found the existing native bootstrap was called; these four restored/new test configurations lacked the established `ArtifactOsShadow`, so host Robolectric `lstat` produced false legacy-path observations. Added that existing real-filesystem adapter to the four configurations, without changing production guards or test assertions. Two checkpoint fixture target helpers also now address `StorageGeneration.directory`, rather than removed legacy paths. Original failures are retained; a fresh both-flavor run is required.

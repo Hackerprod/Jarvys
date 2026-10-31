@@ -19,7 +19,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 34)
+@Config(sdk = 34, shadows = ArtifactOsShadow.class)
 public class CrewCheckpointIncorporationCodecTest {
     private static final String ADMISSION_CYCLE = "11111111-1111-1111-1111-111111111111";
     private static final String FIRST_CYCLE = "22222222-2222-2222-2222-222222222222";
@@ -242,7 +242,7 @@ public class CrewCheckpointIncorporationCodecTest {
     }
 
     private static File checkpoint(File root) {
-        return new File(root, "jarvys/crew-context/" + CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8))
+        return new File(new StorageGeneration(root).directory("crew-context"),  CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8))
                 + "/" + CrewCheckpointStore.digest("bot-one".getBytes(StandardCharsets.UTF_8)) + "/checkpoint.json");
     }
 

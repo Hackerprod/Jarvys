@@ -21,7 +21,7 @@ import org.robolectric.annotation.SQLiteMode
 
 /** Synthetic local metadata only; plain Application avoids real providers and background startup. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, shadows = [com.jarvys.agent.ArtifactOsShadow::class])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class WorkspaceRegistryTest {
     private lateinit var context: Application

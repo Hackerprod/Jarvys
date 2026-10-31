@@ -16,7 +16,7 @@ import org.robolectric.annotation.SQLiteMode
 
 /** Fresh reconstruction tests. Prior lost-source test results do not validate these bytes. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, shadows = [com.jarvys.agent.ArtifactOsShadow::class])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class WorkspaceTreeSchemaCompatibilityTest {
     @get:Rule val chat = com.jarvys.agent.ChatTestStore(registerApplicationFilesDirectory = true)
