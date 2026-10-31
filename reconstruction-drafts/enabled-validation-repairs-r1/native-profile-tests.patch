@@ -1,0 +1,99 @@
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt
+@@ -105,6 +105,69 @@
+         }))
+     }
+ 
++    @Test fun ephemeralCustomIsRejectedBeforeAssignmentChargeManagerOrProvider() {
++        val scope = workspace("ephemeral-rejected")
++        for (alias in listOf("custom", "CUSTOM", "Custom")) {
++            episode(steps = arrayOf({
++                val frame = requireNotNull(liveFrame)
++                val before = WorkspaceRegistry(context).use { WorkspaceTreeStore(it).getRoot(frame.authority.rootId())!! }
++                val failure = assertThrows(IllegalArgumentException::class.java) {
++                    delegate(scope, key = "ephemeral-$alias", role = alias)
++                }
++                assertTrue(failure.message!!.contains("saved versioned profile"))
++                WorkspaceRegistry(context).use { registry ->
++                    assertTrue(registry.listAssignments(scope.workspaceId).isEmpty())
++                    assertEquals(before, WorkspaceTreeStore(registry).getRoot(frame.authority.rootId()))
++                    assertTrue(WorkspaceTreeStore(registry).children(frame.authority.rootId(), frame.authority.rootId()).isEmpty())
++                }
++                assertFalse(frame.invocation.admitted())
++            }))
++        }
++        assertTrue(managerLookups.isEmpty()); assertEquals(0, keepalives.get()); assertEquals(0, modelCalls.get())
++    }
++
++    @Test fun actualSavedCustomGeneralistUsesCanonicalVersionedRoleAndResumes() {
++        val profiles = com.jarvys.agent.crew.CrewProfileRepository(context)
++        val id = com.jarvys.agent.crew.CrewProfileRepository.newCustomId()
++        val definition = profiles.create(CrewProfile(id, 1, "Saved Generalist", "Synthetic saved profile",
++            "Complete the requested general-purpose task", emptyList(), emptyList(), CrewProfile.WorkspaceMode.LEGACY_CHAT),
++            emptyList(), emptyList())
++        managerFactory = { session -> manager(session, CoreAgentLoop.Model { _, _, _, _ -> modelCalls.incrementAndGet(); done() }).also {
++            it.configureProfiles({ requested -> profiles.definitions().firstOrNull { d -> d.id == requested && d.enabled }
++                ?.let { profiles.resolveRole(it.id, emptyList(), emptyList()) } }, emptyList())
++        } }
++        val scope = workspace("saved-generalist")
++        val row = delegate(scope, role = definition.id)
++        val worker = bot(scope, row); await(worker)
++        assertEquals(definition.id, worker.role.id)
++        assertEquals(definition.profile.version, worker.role.profileVersion)
++        assertEquals(CrewProfile.WorkspaceMode.LEGACY_CHAT, worker.role.workspaceMode)
++        assertEquals(definition.id, currentAssignment(scope, row).role)
++        val previousCycle = worker.cycleId()
++        val correction = submit(scope, row, WorkspaceControlType.CORRECT, "Continue this saved generalist task")
++        coordinator.executeNativeControl(correction.requestId, CancellationToken.cancellable()); await(worker)
++        assertNotEquals(previousCycle, worker.cycleId())
++        assertEquals(WorkspaceControlState.COMPLETE, savedControl(correction).state)
++        assertEquals(2, modelCalls.get())
++    }
++
++    @Test fun savedProfileCaseAliasesNeverReserveExecution() {
++        val scope = workspace("profile-alias-rejected")
++        for (alias in listOf("NATIVE-FIXTURE-GENERALIST", "Native-fixture-generalist")) {
++            val key = "alias-${UUID.randomUUID()}"
++            assertThrows(WorkspacePreAdmissionException::class.java) { delegate(scope, key = key, role = alias) }
++            WorkspaceRegistry(context).use { registry ->
++                val assignment = registry.listAssignments(scope.workspaceId).single { it.assignmentKey == key }
++                assertEquals(WorkspaceAssignmentState.PREPARED, assignment.state); assertNull(assignment.botId)
++                val node = WorkspaceTreeStore(registry).findAssignment(scope.workspaceId, assignment.assignmentId)!!
++                assertEquals(TreeNodeState.QUEUED, node.state); assertNull(node.executionEventId)
++                assertEquals(1L, WorkspaceTreeStore(registry).getRoot(node.rootId)!!.executions)
++            }
++        }
++        assertEquals(0, modelCalls.get()); assertEquals(0, keepalives.get())
++        assertTrue(managers.values.all { it.bots().isEmpty() && it.missionSnapshots().isEmpty() })
++    }
++
+     @Test fun rejectedRoleRemainsPreparedAndDoesNotInventAnUncertainSpawn() {
+         val scope = workspace("bad-role")
+         val failure = assertThrows(WorkspacePreAdmissionException::class.java) {
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceToolTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceToolTest.kt
+@@ -426,7 +426,7 @@
+         assertEquals("x".repeat(65536), backend.calls.single().values["mission"])
+     }
+ 
+-    @Test fun toolsAreBoundedExactDistinctListAndCustomRoleNeedsNameAndTools() {
++    @Test fun toolsAreBoundedExactDistinctListAndSavedCustomProfileIdIsRequired() {
+         val backend = Backend()
+         val tool = tool(backend)
+         for (bad in listOf<Any>("read_file", setOf("read_file"), listOf(1), listOf("read_file", "read_file"),
+@@ -435,8 +435,13 @@
+         assertFalse(tool.execute(delegate + ("role" to "custom"), CancellationToken.uncancellable()).success)
+         assertFalse(tool.execute(delegate + mapOf("role" to "custom", "name" to "Auditor"), CancellationToken.uncancellable()).success)
+         assertFalse(tool.execute(delegate + mapOf("role" to "custom", "tools" to emptyList<String>()), CancellationToken.uncancellable()).success)
+-        assertEquals(0, backend.entries)
+-        assertTrue(tool.execute(delegate + mapOf("role" to "custom", "name" to "Auditor",
++        assertFalse(tool.execute(delegate + mapOf("role" to "CUSTOM", "name" to "Auditor",
++            "tools" to listOf("read_skill", "board_read")), CancellationToken.uncancellable()).success)
++        assertFalse(tool.execute(delegate + mapOf("role" to "custom", "name" to "Auditor",
++            "tools" to listOf("read_skill", "board_read")), CancellationToken.uncancellable()).success)
++        assertEquals(0, backend.entries)
++        // Contract-only fake backend: production resolves this canonical saved-profile selector.
++        assertTrue(tool.execute(delegate + mapOf("role" to "custom-saved-profile", "name" to "Auditor",
+             "tools" to listOf("read_skill", "board_read"), "mission_access" to "read_only"), CancellationToken.uncancellable()).success)
+         assertEquals(listOf("board_read", "read_skill"), backend.calls.single().values["tools"])
+         assertEquals("read_only", backend.calls.single().values["missionAccess"])

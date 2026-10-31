@@ -1,0 +1,10 @@
+{
+  "README.md": "9a6b08cd631be5bb57e69a2952ecd2534c5e1d1eebad653ec3061325725ccb45",
+  "control-source.patch": "faeeab66bdee2ab3a1083d9cd346f0ca2e681214d82db859867389a71e3bef61",
+  "host-filesystem-adapter.patch": "d3698a388d24fbf2fac2218472b54f5c0035131fedbd95acb284a929896c7dd0",
+  "native-owner.patch": "e3e8ebac0f2e1d0c9496205582997432c2e5e7d4ee7671b1040aa2547365146e",
+  "native-profile-tests.patch": "f24d96f2e7d80d7175c9b2a623174b63124f7caff750400b3ba989594bf3a428",
+  "native-profile.patch": "c6dc6ac3896c9f5703701f496a26c3fbee27ae5f3c1388bebf9083f0ab2c938f",
+  "scoped-identity-and-fixtures.patch": "138fc2062423d5426a4143b7712f04dd2e3a5f454f6e6f5f783f6f5e16061243",
+  "service-owner.patch": "976fa307c8ca302994116d44ca7a84dac03f877154e45187a9252dcc6be33444"
+}

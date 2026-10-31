@@ -1,0 +1,211 @@
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceTreeP1PreclaimTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceTreeP1PreclaimTest.kt
+@@ -24,7 +24,7 @@
+         val core=WorkspaceTreeStore(registry)
+         val scope=f.createProject("Enrolled result fixture")
+         val bot="native-fixture-bot"
+-        val cycle="fixture-child-cycle"
++        val cycle=java.util.UUID.randomUUID().toString()
+         val originalUser=f.store.appendConversationMessage(WorkspaceIdentity.CENTRAL_SESSION,"user","Original request")
+         val origin=f.store.captureCentralUserRoot(WorkspaceIdentity.CENTRAL_SESSION,originalUser)
+         val root:TreeNode
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceToolTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceToolTest.kt
+@@ -302,7 +302,7 @@
+         assertFalse(schema.getBoolean("additionalProperties"))
+         val properties = schema.getJSONObject("properties")
+         val actions = properties.getJSONObject("action").getJSONArray("enum")
+-        assertEquals(listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply", "message", "continue_result"), (0 until actions.length()).map { actions.getString(it) })
++        assertEquals(listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply", "message", "continue_result", "cancel"), (0 until actions.length()).map { actions.getString(it) })
+         for (field in listOf("pause", "resume", "correct", "control", "user_text", "origin", "session_id",
+             "request_id", "requestId", "original_user_request", "originalUserRequest", "admission", "token",
+             "destination", "destination_session_id", "source_session_id", "project_id")) {
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceCoordinationToolTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceCoordinationToolTest.kt
+@@ -94,7 +94,7 @@
+         val properties = schema.getJSONObject("properties")
+         val enum = properties.getJSONObject("action").getJSONArray("enum")
+         assertEquals(listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result",
+-            "inbox", "read_message", "reply", "message", "continue_result"), (0 until enum.length()).map { enum.getString(it) })
++            "inbox", "read_message", "reply", "message", "continue_result", "cancel"), (0 until enum.length()).map { enum.getString(it) })
+         for (field in listOf("message_id", "after_message_id"))
+             assertEquals("^workspace-coordination-[a-f0-9]{64}$", properties.getJSONObject(field).getString("pattern"))
+         assertEquals(65536, properties.getJSONObject("text").getInt("maxLength"))
+--- a/app/app/src/test/java/com/jarvys/agent/NativeCentralTreeEpisodeFixture.kt
++++ b/app/app/src/test/java/com/jarvys/agent/NativeCentralTreeEpisodeFixture.kt
+@@ -48,7 +48,7 @@
+ 
+     /** Preserve fake provider/barriers; install the same durable adapters as CoreAgentRuntime. */
+     @JvmStatic fun installManager(context: Context, session: String, manager: CrewManager) {
+-        val role = CrewRole("custom", "Synthetic worker", "general", "Synthetic general-purpose work", emptyList(), null,
++        val role = CrewRole("native-fixture-generalist", "Synthetic worker", "general", "Synthetic general-purpose work", emptyList(), null,
+             "Synthetic native profile", 1, emptyList(), CrewProfile.WorkspaceMode.LEGACY_CHAT)
+         manager.configureProfiles({ id -> if (id == role.id) role else null }, emptyList())
+         manager.configureCheckpoints(CrewCheckpointCoordinator(context, session) { bot -> bot.role })
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt
+@@ -191,7 +191,7 @@
+             store.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, "previous-process")
+         }
+         val reopened = freshCoordinator()
+-        val duplicate = reopened.delegate(scope.workspaceId, "assignment", "custom", MISSION, emptyList(),
++        val duplicate = reopened.delegate(scope.workspaceId, "assignment", "native-fixture-generalist", MISSION, emptyList(),
+             "Synthetic worker", "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), noAdmission)
+         WorkspaceRegistry(context).use { assertNull(WorkspaceTreeStore(it).findAssignment(scope.workspaceId, started.assignmentId)) }
+         assertEquals(started.assignmentId, duplicate.getString("assignment_id"))
+@@ -300,6 +300,8 @@
+         val admittedControl = AtomicReference<WorkspaceUserControl>()
+         val userText = "Pause this exact worker from the central UI"
+ 
++        val priorCentralIds = LocalRunStore(context).readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION)
++            .map { it.getString("messageId") }.toSet()
+         coordinator.enqueueNativeControl(scope.workspaceId, assignment.getString("assignment_id"),
+             assignment.getLong("revision"), WorkspaceControlType.PAUSE, userText,
+             onAdmitted = {
+@@ -312,6 +314,7 @@
+                     assertEquals(assignment.getLong("revision"), control.assignmentRevision)
+                     assertEquals(userText, control.userText)
+                     val centralMessages = LocalRunStore(context).readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION)
++                        .filter { it.getString("messageId") !in priorCentralIds }
+                     val user = centralMessages.single { it.getString("role") == "user" }
+                     assertEquals("$userText\n[Workspace ${scope.workspaceId}; assignment ${control.assignmentId}; native control ${control.requestId}]",
+                         user.getString("content"))
+@@ -355,6 +358,7 @@
+         assertEquals(WorkspaceControlState.COMPLETE, savedControl(control).state)
+         assertEquals(control.assignmentRevision + 1, currentAssignment(scope, assignment).revision)
+         val centralMessages = LocalRunStore(context).readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION)
++                        .filter { it.getString("messageId") !in priorCentralIds }
+         assertEquals(1, centralMessages.count { it.getString("role") == "user" })
+         assertEquals(1, centralMessages.count { it.getString("role") == "assistant" && it.getString("content") == receipt.get() })
+         WorkspaceRegistry(context).use { assertEquals(1, it.listControls(scope.workspaceId).size) }
+@@ -474,6 +478,9 @@
+             } catch (failure: Throwable) { assertions.set(failure); throw failure }
+         })
+         managers[scope.executionSessionId] = owner
++        val historicalProfile = CrewProfile("coding", 1, "Coding", "Synthetic project work", "Synthetic mission", emptyList(),
++            emptyList(), CrewProfile.WorkspaceMode.CONVERSATION_PROJECT).resolveRole(emptyList(), emptyList())
++        owner.configureProfiles({ id -> if (id == historicalProfile.id) historicalProfile else null }, emptyList())
+         val recovered = restore(owner, scope, target)
+         owner.configureCheckpoints(object : CrewManager.CheckpointSupport {
+             override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) {
+@@ -561,7 +568,7 @@
+             "stale-answer-${UUID.randomUUID()}", ConversationInput.Kind.ANSWER, "Old answer")
+         val replacedAssignment = WorkspaceRegistry(context).use { registry ->
+             registry.prepareAssignment(scope.workspaceId, UUID.randomUUID().toString(), UUID.randomUUID().toString(),
+-                "Owner request", "custom", MISSION, emptyList(), "Replacement", CrewMissionAccess.STANDARD)
++                "Owner request", "native-fixture-generalist", MISSION, emptyList(), "Replacement", CrewMissionAccess.STANDARD)
+         }
+         val missingAssignmentTask = appendSupervisorInput(scope, assignment, worker.id,
+             "replaced-task-${UUID.randomUUID()}", ConversationInput.Kind.TASK, "Replaced task",
+@@ -695,7 +702,7 @@
+             store.readConversationInputState(scope.executionSessionId, staleRowId))
+     }
+ 
+-    @Test fun lateCentralStopCannotCancelNativeCorrectionCycleWhileOriginalCleanupRegistrationStillExists() {
++    @Test fun unfinishedCleanupRejectsCorrectionAndLateCentralStopCannotCancelSafeSuccessor() {
+         val firstCleanup = CountDownLatch(1)
+         val releaseCleanup = gate()
+         val nextTurn = CountDownLatch(1)
+@@ -724,8 +731,15 @@
+         val originalCycle = worker.token
+         assertFalse(worker.isQuiescent)
+         val control = submit(scope, assignment, WorkspaceControlType.CORRECT, "Now apply this correction")
++        assertThrows(IllegalStateException::class.java) {
++            coordinator.executeNativeControl(control.requestId, CancellationToken.cancellable())
++        }
++        assertEquals(WorkspaceControlState.PENDING, savedControl(control).state)
++        assertSame(originalCycle, worker.token)
++        assertEquals(1, modelCalls.get())
++        releaseCleanup.countDown()
++        await(worker)
+         coordinator.executeNativeControl(control.requestId, CancellationToken.cancellable())
+-        releaseCleanup.countDown()
+         requireLatch(nextTurn, "Native correction did not start a distinct cycle")
+         assertNotSame(originalCycle, worker.token)
+         assertTrue(centralToken.cancel())
+@@ -876,11 +890,12 @@
+     @Test fun historicalPreparedAssignmentCannotAcquireNewTreeAuthority() {
+         val scope = workspace("historical-prepared")
+         val prepared = WorkspaceRegistry(context).use { it.prepareAssignment(scope.workspaceId,
+-            "assignment", REQUEST_ID, ORIGINAL_REQUEST, "custom", MISSION, emptyList(), "Synthetic worker",
++            "assignment", REQUEST_ID, ORIGINAL_REQUEST, "native-fixture-generalist", MISSION, emptyList(), "Synthetic worker",
+             CrewMissionAccess.STANDARD, noAdmission, centralSource()) }
+         assertThrows(IllegalArgumentException::class.java) { delegate(scope) }
+         WorkspaceRegistry(context).use {
+-            assertEquals(prepared, it.getAssignment(scope.workspaceId, prepared.assignmentId))
++            val retained = requireNotNull(it.getAssignment(scope.workspaceId, prepared.assignmentId))
++            assertEquals(assignmentFields(prepared), assignmentFields(retained))
+             assertNull(WorkspaceTreeStore(it).findAssignment(scope.workspaceId, prepared.assignmentId))
+         }
+         assertTrue(managerLookups.isEmpty()); assertEquals(0, modelCalls.get())
+@@ -956,7 +971,7 @@
+     }
+ 
+     private fun delegate(scope: WorkspaceRecord, key: String = "assignment", token: CancellationToken = CancellationToken.cancellable(),
+-                         owner: WorkspaceCoordinator = coordinator, role: String = "custom", selectedTools: List<String>? = emptyList(),
++                         owner: WorkspaceCoordinator = coordinator, role: String = "native-fixture-generalist", selectedTools: List<String>? = emptyList(),
+                          workerName: String? = "Synthetic worker", admission: Runnable = noAdmission): JSONObject {
+         if (liveFrame == null) {
+             var result: JSONObject? = null
+@@ -979,7 +994,12 @@
+     }
+ 
+     private fun prepare(store: WorkspaceRegistry, scope: WorkspaceRecord) = store.prepareAssignment(scope.workspaceId,
+-        "assignment", REQUEST_ID, ORIGINAL_REQUEST, "custom", MISSION, emptyList(), "Synthetic worker", CrewMissionAccess.STANDARD)
++        "assignment", REQUEST_ID, ORIGINAL_REQUEST, "native-fixture-generalist", MISSION, emptyList(), "Synthetic worker", CrewMissionAccess.STANDARD)
++
++    /** WorkspaceAssignment has identity equality; compare every persisted field for conservation. */
++    private fun assignmentFields(a: WorkspaceAssignment): List<Any?> = listOf(a.workspaceId, a.assignmentId,
++        a.assignmentKey, a.requestId, a.originalUserRequest, a.missionId, a.role, a.missionText, a.tools, a.name,
++        a.missionAccess, a.revision, a.processId, a.state, a.botId, a.createdAt, a.updatedAt, a.centralSource)
+ 
+     private fun currentAssignment(scope: WorkspaceRecord, row: JSONObject) = WorkspaceRegistry(context).use {
+         it.getAssignment(scope.workspaceId, row.getString("assignment_id"))!!
+--- a/app/app/src/main/java/com/jarvys/agent/workspaces/WorkspaceTreeStore.kt
++++ b/app/app/src/main/java/com/jarvys/agent/workspaces/WorkspaceTreeStore.kt
+@@ -61,7 +61,7 @@
+                 source.sourceMessageId==origin.originUserMessageId && parent.cycleId.startsWith(source.sourceProcessId+":") &&
+                 centralReceipt(source)==request.sourceReceipt,"Central admission provenance changed")
+         }
+-        val key=identity("admit",parent.nodeId,request.assignmentKey); val payload=admissionDigest(request)
++        val key=identity("admit",parent.nodeId,request.workspaceId,request.assignmentKey); val payload=admissionDigest(request)
+         event(db,parent.rootId,key)?.let {
+             integrity(it==payload,"Admission payload changed")
+             val id=one(db,"assignment","workspace_id=? AND assignment_key=?",arrayOf(request.workspaceId,request.assignmentKey)) { c -> c.s("assignment_id") }
+@@ -109,7 +109,7 @@
+         integrity(centralReceipt(original)==child.sourceReceipt && centralReceipt(source)==request.sourceReceipt &&
+             request.sourceReceipt!=child.sourceReceipt,"Retry requires distinct canonical trigger")
+         integrity(assignment.workspaceId==request.workspaceId && assignment.assignmentKey==request.assignmentKey &&
+-            event(db,parent.rootId,identity("admit",parent.nodeId,request.assignmentKey))==admissionDigest(request.copy(sourceReceipt=child.sourceReceipt)),
++            event(db,parent.rootId,identity("admit",parent.nodeId,request.workspaceId,request.assignmentKey))==admissionDigest(request.copy(sourceReceipt=child.sourceReceipt)),
+             "Retry semantic payload changed")
+         val key=identity("central-prepared-retry",child.nodeId,request.sourceReceipt)
+         val receipt=identity(request.sourceReceipt,source.sourceMessageId,source.sourceBatchId,source.sourceCallId,source.sourceRunId,source.sourceProcessId)
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceTreeStoreTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceTreeStoreTest.kt
+@@ -37,6 +37,25 @@
+     private fun certificate(scope:String)=JSONObject().put("originCheckpointSha256",hash).put("originScopeIdentity","native-workspace:$scope")
+         .put("originSavedAtMs",123L).put("profileSha256",hash).put("transcriptSha256",hash)
+         .put("toolLifecycleSha256",hash).put("artifactOwnershipSha256",hash).toString()
++    @Test fun admissionKeysAreWorkspaceScopedWhileSameWorkspaceReplayIsExact() {
++        val parent = root()
++        val a = workspace(); val b = workspace()
++        val first = queued(parent, a, "same-key")
++        val second = queued(tree.getNode(parent.rootId, parent.nodeId)!!, b, "same-key")
++        assertNotEquals(first.nodeId, second.nodeId)
++        assertEquals(a.workspaceId, first.workspaceId); assertEquals(b.workspaceId, second.workspaceId)
++        val before = tree.getRoot(parent.rootId)!!
++        val repeated = queued(tree.getNode(parent.rootId, parent.nodeId)!!, a, "same-key")
++        assertEquals(first, repeated)
++        assertEquals(before, tree.getRoot(parent.rootId))
++        val changed = request(a, "same-key").copy(mission = "Different task")
++        assertThrows(TreeIntegrityException::class.java) {
++            tree.admitChild(TreeNodeFence.of(tree.getNode(parent.rootId, parent.nodeId)!!), changed)
++        }
++        assertEquals(before, tree.getRoot(parent.rootId))
++        assertEquals(2, tree.children(parent.rootId, parent.nodeId).size)
++    }
++
+     private fun running(child:TreeNode):TreeNode {
+         val reserved=tree.reserveFirstExecution(TreeNodeFence.of(child),"fixture-process")
+         val node=tree.getNode(reserved.rootId,reserved.nodeId)!!

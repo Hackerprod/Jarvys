@@ -1,0 +1,281 @@
+--- a/app/app/src/test/java/com/jarvys/agent/CentralAgentInputCatalogTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/CentralAgentInputCatalogTest.kt
+@@ -19,7 +19,7 @@
+ import java.util.UUID
+ 
+ @RunWith(RobolectricTestRunner::class)
+-@Config(sdk = [34], application = Application::class)
++@Config(sdk = [34], application = Application::class, shadows = [ArtifactOsShadow::class])
+ @SQLiteMode(SQLiteMode.Mode.NATIVE)
+ class CentralAgentInputCatalogTest {
+     @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+--- a/app/app/src/test/java/com/jarvys/agent/CentralInvocationSourceTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CentralInvocationSourceTest.java
+@@ -24,7 +24,7 @@
+ import static org.junit.Assert.*;
+ 
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk = 34, application = Application.class)
++@Config(sdk = 34, application = Application.class, shadows = ArtifactOsShadow.class)
+ public class CentralInvocationSourceTest {
+     @Rule public final ChatTestStore fixture = new ChatTestStore();
+     private Context context() throws Exception {
+--- a/app/app/src/test/java/com/jarvys/agent/CentralRuntimeSourceIntegrationTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/CentralRuntimeSourceIntegrationTest.kt
+@@ -23,7 +23,7 @@
+  * READ connector execute4 currently delegates execute2 without context; that adapter is not covered.
+  */
+ @RunWith(RobolectricTestRunner::class)
+-@Config(sdk = [34], application = Application::class)
++@Config(sdk = [34], application = Application::class, shadows = [ArtifactOsShadow::class])
+ class CentralRuntimeSourceIntegrationTest {
+     @get:Rule val fixture = ChatTestStore()
+ 
+--- a/app/app/src/test/java/com/jarvys/agent/CoreAgentLoopCompactionBehaviorTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CoreAgentLoopCompactionBehaviorTest.java
+@@ -16,7 +16,7 @@
+ 
+ /** Focused behavior tests for compaction at model-turn boundaries and its recovery path. */
+ @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner.class)
+-@org.robolectric.annotation.Config(sdk = 28)
++@org.robolectric.annotation.Config(sdk = 28, shadows = ArtifactOsShadow.class)
+ public class CoreAgentLoopCompactionBehaviorTest {
+     @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
+ 
+--- a/app/app/src/test/java/com/jarvys/agent/CoreAgentLoopProviderCompactionRecoveryTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CoreAgentLoopProviderCompactionRecoveryTest.java
+@@ -17,7 +17,7 @@
+ 
+ /** Provider failures in context-management operations share the resumable UX38 contract. */
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk = 34)
++@Config(sdk = 34, shadows = ArtifactOsShadow.class)
+ public class CoreAgentLoopProviderCompactionRecoveryTest {
+     @Rule public TemporaryFolder temporary = new TemporaryFolder();
+ 
+--- a/app/app/src/test/java/com/jarvys/agent/CoreAgentLoopTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/CoreAgentLoopTest.kt
+@@ -8,7 +8,7 @@
+ import java.util.concurrent.atomic.AtomicReference
+ 
+ @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+-@org.robolectric.annotation.Config(sdk = [28])
++@org.robolectric.annotation.Config(sdk = [28], shadows = [ArtifactOsShadow::class])
+ class CoreAgentLoopTest {
+     @get:org.junit.Rule val chatTestStore = ChatTestStore()
+ 
+--- a/app/app/src/test/java/com/jarvys/agent/CrewC1cTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/CrewC1cTest.kt
+@@ -12,7 +12,7 @@
+ import java.util.concurrent.atomic.AtomicReference
+ 
+ @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+-@org.robolectric.annotation.Config(sdk = [28])
++@org.robolectric.annotation.Config(sdk = [28], shadows = [ArtifactOsShadow::class])
+ class CrewC1cTest {
+     @get:org.junit.Rule val chatTestStore = ChatTestStore()
+     private fun inboxEvidence(transcript: List<ConversationTurn>) = transcript.filter {
+--- a/app/app/src/test/java/com/jarvys/agent/CrewCheckpointRecoveryTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CrewCheckpointRecoveryTest.java
+@@ -19,7 +19,7 @@
+ import org.robolectric.annotation.Config;
+ 
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk = 34)
++@Config(sdk = 34, shadows = ArtifactOsShadow.class)
+ public class CrewCheckpointRecoveryTest {
+     @Rule
+     public final ChatTestStore chatTestStore = new ChatTestStore();
+@@ -153,7 +153,7 @@
+     }
+ 
+     private static File checkpoint(File root) {
+-        return new File(root, "jarvys/g3/crew-context/" + CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest("bot-one".getBytes(StandardCharsets.UTF_8)) + "/checkpoint.json");
++        return new File(new StorageGeneration(root).directory("crew-context"),  CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest("bot-one".getBytes(StandardCharsets.UTF_8)) + "/checkpoint.json");
+     }
+ 
+     private static void writePayload(File file, JSONObject payload) throws Exception {
+--- a/app/app/src/test/java/com/jarvys/agent/CrewContextArtifactsRecoveryTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CrewContextArtifactsRecoveryTest.java
+@@ -16,7 +16,7 @@
+ import org.robolectric.annotation.Config;
+ 
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk = 34)
++@Config(sdk = 34, shadows = ArtifactOsShadow.class)
+ public class CrewContextArtifactsRecoveryTest {
+     @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
+     private final CancellationToken token = CancellationToken.uncancellable();
+@@ -120,6 +120,6 @@
+         return artifacts.recoveryTool(ignored -> 32768).execute(Collections.singletonMap("artifact_id", id), token);
+     }
+     private static File artifact(File root, String chat, String bot, String id) {
+-        return new File(root, "jarvys/g3/crew-context/" + CrewCheckpointStore.digest(chat.getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest(bot.getBytes(StandardCharsets.UTF_8)) + "/" + id + ".txt");
++        return new File(new StorageGeneration(root).directory("crew-context"),  CrewCheckpointStore.digest(chat.getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest(bot.getBytes(StandardCharsets.UTF_8)) + "/" + id + ".txt");
+     }
+ }
+--- a/app/app/src/test/java/com/jarvys/agent/CrewConversationCompactionRecoveryTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CrewConversationCompactionRecoveryTest.java
+@@ -17,7 +17,7 @@
+ import org.robolectric.annotation.Config;
+ 
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk = 34)
++@Config(sdk = 34, shadows = ArtifactOsShadow.class)
+ public class CrewConversationCompactionRecoveryTest {
+     @Rule
+     public TemporaryFolder temporary = new TemporaryFolder();
+--- a/app/app/src/test/java/com/jarvys/agent/CrewConversationReplayTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CrewConversationReplayTest.java
+@@ -29,7 +29,7 @@
+ import org.robolectric.annotation.Config;
+ 
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk = 34, application = Application.class)
++@Config(sdk = 34, application = Application.class, shadows = ArtifactOsShadow.class)
+ public final class CrewConversationReplayTest {
+     @Rule public final ChatTestStore chatTestStore = new ChatTestStore(false, true);
+ 
+--- a/app/app/src/test/java/com/jarvys/agent/CrewInputContextExtractorTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CrewInputContextExtractorTest.java
+@@ -13,7 +13,7 @@
+ import static org.junit.Assert.*;
+ 
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk = 34, application = android.app.Application.class)
++@Config(sdk = 34, application = android.app.Application.class, shadows = ArtifactOsShadow.class)
+ public class CrewInputContextExtractorTest {
+     @Rule public final ChatTestStore fixture = new ChatTestStore();
+     private static final String CYCLE = "11111111-1111-1111-1111-111111111111";
+--- a/app/app/src/test/java/com/jarvys/agent/CrewInvocationRuntimeIntegrationTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CrewInvocationRuntimeIntegrationTest.java
+@@ -18,7 +18,7 @@
+ 
+ /** Real Manager + Coordinator + Runtime installer; the probe substitutes only the local tool/model. */
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk=34)
++@Config(sdk=34, shadows = ArtifactOsShadow.class)
+ public class CrewInvocationRuntimeIntegrationTest {
+     @Rule public final ChatTestStore fixture = new ChatTestStore();
+ 
+--- a/app/app/src/test/java/com/jarvys/agent/CrewInvocationSourceTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CrewInvocationSourceTest.java
+@@ -15,7 +15,7 @@
+ 
+ /** Real loop preparation and fsynced checkpoint evidence; no Coding async opt-in or job receipt. */
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk=34)
++@Config(sdk=34, shadows = ArtifactOsShadow.class)
+ public class CrewInvocationSourceTest {
+     @Rule public final ChatTestStore fixture = new ChatTestStore();
+ 
+--- a/app/app/src/test/java/com/jarvys/agent/CrewMissionPersistenceTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/CrewMissionPersistenceTest.kt
+@@ -12,7 +12,7 @@
+ import org.junit.rules.TemporaryFolder
+ 
+ @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+-@org.robolectric.annotation.Config(sdk = [28])
++@org.robolectric.annotation.Config(sdk = [28], shadows = [ArtifactOsShadow::class])
+ class CrewMissionPersistenceTest {
+     @get:org.junit.Rule val chatTestStore = ChatTestStore()
+     @get:Rule val temp = TemporaryFolder()
+--- a/app/app/src/test/java/com/jarvys/agent/CrewMissionTitleCheckpointTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CrewMissionTitleCheckpointTest.java
+@@ -24,7 +24,7 @@
+ import org.robolectric.annotation.Config;
+ 
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk = 34)
++@Config(sdk = 34, shadows = ArtifactOsShadow.class)
+ public class CrewMissionTitleCheckpointTest {
+     @Rule public final ChatTestStore chatTestStore = new ChatTestStore(false, true);
+     private static final CoreToolRegistry EMPTY = new CoreToolRegistry(Collections.emptyList());
+--- a/app/app/src/test/java/com/jarvys/agent/MainActivityWorkspaceRoutingTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/MainActivityWorkspaceRoutingTest.kt
+@@ -40,7 +40,7 @@
+ /** Small Activity integration slice: no model turns, service launches, workers or device effects. */
+ @RunWith(RobolectricTestRunner::class)
+ @GraphicsMode(GraphicsMode.Mode.NATIVE)
+-@Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi")
++@Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi", shadows = [ArtifactOsShadow::class])
+ class MainActivityWorkspaceRoutingTest {
+     // Install Compose's clock before any real Activity is launched. Infinite visual animations stay
+     // present, while tests advance finite frames instead of draining Robolectric's Choreographer.
+--- a/app/app/src/test/java/com/jarvys/agent/MainAgentInteractionTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/MainAgentInteractionTest.kt
+@@ -17,7 +17,7 @@
+ import java.util.concurrent.atomic.AtomicReference
+ 
+ @RunWith(RobolectricTestRunner::class)
+-@Config(sdk = [34])
++@Config(sdk = [34], shadows = [ArtifactOsShadow::class])
+ class MainAgentInteractionTest {
+     @get:org.junit.Rule val chatTestStore = ChatTestStore(
+         runTestOnWorker = false,
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationLedgerTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationLedgerTest.java
+@@ -35,7 +35,7 @@
+ 
+ /** Synthetic Room records only. No worker, provider, policy approval, or external action is replayed. */
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk = 34, application = Application.class)
++@Config(sdk = 34, application = Application.class, shadows = ArtifactOsShadow.class)
+ public class WorkspaceCoordinationLedgerTest {
+     @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
+     private static final String WORKSPACE = "62a92262-977e-4c43-8e6a-5640a0c193c3";
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceEffectReceiptTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceEffectReceiptTest.kt
+@@ -15,7 +15,7 @@
+ 
+ /** Real native stores; Android/Room execution still requires the authorized SDK. */
+ @RunWith(RobolectricTestRunner::class)
+-@Config(sdk = [34], application = Application::class)
++@Config(sdk = [34], application = Application::class, shadows = [ArtifactOsShadow::class])
+ class WorkspaceEffectReceiptTest {
+     @get:Rule val chatStore = ChatTestStore()
+ 
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceResultDeliveryTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceResultDeliveryTest.kt
+@@ -27,7 +27,7 @@
+ import org.robolectric.annotation.SQLiteMode
+ 
+ @RunWith(RobolectricTestRunner::class)
+-@Config(sdk = [34], application = Application::class)
++@Config(sdk = [34], application = Application::class, shadows = [ArtifactOsShadow::class])
+ @SQLiteMode(SQLiteMode.Mode.NATIVE)
+ class WorkspaceResultDeliveryTest {
+     @Rule @JvmField val chatTestStore = ChatTestStore(registerApplicationFilesDirectory = true)
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceResultLedgerTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceResultLedgerTest.java
+@@ -31,7 +31,7 @@
+ 
+ /** Synthetic Room records only. No worker, provider, policy approval, or external action is replayed. */
+ @RunWith(RobolectricTestRunner.class)
+-@Config(sdk = 34, application = Application.class)
++@Config(sdk = 34, application = Application.class, shadows = ArtifactOsShadow.class)
+ public class WorkspaceResultLedgerTest {
+     @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
+     private static final String WORKSPACE = "62a92262-977e-4c43-8e6a-5640a0c193c3";
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceStoreTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceStoreTest.kt
+@@ -20,7 +20,7 @@
+ import org.robolectric.annotation.Config
+ 
+ @RunWith(RobolectricTestRunner::class)
+-@Config(sdk = [34])
++@Config(sdk = [34], shadows = [ArtifactOsShadow::class])
+ class WorkspaceStoreTest {
+     @get:Rule val temporaryFolder = TemporaryFolder()
+ 
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceSupervisorMessagePipelineTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceSupervisorMessagePipelineTest.kt
+@@ -32,7 +32,7 @@
+ import java.util.concurrent.atomic.AtomicReference
+ 
+ @RunWith(RobolectricTestRunner::class)
+-@Config(sdk = [34], application = Application::class)
++@Config(sdk = [34], application = Application::class, shadows = [ArtifactOsShadow::class])
+ @LooperMode(LooperMode.Mode.PAUSED)
+ class WorkspaceSupervisorMessagePipelineTest {
+     @get:Rule val chatTestStore = ChatTestStore(

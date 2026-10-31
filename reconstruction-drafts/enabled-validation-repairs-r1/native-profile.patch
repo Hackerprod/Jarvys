@@ -1,0 +1,55 @@
+--- a/app/app/src/main/java/com/jarvys/agent/crew/CrewManager.java
++++ b/app/app/src/main/java/com/jarvys/agent/crew/CrewManager.java
+@@ -1585,7 +1585,18 @@
+             String requestedName, CrewMissionAccess missionAccess) {
+         if (mission == null || mission.trim().isEmpty()) throw new IllegalArgumentException("mission must be a non-empty string");
+         CrewRole role;
+-        if ("custom".equalsIgnoreCase(roleId)) {
++        if (treeSupport != null && WorkspaceIdentity.isExecutionSession(conversationId)) {
++            if (!profilesConfigured || "custom".equalsIgnoreCase(roleId))
++                throw new IllegalArgumentException("Native workspace delegation requires the exact ID of an enabled saved versioned profile; save a custom profile first");
++            role = profileResolver.apply(roleId);
++            if (role == null || role.profileVersion < 1 || !role.id.equals(roleId))
++                throw new IllegalArgumentException("Native workspace role must be an exact case-sensitive saved profile ID, not a display name or ephemeral custom alias");
++            if (requestedTools != null) {
++                List<String> selected = validateRequestedTools(requestedTools, capabilityNames(role));
++                if (!role.tools.containsAll(selected)) throw new IllegalArgumentException("Requested tools exceed this role's capabilities");
++                role = role.withTools(selected);
++            }
++        } else if ("custom".equalsIgnoreCase(roleId)) {
+             if (requestedName == null || requestedName.trim().isEmpty()) throw new IllegalArgumentException("custom role name is required");
+             if (requestedTools == null) throw new IllegalArgumentException("custom role tools are required");
+             role = CrewRoleTemplates.custom(requestedName, mission, requestedTools, captainTools);
+--- a/app/app/src/main/java/com/jarvys/agent/workspaces/WorkspaceCoordinator.kt
++++ b/app/app/src/main/java/com/jarvys/agent/workspaces/WorkspaceCoordinator.kt
+@@ -499,6 +499,10 @@
+         mutation.requireTreeAdmission();admission.run()
+         val capability=requireNotNull(mutation.treeAdmission)
+         val rootId=capability.rootId()
++        // Ephemeral aliases cannot produce a resumable native checkpoint. No queued charge or manager lookup.
++        require(!role.equals("custom",ignoreCase=true)) {
++            "Native workspace delegation requires a saved versioned profile ID; save a custom profile first"
++        }
+         val request=TreeChildRequest(workspaceId,key,requestId,originalUserRequest,role,mission,tools,name,
+             if(CrewMissionAccess.parse(missionAccess)==CrewMissionAccess.READ_ONLY) TreeMode.CONSULT else TreeMode.WORK,
+             if(continueResult) TreeReply.AWAIT else TreeReply.NONE,WorkspaceTreeStore.centralReceipt(requireNotNull(mutation.rootSource)),mutation.rootSource)
+--- a/app/app/src/main/java/com/jarvys/agent/workspaces/CentralWorkspaceTool.kt
++++ b/app/app/src/main/java/com/jarvys/agent/workspaces/CentralWorkspaceTool.kt
+@@ -186,7 +186,7 @@
+                 "expected_sha256" to mapOf("type" to "string", "pattern" to "^[a-f0-9]{64}$",
+                     "minLength" to 64, "maxLength" to 64, "description" to "Required for deliver, read_result, continue_result, read_message and reply: exact SHA-256 returned by the corresponding reference or inspection."),
+                 "filename" to textSchema(MAX_DELIVERY_TEXT, "Optional nonempty single-line delivery filename; no directory separators."),
+-                "role" to tokenSchema("Built-in role ID or custom; custom requires name and tools."),
++                "role" to tokenSchema("Exact case-sensitive enabled saved profile ID (built-in or user-created). Save a custom profile first; ephemeral custom and display-name aliases are unsupported."),
+                 "mission" to textSchema(MAX_TEXT_BYTES, "Exact worker mission for delegate. This is not user-authored provenance."),
+                 "tools" to mapOf("type" to "array", "maxItems" to MAX_TOOLS, "uniqueItems" to true,
+                     "items" to tokenSchema("Exact tool name within the parent's available capability scope.")),
+@@ -468,7 +468,7 @@
+                     }
+                     values["mission_access"] = if (!arguments.containsKey("mission_access")) "standard"
+                         else string("mission_access").also { require(it == "standard" || it == "read_only") }
+-                    if (values["role"] == "custom") require(values.containsKey("name") && values.containsKey("tools"))
++                    require(!values["role"].toString().equals("custom",ignoreCase=true)) { "Save a versioned custom profile first, then use its exact ID" }
+                 }
+                 "inspect_file" -> {
+                     uuid("workspace_id")
