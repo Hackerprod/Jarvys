@@ -1,0 +1,64 @@
+--- a/app/app/src/test/java/com/jarvys/agent/MainAgentInteractionTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/MainAgentInteractionTest.kt
+@@ -1189,6 +1189,61 @@
+         }
+     }
+ 
++    @Test fun queuedStoredUserAlreadyHotIncorporatedMustNotStartAnotherNativeGeneration() {
++        StopController.getInstance().stopRun()
++        val context=ApplicationProvider.getApplicationContext<Context>()
++        val session=com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
++        val store=LocalRunStore(context)
++        val firstId=chatTestStore.onDatabaseWorker { store.appendConversationMessage(session,"user","first live request") }
++        val service=startManagedService(context)
++        val firstEntered=CountDownLatch(1)
++        val releaseFirst=CountDownLatch(1)
++        val hotSeen=CountDownLatch(1)
++        val calls=AtomicInteger()
++        val generations=java.util.Collections.synchronizedList(mutableListOf<Long>())
++        val boundGenerations=AtomicInteger()
++        service.beforeGenerationBindForTesting=Runnable { boundGenerations.incrementAndGet() }
++        installRealTreeRuntime(context,service) { history,_ ->
++            when(calls.incrementAndGet()) {
++                1 -> {
++                    firstEntered.countDown()
++                    while(releaseFirst.count>0) try { releaseFirst.await() } catch(_:InterruptedException) { }
++                    ModelReply("First response before hot input",emptyList())
++                }
++                2 -> {
++                    assertTrue(history.any { it.role=="user" && it.content=="exact hot USER" })
++                    hotSeen.countDown()
++                    ModelReply("Hot input consumed in owning generation",emptyList())
++                }
++                else -> throw AssertionError("An already incorporated queued USER must not invoke another model generation")
++            }
++        }
++        service.mainChatRunner=AgentForegroundService.MainChatRunner { runtime,goal,history,attachments,token,progress ->
++            generations.add(token.generation())
++            runtime.runMainChat(goal,history,attachments,token,progress)
++        }
++        try {
++            AgentRunUiState.resetSession(session)
++            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,firstId))
++            assertTrue(awaitServiceCallback(firstEntered,5))
++            val secondId=chatTestStore.onDatabaseWorker { store.appendConversationMessage(session,"user","exact hot USER") }
++            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,secondId))
++            assertEquals("Second direct intent waits behind physical owner",1,generations.size)
++            releaseFirst.countDown()
++            assertTrue(awaitServiceCallback(hotSeen,5))
++            assertTrue(awaitRunFinished(service,context))
++            assertEquals("One provider response before and one after hot input",2,calls.get())
++            assertEquals("A queued duplicate must not start a second native runner",1,generations.size)
++            assertEquals("Consumed duplicate cannot publish another UI generation",1,boundGenerations.get())
++            assertTrue(chatTestStore.onDatabaseWorker { store.handledConversationMessageIds(session,listOf(secondId)).contains(secondId) })
++            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,secondId))
++            assertTrue(awaitRunFinished(service,context))
++            assertEquals("Repeated non-regeneration intent remains observation only",1,generations.size)
++            assertEquals(2,calls.get())
++            assertEquals(1,boundGenerations.get())
++        } finally { releaseFirst.countDown();StopController.stopAllRuns();stopManagedService(context) }
++    }
++
+     @Test fun messagesQueuedAfterSteeringProviderClosureRunInArrivalOrder() {
+         StopController.getInstance().stopRun()
+         val context = ApplicationProvider.getApplicationContext<Context>()
