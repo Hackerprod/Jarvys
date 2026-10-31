@@ -511,7 +511,7 @@ public final class CrewManager implements AutoCloseable {
     private volatile SnapshotListener snapshotListener;
     private static final class PendingTreeWait {
         final CrewTreeSupport owner; final CrewTreeSupport.WaitTicket ticket; final CancellationToken token;
-        volatile CrewCheckpointStore.ConfirmedSnapshot saved; volatile boolean confirmed;
+        volatile CrewCheckpointStore.ConfirmedSnapshot saved; volatile boolean sourceFrozen; volatile boolean confirmed;
         PendingTreeWait(CrewTreeSupport owner,CrewTreeSupport.WaitTicket ticket,CancellationToken token){this.owner=owner;this.ticket=ticket;this.token=token;}
     }
     private volatile CrewTreeSupport treeSupport;
@@ -565,12 +565,17 @@ public final class CrewManager implements AutoCloseable {
             bot.checkpoint=loop.checkpointSnapshot();bot.transcript=bot.checkpoint.transcript;
             bot.status=Status.WAITING;bot.requiresExplicitResume=true;bot.waitingReason="children";
             bot.recoveryNote="Exact child wait retained; no uncertain operation is replayed.";
+            // Serialize the exact save and freeze with all ordinary bot checkpoint writers.
+            // This is source conservation only: Registry confirmation remains a separate gate.
+            synchronized(bot) {
             saved=support.persistConfirmed(bot,bus.snapshot(),bus.pending(bot.id));
             JSONObject record=saved==null?null:saved.metadataJson().optJSONObject(CrewTreeSupport.WaitTicket.FIELD);
             if(record==null||record.optJSONObject("current")==null||!wait.ticket.waitId.equals(record.optJSONObject("current").optString("waitId","")))
                 throw new IllegalStateException("Exact tree backlink not confirmed");
             com.jarvys.agent.WorkerTreeWaitRecord.fromJson(record).withTicket(wait.ticket.toJson()); // Same ID must conserve every typed field.
             bot.checkpointAvailable=true;
+            wait.saved=saved;wait.sourceFrozen=true;
+            }
         }
         owner.confirmPark(bot,token,wait.ticket,saved);
         synchronized(bot.cycleLock){token.throwIfCancelled();if(bot.token!=token||bot.treeWait!=wait||treeSupport!=owner)throw new IllegalStateException("Park superseded");wait.saved=saved;wait.confirmed=true;}
@@ -1343,7 +1348,7 @@ public final class CrewManager implements AutoCloseable {
     private boolean persistCheckpoint(Bot bot) {
         synchronized (bot) {
             PendingTreeWait sealed=bot.treeWait;
-            if(sealed!=null&&sealed.confirmed&&sealed.saved!=null&&sealed.owner==treeSupport&&sealed.token==bot.token
+            if(sealed!=null&&sealed.sourceFrozen&&sealed.saved!=null&&sealed.owner==treeSupport&&sealed.token==bot.token
                 &&bot.status==Status.WAITING&&!bot.stopping&&!bot.token.isCancellationRequested()
                 &&bot.cycleId().equals(sealed.ticket.cycleId))return true; // Preserve the exact confirmed park source until typed successor/control.
             CheckpointSupport support = checkpointSupport;

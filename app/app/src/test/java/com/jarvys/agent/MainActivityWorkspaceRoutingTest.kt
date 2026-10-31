@@ -40,7 +40,7 @@ import org.robolectric.annotation.GraphicsMode
 /** Small Activity integration slice: no model turns, service launches, workers or device effects. */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi", shadows = [ArtifactOsShadow::class])
+@Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi", shadows = [ArtifactOsShadow::class, RoutingAnimationUnavailableShadow::class])
 class MainActivityWorkspaceRoutingTest {
     // Install Compose's clock before any real Activity is launched. Infinite visual animations stay
     // present, while tests advance finite frames instead of draining Robolectric's Choreographer.
@@ -119,6 +119,8 @@ class MainActivityWorkspaceRoutingTest {
         AgentRunUiState.resetSession("ux43-route-cleanup")
         secretSingleton.set(null, null)
         WorkManagerTestCleanup.close(context)
+        assertTrue("Actual mascot startup must reach the isolated unavailable transport fixture",
+            RoutingAnimationUnavailableShadow.called.await(10, TimeUnit.SECONDS))
     }
 
     @Test fun B10_startIntentAndRestoredPickerAlwaysUseCentral() {
@@ -328,5 +330,26 @@ class MainActivityWorkspaceRoutingTest {
         } while (System.nanoTime() < end)
         assertTrue("Workspace routing did not settle: selected=${selected()}; state=${AgentRunUiState.state.value}" +
             "\nCatalog semantics:\n${compose.onRoot(useUnmergedTree = true).printToString()}", condition())
+    }
+}
+
+/** Host routing tests use the real animation repository/cache/fallback, but never remote assets. */
+@org.robolectric.annotation.Implements(value = JarvysAnimationIsolatedHttpTransport::class, isInAndroidSdk = false)
+class RoutingAnimationUnavailableShadow {
+    companion object {
+        @JvmField val called = java.util.concurrent.CountDownLatch(1)
+    }
+
+    @org.robolectric.annotation.Implementation
+    fun get(uri: java.net.URI, token: CancellationToken): JarvysAnimationTransport.Response {
+        token.throwIfCancelled()
+        JarvysAnimationSite.checked(uri.toString())
+        called.countDown()
+        return object : JarvysAnimationTransport.Response {
+            override val status = 503
+            override val contentLength = 0L
+            override val body = ByteArrayInputStream(byteArrayOf())
+            override fun close() { body.close() }
+        }
     }
 }

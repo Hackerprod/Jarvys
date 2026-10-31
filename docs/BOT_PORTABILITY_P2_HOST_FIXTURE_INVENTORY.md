@@ -46,3 +46,10 @@ Fresh selected acceptance, not historical coverage restoration. All listed chang
 - NativeContinuationLivePermitTest and NativeContinuationStopTest: actual retained-v98 assignment/checkpoint producer setup, no tree enrollment or fabricated capability; all existing control/restart assertions retained.
 - WorkspaceMemoryContinuityTest: genuine saved general-purpose profile, unchanged namespace and compaction assertions.
 - WorkspaceStoreTest and WorkspaceSupervisorMessagePipelineTest: actual application connector owner through existing isolated context wrapper.
+
+
+## Verified v98 and host transport boundaries
+
+- CentralRuntimeSourceIntegrationTest: immutable v98 CoreAgentRuntime installs EpisodeRecorder only with a memory-session binding. The test was restored from the older supplemental tree, not the published v98 test set. Memory-OFF expectations now require no session/episode and unchanged semantic store, while preserving the actual WRITE gateway, canonical batch/result and sealed witness checks. No production audit/memory behavior changed.
+- CrewMissionTitleCheckpointTest: persist the real owner conversation before current project worker execution, so native incorporation ACK has an existing row; READ_ONLY, durable checkpoint, title/full instructions and no-provider recovery assertions remain.
+- MainActivityWorkspaceRoutingTest: narrow host-only isolated mascot transport returns503 after URI/token validation; real cache/parser/fallback/UI and offline guard remain. Actual transport entry is asserted. No remote animation/device coverage claimed.

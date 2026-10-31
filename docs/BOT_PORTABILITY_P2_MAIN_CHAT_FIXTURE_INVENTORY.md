@@ -56,3 +56,6 @@ All 51 cases are retained. This inventory describes the prior run-2 failures and
 
 
 Run3's prior 51-case mapping produced 48 PASS and three remaining fixture failures. Their corrected scenarios now use one actual recovery turn with ordered pending inputs, append the serial follow-up only after closing first-provider ingress, and bind approval to the exact active generation. A new 52nd real-service regression tests hot-incorporated USER duplicate intents. It is unrun at this checkpoint; no production duplicate guard has been applied.
+
+
+The 52nd regression failed on unchanged service admission: three actual provider calls instead of two. The minimal physical-dequeue idempotency guard is now a candidate fix. Two added runtime boundary cases bring this class to54 tests and cover restart-retained receipt, fresh/unhandled USER and AGENT behavior, explicit regeneration and current-generation cancellation. Red-to-green proof is pending; no original assertion was removed.

@@ -135,23 +135,11 @@ class CentralRuntimeSourceIntegrationTest {
             assertEquals(toolName, persisted.toolName)
             assertNotNull(persisted.output)
             assertFalse(policy.isEnabled)
-            // OFF blocks semantic memory, not the mandatory neutral WRITE audit (§7.5 A).
-            val episodes = bridge.personalAgentEpisodesForSourceMessagesSync(source.ownerCentralSessionId, listOf(owner))
-            assertEquals(1, episodes.size)
-            val episode = bridge.personalAgentGet(listOf(episodes.single().id), true).single()
-            assertEquals("episode", episode.kind)
-            assertTrue(episode.title.isNullOrEmpty())
-            assertEquals("", episode.text)
-            assertEquals("none", episode.narration)
-            val toolEvidence = episode.evidence.filter { it.refKind == "tool_call" }.single()
-            assertEquals(source.ownerCentralSessionId, toolEvidence.refConversationId)
-            assertEquals(source.sourceBatchId, toolEvidence.sourceBatchId)
-            assertEquals(source.sourceCallId, toolEvidence.refId)
-            assertEquals(source.sourceRunId, toolEvidence.runId)
-            assertEquals(source.sourceProcessId, toolEvidence.processId)
-            assertEquals(toolName, toolEvidence.toolName)
-            assertEquals("ok", toolEvidence.outcome)
-            assertEquals("allow", toolEvidence.authorization)
+            // Verified v98 installs EpisodeRecorder only for an admitted memory session.
+            // OFF still retains the committed canonical tool batch/result and live WRITE witness
+            // asserted above, but must not manufacture a memory session or episode.
+            assertTrue(bridge.personalAgentMemorySessions().isEmpty())
+            assertTrue(bridge.personalAgentEpisodesForSourceMessagesSync(source.ownerCentralSessionId, listOf(owner)).isEmpty())
             val semanticAfter = bridge.personalAgentBrowse().filter { it.memoryKind != "episode" }.associateBy { it.id }
             assertEquals("No new or changed semantic memory/digest while OFF", semanticBefore, semanticAfter)
             assertThrows(IllegalStateException::class.java) { witness.requireInvocationCurrent() }

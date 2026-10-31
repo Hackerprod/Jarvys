@@ -77,3 +77,14 @@ Additional exact diagnostics showed one Central source fixture omitted its persi
 
 
 The additive pre-write gate now passes matching Full105/Play105 and local acceptance is re-enabled. Main-chat fixture corrections now represent one real ordered recovery turn, a deliberately closed-ingress serial lane and generation-bound hidden approval. A separate actual-service hot-input/queued-duplicate regression is added (52 main-chat cases); the proposed production duplicate guard remains unapplied until the regression demonstrates the risk. Explicit regeneration is not reclassified as a duplicate.
+
+
+## Fourth diagnostic: concrete race and duplicate admission
+
+Focused run4 executed **131 cases with 10 failures, 0 errors/skips**. Actual Central-tree service17/17 passed, including formal question/later USER answer/native Resume and detached cancellation after completed/stopped roots. Worker24/30 passed, including real delegation, ALL/implicit-ALL/ANY, consult and detached modes.
+
+Two remaining production corrections are explicit review deltas. First, the exact parked WAITING checkpoint is now frozen under the existing cycle→bot lock immediately after durable save, before Registry confirmation. `sourceFrozen` only conserves bytes; `confirmed` still gates live quiescence/wake. Failure/STOP/replacement bypass freeze and preserve fail-closed uncertainty. Three deterministic adapter/barrier tests interleave sibling publication, confirm failure and STOP; no resealing, second claim or provider replay is added. Reopen fixtures now await actual parked-capability registration before simulating process loss and explicitly grant their requested question tool.
+
+Second, the real-service hot-input regression observed **three provider calls instead of the expected two**: a queued stored USER had already been incorporated by its predecessor. Physical-dequeue admission now rejects the exact handled non-regeneration USER before token/UI allocation. Explicit regeneration is unchanged and separate. The red case is retained unchanged; two additional runtime tests cover persisted receipt after restart, same-text fresh/unhandled USER, ordinary submission without a prior stored ID, AGENT behavior, and native regeneration/current-generation STOP. This denial-only guard is not retry permission.
+
+Final test-only corrections preserve verified v98 memory-OFF semantics (actual canonical WRITE gateway/witness remains tested; no invented memory session/episode), persist the genuine conversation owner needed for current project checkpoint ACK, and replace only the isolated mascot HTTP transport with deterministic503 in the host routing fixture. Actual cache/parser/fallback/UI and global offline guard remain; physical animation/network behavior is not validated. All new fixes remain unrun pending this checkpoint's export/tests and independent review.

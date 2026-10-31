@@ -1189,6 +1189,110 @@ class MainAgentInteractionTest {
         }
     }
 
+    @Test fun handledUserReceiptSurvivesServiceRestartWithoutSuppressingFreshUserOrAgentInputs() {
+        StopController.getInstance().stopRun()
+        val context=ApplicationProvider.getApplicationContext<Context>()
+        val session=com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+        val store=LocalRunStore(context)
+        val original=chatTestStore.onDatabaseWorker { store.appendConversationMessage(session,"user","same visible text") }
+        var service=startManagedService(context)
+        val initialCalls=AtomicInteger()
+        installRealTreeRuntime(context,service) { _,_ -> initialCalls.incrementAndGet();ModelReply("Original reply",emptyList()) }
+        try {
+            AgentRunUiState.resetSession(session)
+            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,original))
+            assertTrue(awaitRunFinished(service,context));assertEquals(1,initialCalls.get())
+            assertTrue(chatTestStore.onDatabaseWorker { store.handledConversationMessageIds(session,listOf(original)).contains(original) })
+            stopManagedService(context)
+            managedController?.destroy()
+            managedController=null
+            service=startManagedService(context)
+            val calls=AtomicInteger();val binds=AtomicInteger()
+            service.beforeGenerationBindForTesting=Runnable { binds.incrementAndGet() }
+            installRealTreeRuntime(context,service) { history,_ ->
+                if(calls.incrementAndGet()==3) assertTrue("Ordinary AGENT preserves subordinate provenance",
+                    history.any { it.incomingMetadata?.origin==ConversationInput.Origin.AGENT })
+                ModelReply("Current input reply",emptyList())
+            }
+            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,original))
+            assertTrue(awaitRunFinished(service,context));assertEquals(0,calls.get());assertEquals(0,binds.get())
+            val fresh=chatTestStore.onDatabaseWorker { store.appendConversationMessage(session,"user","same visible text") }
+            assertNotEquals(original,fresh)
+            assertFalse(chatTestStore.onDatabaseWorker { store.handledConversationMessageIds(session,listOf(fresh)).contains(fresh) })
+            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,fresh))
+            assertTrue(awaitRunFinished(service,context));assertEquals(1,calls.get());assertEquals(1,binds.get())
+            // No stored identity at submission: the normal native USER path must persist its own row.
+            startServiceIntent(context,android.content.Intent(context,AgentForegroundService::class.java)
+                .setAction(AgentForegroundService.ACTION_REAL_AGENT).putExtra("chat_session_id",session)
+                .putExtra("agent_goal","new native USER input").putExtra("agent_display_goal","new native USER input")
+                .putExtra("chat_user_message_recorded",false))
+            assertTrue(awaitRunFinished(service,context));assertEquals(2,calls.get());assertEquals(2,binds.get())
+            chatTestStore.onDatabaseWorker {
+                val newUser=store.readConversationMessages(session).single { it.optString("role")=="user" && it.optString("content")=="new native USER input" }
+                assertTrue(store.handledConversationMessageIds(session,listOf(newUser.getString("messageId"))).contains(newUser.getString("messageId")))
+            }
+            val agent=chatTestStore.onDatabaseWorker {
+                val source="ordinary-agent-${System.nanoTime()}"
+                store.appendConversationInput(ConversationInput(session,source,"Ordinary subordinate finding",ConversationInput.Origin.AGENT,
+                    ConversationInput.Provenance("worker-session","workspace-1","assignment-1","worker-1",source,
+                        ConversationInput.Kind.FINDING,ConversationInput.Provenance.PrincipalRole.SUBORDINATE)))
+            }
+            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,agent))
+            assertTrue(awaitRunFinished(service,context));assertEquals(3,calls.get());assertEquals(3,binds.get())
+            assertEquals("incorporated",chatTestStore.onDatabaseWorker { store.readConversationInputState(session,agent) })
+            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,agent))
+            assertTrue(awaitRunFinished(service,context));assertEquals(3,calls.get());assertEquals(3,binds.get())
+        } finally { StopController.stopAllRuns();stopManagedService(context) }
+    }
+
+    @Test fun explicitRegenerationOfHandledUserRetainsCurrentGenerationAndStopOwnership() {
+        StopController.getInstance().stopRun()
+        val context=ApplicationProvider.getApplicationContext<Context>()
+        val session=com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+        val store=LocalRunStore(context)
+        val original=chatTestStore.onDatabaseWorker { store.appendConversationMessage(session,"user","Regenerate only this exact response") }
+        val service=startManagedService(context)
+        val calls=AtomicInteger();val binds=AtomicInteger()
+        val regenerationEntered=CountDownLatch(1);val releaseRegeneration=CountDownLatch(1)
+        val owners=java.util.Collections.synchronizedList(mutableListOf<CancellationToken>())
+        service.beforeGenerationBindForTesting=Runnable { binds.incrementAndGet() }
+        installRealTreeRuntime(context,service) { _,_ ->
+            if(calls.incrementAndGet()==2) {
+                regenerationEntered.countDown()
+                while(releaseRegeneration.count>0) try { releaseRegeneration.await() } catch(_:InterruptedException) { }
+            }
+            ModelReply("Exact response",emptyList())
+        }
+        service.mainChatRunner=AgentForegroundService.MainChatRunner { runtime,goal,history,attachments,token,progress ->
+            owners.add(token);runtime.runMainChat(goal,history,attachments,token,progress)
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,original))
+            assertTrue(awaitRunFinished(service,context));assertEquals(1,calls.get())
+            val event=chatTestStore.onDatabaseWorker { store.readConversationTimeline(session).last { it.kind=="assistant" && it.userMessageId==original } }
+            assertTrue(chatTestStore.onDatabaseWorker { store.handledConversationMessageIds(session,listOf(original)).contains(original) })
+            AgentForegroundService.startRegenerateAssistant(context,event.text,arrayListOf(),session,event.userMessageId,event.resumeReceipt)
+            deliverStartedServices(context)
+            assertTrue(awaitServiceCallback(regenerationEntered,5))
+            assertEquals(2,owners.size);assertEquals(2,binds.get())
+            assertNotEquals(owners[0].generation(),owners[1].generation())
+            assertEquals("$session:${owners[1].generation()}",AgentRunUiState.snapshotForSession(session).liveRunIdentity)
+            AgentRunUiState.completeGeneration(session,owners[0].generation(),"stale-original-completion","COMPLETED","must not replace regeneration","",0)
+            assertEquals("$session:${owners[1].generation()}",AgentRunUiState.snapshotForSession(session).liveRunIdentity)
+            assertTrue(AgentRunUiState.snapshotForSession(session).running)
+            assertFalse(AgentRunUiState.snapshotForSession(session).events.any { it.text=="must not replace regeneration" })
+            AgentForegroundService.stopRun(session)
+            service.awaitStopTasksForTesting().get(5,TimeUnit.SECONDS)
+            assertTrue("STOP owns the current explicit regeneration",owners[1].isCancellationRequested)
+            releaseRegeneration.countDown();assertTrue(awaitRunFinished(service,context))
+            assertEquals("STOPPED",AgentRunUiState.snapshotForSession(session).outcome)
+            assertEquals(1,chatTestStore.onDatabaseWorker { store.readConversationMessages(session).count { it.optString("role")=="user" } })
+            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,original))
+            assertTrue(awaitRunFinished(service,context));assertEquals(2,calls.get());assertEquals(2,binds.get())
+        } finally { releaseRegeneration.countDown();StopController.stopAllRuns();stopManagedService(context) }
+    }
+
     @Test fun queuedStoredUserAlreadyHotIncorporatedMustNotStartAnotherNativeGeneration() {
         StopController.getInstance().stopRun()
         val context=ApplicationProvider.getApplicationContext<Context>()

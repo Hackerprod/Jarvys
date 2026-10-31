@@ -1391,6 +1391,12 @@ public final class AgentForegroundService extends Service {
             && !existingUserMessageId.isEmpty()
             ? submittedInputStore.readConversationInput(chatSessionId, existingUserMessageId) : null;
         submittedInputRef.set(submittedInput);
+        // This admission runs at physical lane dequeue, before allocating a token/UI generation.
+        // A predecessor can hot-incorporate the exact USER while its direct intent is queued.
+        // Explicit regeneration retains its separate native authority and is not a duplicate.
+        if (!regeneration && submittedInput != null && submittedInput.origin == ConversationInput.Origin.USER
+            && submittedInputStore.handledConversationMessageIds(chatSessionId,
+                java.util.Collections.singletonList(existingUserMessageId)).contains(existingUserMessageId)) return false;
         // SYSTEM inputs may become context for a later user or AGENT turn, but never initiate one.
         if (submittedInput != null && submittedInput.origin == ConversationInput.Origin.SYSTEM) {
           if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();

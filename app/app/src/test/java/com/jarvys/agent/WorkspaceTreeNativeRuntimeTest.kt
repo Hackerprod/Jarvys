@@ -56,6 +56,19 @@ class WorkspaceTreeNativeRuntimeTest {
                 bot.checkpoint().transcript.filter { it.kind==ConversationTurn.Kind.TOOL_RESULT }
                     .joinToString { "${it.toolCallId}/${it.toolName}: ${it.content}" })
         } }
+        managers.forEach { manager -> manager.bots().filter { it.scopeIdentity().isNotBlank() }.forEach { bot ->
+            runCatching { storage.onDatabaseWorker {
+                val field=CrewManager.Bot::class.java.getDeclaredField("treeWait").apply {isAccessible=true}
+                val wait=field.get(bot) ?: return@onDatabaseWorker
+                val savedField=wait.javaClass.getDeclaredField("saved").apply {isAccessible=true}
+                val sealed=savedField.get(wait) as? CrewCheckpointStore.ConfirmedSnapshot ?: return@onDatabaseWorker
+                val current=CrewCheckpointStore(app.filesDir).confirmDurable(sealed.conversationId,bot.id,bot.scopeIdentity()) ?: return@onDatabaseWorker
+                val before=sealed.metadataJson();val after=current.metadataJson()
+                val keys=(before.keys().asSequence().toSet()+after.keys().asSequence().toSet()).filter { before.opt(it).toString()!=after.opt(it).toString() }
+                System.err.println("TREE_SOURCE_DIAGNOSTIC bot=${bot.id} sealed=${sealed.payloadSha256} current=${current.payloadSha256} changedMetadataKeys=$keys " +
+                    "sealedTurns=${sealed.loopForEvidence().transcript.size} currentTurns=${current.loopForEvidence().transcript.size}")
+            } }.onFailure { System.err.println("TREE_SOURCE_DIAGNOSTIC unavailable=${it.javaClass.name}:${it.message}") }
+        } }
         managers.forEach { it.close() };pool.shutdownNow()
     }
     private data class Fixture(val scope:WorkspaceRecord,val manager:CrewManager,val root:String,val bot:CrewManager.Bot)
@@ -412,11 +425,27 @@ class WorkspaceTreeNativeRuntimeTest {
     @Test fun correctionCannotSilentlyDiscardRetainedUnconsumedWait()=reopenedWait("correct")
     private fun reopenedWait(mode:String) {
         val childEntered=CountDownLatch(1);val releaseChild=CountDownLatch(1);val originalCalls=AtomicInteger();val recoveredCalls=AtomicInteger()
-        val f=start { history,_,_ ->
+        val registered=CountDownLatch(1)
+        val exactParked=java.util.concurrent.atomic.AtomicReference<java.util.concurrent.ConcurrentHashMap<String,Any>>()
+        val f=start(configureManager={ manager ->
+            // Observe the actual native capability publication; never synthesize an owner or claim.
+            val listenerField=CrewManager::class.java.getDeclaredField("treePublicationListener").apply {isAccessible=true}
+            val listener=listenerField.get(manager)
+            val field=listener.javaClass.getDeclaredField("parked").apply {isAccessible=true}
+            val observed=object:java.util.concurrent.ConcurrentHashMap<String,Any>() {
+                override fun putIfAbsent(key:String,value:Any):Any? {
+                    val previous=super.putIfAbsent(key,value)
+                    registered.countDown()
+                    return previous
+                }
+            }
+            check((field.get(listener) as Map<*,*>).isEmpty())
+            field.set(listener,observed);exactParked.set(observed)
+        }) { history,_,_ ->
             if(task(history).contains("CHILD_RESTART")) {childEntered.countDown();assertTrue(releaseChild.await(15,TimeUnit.SECONDS));
                 if(mode=="question")call("reopen-question","ask_chief",mapOf("question" to "RESTART_EVIDENCE question")) else ModelReply("RESTART_EVIDENCE",emptyList())}
             else when(originalCalls.incrementAndGet()) {
-                1->call("restart-delegate","delegate_subtask",mapOf("objective" to "CHILD_RESTART","role" to profileId,"tools" to emptyList<String>()))
+                1->call("restart-delegate","delegate_subtask",mapOf("objective" to "CHILD_RESTART","role" to profileId,"tools" to if(mode=="question")listOf("ask_chief") else emptyList<String>()))
                 2->call("restart-wait","wait_children",mapOf("ids" to listOf(child(history)),"mode" to "ALL"))
                 else->error("Old process must not resume")
             }
@@ -425,10 +454,10 @@ class WorkspaceTreeNativeRuntimeTest {
             assertTrue(childEntered.await(15,TimeUnit.SECONDS));await(f.bot)
             assertEquals(CrewManager.Status.WAITING,f.bot.status())
             // Process-loss simulation: erase only ephemeral parked capability, retaining actual disk/Registry bytes.
-            val listenerField=CrewManager::class.java.getDeclaredField("treePublicationListener").apply {isAccessible=true}
-            val listener=listenerField.get(f.manager)
-            val parked=listener.javaClass.getDeclaredField("parked").apply {isAccessible=true}.get(listener) as MutableMap<*,*>
-            parked.clear();releaseChild.countDown();await(f.manager.bots().single {it.id!=f.bot.id})
+            assertTrue("Native park capability was not registered",registered.await(15,TimeUnit.SECONDS))
+            // Clearing after the actual put prevents a late callback from repopulating authority.
+            // Any callback already in progress must still remove this exact map owner before claim.
+            exactParked.get().clear();releaseChild.countDown();await(f.manager.bots().single {it.id!=f.bot.id})
             val wait=storage.onDatabaseWorker {WorkspaceRegistry(app).use { db ->
                 val store=WorkspaceTreeWaitStore(WorkspaceTreeStore(db));val node=WorkspaceTreeStore(db).findAssignment(f.scope.workspaceId,f.bot.assignmentId())!!
                 val ready=store.prepareReady(node.rootId,store.list(node.rootId,node.nodeId).single().waitId)!!
@@ -455,6 +484,7 @@ class WorkspaceTreeNativeRuntimeTest {
                 runtime.configureCrewManager(runtime.createTools(),CoreAgentModel(app,provider,f.scope.executionSessionId),null).also {managers.add(it)}
             }
             val bot=restored.bot(f.bot.id)!!;assertNotSame(f.bot.token,bot.token);assertEquals(0,recoveredCalls.get())
+            assertTrue("Native recovery rejected the actual retained checkpoint: ${bot.recoveryNote()}; error=${bot.error()}",bot.scopeIdentity().isNotBlank())
             if(mode=="question")storage.onDatabaseWorker {WorkspaceRegistry(app).use {db ->
                 val child=WorkspaceTreeStore(db).findAssignment(f.scope.workspaceId,restored.bots().single {it.id!=bot.id}.assignmentId())!!
                 val question=LocalRunStore(app).readCrewCoordinationEvidence(f.scope.executionSessionId,child.terminalRef!!)!!
@@ -634,4 +664,67 @@ class WorkspaceTreeNativeRuntimeTest {
         try { assertTrue(entered.await(15,TimeUnit.SECONDS));storage.onDatabaseWorker { assertion(fixture) };assertEquals(1,calls.get()) }
         finally { release.countDown();await(fixture.bot) }
     }
+    @Test fun pendingParkSourceIsFrozenAcrossSiblingPublicationBeforeRegistryConfirmation()=parkConfirmationBoundary("success")
+    @Test fun failedParkConfirmationDoesNotStrandFrozenWaitingSource()=parkConfirmationBoundary("failure")
+    @Test fun stopDuringParkConfirmationDoesNotGrantWakeOrStrandFrozenSource()=parkConfirmationBoundary("stop")
+    private fun parkConfirmationBoundary(mode:String) {
+        val confirming=CountDownLatch(1);val releaseConfirm=CountDownLatch(1)
+        val childEntered=CountDownLatch(1);val releaseChild=CountDownLatch(1);val synthesized=CountDownLatch(1)
+        val captured=java.util.concurrent.atomic.AtomicReference<CrewCheckpointStore.ConfirmedSnapshot>()
+        val calls=AtomicInteger()
+        val f=start(configureManager={manager ->
+            val field=CrewManager::class.java.getDeclaredField("treeSupport").apply {isAccessible=true}
+            val actual=field.get(manager) as CrewTreeSupport
+            // Delegating barrier around the genuine adapter; all receipts/validation still execute there.
+            val barrier=java.lang.reflect.Proxy.newProxyInstance(CrewTreeSupport::class.java.classLoader,arrayOf(CrewTreeSupport::class.java)) { _,method,args ->
+                if(method.name=="confirmPark") {
+                    captured.set(args!![3] as CrewCheckpointStore.ConfirmedSnapshot);confirming.countDown()
+                    val token=args[1] as CancellationToken
+                    try { assertTrue("Confirmation barrier was not released",releaseConfirm.await(15,TimeUnit.SECONDS)) }
+                    catch(interrupted:InterruptedException){token.throwIfCancelled();throw IllegalStateException(interrupted)}
+                    token.throwIfCancelled()
+                    if(mode=="failure")throw IllegalStateException("Injected exact park confirmation failure")
+                }
+                try {method.invoke(actual,*(args?:emptyArray()))}
+                catch(wrapped:java.lang.reflect.InvocationTargetException){throw wrapped.targetException}
+            } as CrewTreeSupport
+            field.set(manager,barrier)
+        }) { history,_,token ->
+            if(task(history).contains("CHILD_FREEZE")) {
+                childEntered.countDown();assertTrue(releaseChild.await(15,TimeUnit.SECONDS));token.throwIfCancelled()
+                ModelReply("CHILD_FREEZE_COMPLETE",emptyList())
+            } else when(calls.incrementAndGet()) {
+                1->call("freeze-delegate","delegate_subtask",mapOf("objective" to "CHILD_FREEZE","tools" to emptyList<String>()))
+                2->call("freeze-wait","wait_children",mapOf("ids" to listOf(child(history)),"mode" to "ALL"))
+                else->{assertTrue(history.any {it.content.contains("CHILD_FREEZE_COMPLETE")});synthesized.countDown();ModelReply("Frozen source consumed once",emptyList())}
+            }
+        }
+        try {
+            assertTrue(childEntered.await(15,TimeUnit.SECONDS));assertTrue(confirming.await(15,TimeUnit.SECONDS))
+            val sealed=requireNotNull(captured.get());val oldCycle=f.bot.cycleId()
+            releaseChild.countDown();await(f.manager.bots().single {it.id!=f.bot.id})
+            storage.onDatabaseWorker {WorkspaceRegistry(app).use {db ->
+                val tree=WorkspaceTreeStore(db);val node=tree.findAssignment(f.scope.workspaceId,f.bot.assignmentId())!!
+                val wait=WorkspaceTreeWaitStore(tree).list(node.rootId,node.nodeId).single()
+                assertEquals(TreeWaitState.ARMING,wait.state)
+                assertEquals(sealed.payloadSha256,CrewCheckpointStore(app.filesDir).confirmDurable(f.scope.executionSessionId,f.bot.id,f.bot.scopeIdentity())!!.payloadSha256)
+                assertEquals(2,calls.get());assertFalse(f.manager.isTreeParkQuiescent(f.bot,f.bot.token))
+            }}
+            if(mode=="stop")assertTrue(f.manager.stopExact(f.bot.id,f.bot.token))
+            releaseConfirm.countDown()
+            if(mode=="success") {
+                assertTrue(synthesized.await(15,TimeUnit.SECONDS));await(f.bot)
+                assertEquals(CrewManager.Status.DONE,f.bot.status());assertNotEquals(oldCycle,f.bot.cycleId());assertEquals(3,calls.get())
+            } else {
+                await(f.bot);assertEquals(2,calls.get())
+                assertEquals(if(mode=="stop")CrewManager.Status.STOPPED else CrewManager.Status.FAILED,f.bot.status())
+                storage.onDatabaseWorker {
+                    val terminal=CrewCheckpointStore(app.filesDir).confirmDurable(f.scope.executionSessionId,f.bot.id,f.bot.scopeIdentity())!!
+                    assertNotEquals(sealed.payloadSha256,terminal.payloadSha256)
+                    assertEquals(f.bot.status().name,terminal.metadataJson().getString("status"))
+                }
+            }
+        } finally {releaseConfirm.countDown();releaseChild.countDown()}
+    }
+
 }

@@ -34,6 +34,9 @@ public class CrewMissionTitleCheckpointTest {
         String session = "title-checkpoint-" + System.nanoTime();
         String original = "  Inspecciona todas las condiciones del proyecto.\n" + repeat("Conserva todo el contexto.\n", 30) + " Fin.  ";
         String worker = "  Revisa exclusivamente el módulo asignado.\n" + repeat("No pierdas ningún requisito.\n", 25);
+        // Real project checkpoint recovery also acknowledges native chat inputs. The runtime
+        // normally persists this owner before launching its worker; a file-only fixture cannot.
+        new LocalRunStore(context).appendConversationMessage(session, "user", original);
         CrewProfile profile = profile();
         CrewRole role = profile.resolveRole(Collections.emptyList(), Collections.emptyList());
         CrewCheckpointCoordinator coordinator = new CrewCheckpointCoordinator(context, session, bot -> role);
@@ -66,7 +69,9 @@ public class CrewMissionTitleCheckpointTest {
             assertTrue("Current checkpoint rejected: " + restored.bot(botId).recoveryNote(),
                     restored.bot(botId).hasDurableCheckpoint());
             assertEquals(restored.bot(botId).recoveryNote(), CrewMissionAccess.READ_ONLY, restored.bot(botId).role.missionAccess);
-            assertTrue(restored.bot(botId).requiresExplicitResume());
+            assertEquals(CrewManager.Status.DONE, restored.bot(botId).status());
+            assertFalse("A durably DONE project worker is not an interrupted native-workspace cycle",
+                    restored.bot(botId).requiresExplicitResume());
             assertEquals(1, modelCalls.get());
         }
     }
