@@ -152,4 +152,72 @@ class WorkspaceTreeSchemaCompatibilityTest {
         assertNotNull(runCatching { WorkspaceRegistry.preflightFreshStorage(context) }.exceptionOrNull())
         assertArrayEquals(before,file.readBytes())
     }
+    @Test fun nestedSameAndDistinctRegistryCallsUseOneNativeConnectionAndCommitTogether() {
+        val registry=open();registry.upgradeTreeSchema();val other=open()
+        assertEquals(2,other.schemaVersion()) // An independently cached helper must not own a borrowed connection.
+        registry.treeTransaction { db ->
+            val workspace=registry.createWorkspace("nested-owner","Nested current owner")
+            assertSame(db,registry.treeRead { it })
+            assertSame(db,other.treeRead { it })
+            assertEquals(workspace,other.getWorkspace(workspace.workspaceId))
+            other.close();assertTrue(db.isOpen)
+            assertSame(db,other.treeRead { it })
+            val assignment=other.prepareAssignment(workspace.workspaceId,"nested-assignment","nested-request","task","generalist","mission",null,null,
+                com.jarvys.agent.crew.CrewMissionAccess.STANDARD)
+            assertEquals(assignment.assignmentId,registry.getAssignment(workspace.workspaceId,assignment.assignmentId)!!.assignmentId)
+        }
+        assertEquals(1,open().listWorkspaces().size)
+        raw().use { db -> assertEquals(1,rows(db,"assignment").size) }
+        assertEquals(2,WorkspaceRegistry.preflightFreshStorage(context))
+    }
+    @Test fun nestedWriterFailureRollsBackAllNativeRowsAndReleasesBorrowedConnection() {
+        val registry=open();registry.upgradeTreeSchema();val other=open()
+        val baseline=registry.createWorkspace("retained-before-nesting","Retained")
+        val tables=listOf("workspace","assignment","user_control","central_read_receipt")
+        val before=raw().use { db -> tables.associateWith { rows(db,it) } }
+        class ExpectedRollback : RuntimeException()
+        val failure=runCatching {
+            registry.treeTransaction {
+                val created=registry.createWorkspace("rolled-back-owner","Uncommitted")
+                other.treeTransaction { nested ->
+                    assertSame(nested,registry.treeRead { it })
+                    other.prepareAssignment(created.workspaceId,"rolled-back-assignment","request","task","generalist","mission",null,null,
+                        com.jarvys.agent.crew.CrewMissionAccess.STANDARD)
+                    throw ExpectedRollback()
+                }
+            }
+        }.exceptionOrNull()
+        assertTrue(failure is ExpectedRollback)
+        raw().use { db -> assertEquals(before,tables.associateWith { rows(db,it) }) }
+        // Android nested transactions are rollback-only after an inner failure, even if its caller catches it.
+        registry.treeTransaction {
+            registry.createWorkspace("caught-inner-owner","Must roll back")
+            try {
+                other.treeTransaction {
+                    other.createWorkspace("caught-inner-row","Also rolled back")
+                    throw ExpectedRollback()
+                }
+            } catch (_: ExpectedRollback) { }
+            assertSame(registry.treeRead { it },other.treeRead { it })
+            registry.createWorkspace("after-caught-inner","Still rolled back with outer")
+        }
+        raw().use { db -> assertEquals(before,tables.associateWith { rows(db,it) }) }
+        assertEquals(baseline,other.getWorkspace(baseline.workspaceId))
+        other.close();assertEquals(2,other.schemaVersion())
+        registry.createWorkspace("after-rollback","Writer remains usable")
+        assertEquals(2,open().listWorkspaces().size)
+    }
+    @Test fun nestedConnectionStillRejectsSchemaMutationAndRollsBackWithoutRepair() {
+        val registry=open();registry.upgradeTreeSchema();val workspace=registry.createWorkspace("schema-owner","Retained")
+        val failure=runCatching {
+            registry.treeTransaction { db ->
+                db.execSQL("CREATE TABLE unexpected_nested_schema (value TEXT)")
+                open().getWorkspace(workspace.workspaceId)
+            }
+        }.exceptionOrNull()
+        assertTrue(failure is WorkspaceRegistryCorruptException)
+        assertEquals(2,WorkspaceRegistry.preflightFreshStorage(context))
+        assertEquals(workspace,open().getWorkspace(workspace.workspaceId))
+    }
+
 }

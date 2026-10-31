@@ -25,6 +25,8 @@ class WorkspaceRegistry(context: Context) : Closeable {
         const val DATABASE_NAME = "jarvys-workspaces-agent-v1.db"
         const val NATIVE_UI_ORIGIN = "NATIVE_UI"
         private val TRANSACTION_LOCK = Any()
+        // Only an already validated native transaction may lend its connection to nested Registry calls.
+        private val ACTIVE_TRANSACTIONS = ThreadLocal.withInitial { mutableMapOf<String, SQLiteDatabase>() }
         private const val MAX_PAGE = 100
         private val SOURCE_COLUMNS = listOf("source_generation", "source_owner", "source_message", "source_batch",
             "source_call", "source_run", "source_process")
@@ -822,6 +824,9 @@ class WorkspaceRegistry(context: Context) : Closeable {
         return synchronized(TRANSACTION_LOCK) {
             val db = helper.writableDatabase
             db.beginTransaction()
+            val active = ACTIVE_TRANSACTIONS.get()
+            val ownsBinding = !active.containsKey(treeStorageIdentity)
+            if (ownsBinding) active[treeStorageIdentity] = db
             var primary: Throwable? = null
             try {
                 val result = block(db)
@@ -836,18 +841,30 @@ class WorkspaceRegistry(context: Context) : Closeable {
                     val original = primary
                     if (original == null) throw cleanup
                     if (original !== cleanup) original.addSuppressed(cleanup)
+                } finally {
+                    if (ownsBinding) {
+                        active.remove(treeStorageIdentity)
+                        if (active.isEmpty()) ACTIVE_TRANSACTIONS.remove()
+                    }
                 }
             }
         }
     }
 
     private class Helper(private val context: Context) {
+        private val identity = context.getDatabasePath(DATABASE_NAME).canonicalPath
         private var delegate: VersionedHelper? = null
         private var selectedVersion = 0
         val readableDatabase: SQLiteDatabase get() = open(false)
         val writableDatabase: SQLiteDatabase get() = open(true)
         private fun open(write: Boolean): SQLiteDatabase = synchronized(TRANSACTION_LOCK) {
             com.jarvys.agent.FreshStorageBootstrap.awaitReadyBlocking(context.filesDir)
+            ACTIVE_TRANSACTIONS.get()[identity]?.let { active ->
+                check(active.isOpen && active.inTransaction()) { "Registry transaction connection is no longer current" }
+                // Retain exact version/DDL checks, but never open a competing connection under our writer.
+                if (schema(active) != expectedSchema(active.version)) incompatible()
+                return@synchronized active
+            }
             val version = preflightFreshStorage(context)
             if (delegate == null || selectedVersion != version) {
                 delegate?.close()
