@@ -1,3 +1,7 @@
+# Estado actual: D3 final repetido; revisión de implementación pendiente
+
+El candidato `dd2a6296` repite los diez casos de clase preregistrados: Full105/0 y Play105/0, incluidos en Full1090/0 y Play1090/0, sin errores/omisiones. Binding idéntico1.981 archivos: `eaed237a147ce794d22a50b7e656112f6a3d9cb2fcb2953f074ed7082c59f722`. Admisión local habilitada sólo para aceptación; no PASS independiente ni entrega. [Checkpoint](BOT_PORTABILITY_P2_CANDIDATE.md). Lo siguiente conserva la cronología, incluidos estados OFF y fallos anteriores.
+
 # Fresh reconstruction pre-write gate — additive proof PASS, acceptance pending
 
 The exact seven classes in `BOT_PORTABILITY_P2_PREWRITE_CLASSES.json` are selected before execution, for both Full and Play on unchanged source. Fresh Full results are recorded below; matching Play is still pending. This is a focused compatibility gate, not the complete implementation acceptance suite or a recovery of prior test counts.

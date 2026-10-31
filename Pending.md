@@ -1,3 +1,11 @@
+## Estado vigente — candidato P2: Full/Play 1.090 casos; revisión independiente pendiente — 31-10-2026
+
+Fuente `dd2a629671c7e9584a6d4df18ee16f4b4fd2102e`: 117 clases y 1.090 pruebas por sabor, cero fallos/errores/omisiones; incluye D3 105 por sabor, no se suman. **No es todavía PASS independiente P2 ni autorización de entrega.** [Candidato, evidencia y límites](docs/BOT_PORTABILITY_P2_CANDIDATE.md).
+
+La indicación del usuario de revisar los defaults reales reemplaza el antiguo bloqueo por cuotas inventadas: se adapta OMB4/64/96/48 por ventana de progreso, no un límite global de llamadas ni presupuesto monetario obligatorio. Sin nueva política P4, cambios de menú, Chief heredado ni replay incierto. Upgrade actual v1→v2 aditivo y conservativo, no importación legacy/borrado; downgrade binario tras nuevas escrituras no soportado. v98 y sus artefactos permanecen intactos; no se afirma instalación, dispositivo ni proveedor vivo.
+
+Los apartados inferiores son históricos; sus solicitudes D2 antiguas no sustituyen el contrato actual basado en fuentes.
+
 ## Estado vigente — P1 y APK v98 aceptados en host; P2 espera decisión — 31-10-2026
 
 **PASS independiente P1 R3 en host** sobre `6bfd252a7e516cc25144194913a93b13b4dc8c67`: Full798/0 y Play798/0, 90 clases por sabor, cero errores u omisiones; focal independiente62/0 por sabor, no sumado. [Checkpoint público y límites](docs/BOT_PORTABILITY_P1_CHECKPOINT.md). D1 quedó resuelto para el roadmap aprobado por fases, sin anular los demás gates; Central único, generalistas, memoria nativa y menú v97 permanecen.
