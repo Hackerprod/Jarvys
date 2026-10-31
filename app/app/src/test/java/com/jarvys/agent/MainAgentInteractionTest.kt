@@ -1270,9 +1270,13 @@ class MainAgentInteractionTest {
             AgentRunUiState.resetSession(session)
             startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,original))
             assertTrue(awaitRunFinished(service,context));assertEquals(1,calls.get())
-            val event=chatTestStore.onDatabaseWorker { store.readConversationTimeline(session).last { it.kind=="assistant" && it.userMessageId==original } }
+            val prompt=chatTestStore.onDatabaseWorker {
+                val event=store.readConversationTimeline(session).last { it.kind=="assistant" && it.messageId.isNotBlank() }
+                requireNotNull(store.regenerateAssistantIfLatest(session,event.messageId))
+            }
+            assertEquals(original,prompt.userMessageId)
             assertTrue(chatTestStore.onDatabaseWorker { store.handledConversationMessageIds(session,listOf(original)).contains(original) })
-            AgentForegroundService.startRegenerateAssistant(context,event.text,arrayListOf(),session,event.userMessageId,event.resumeReceipt)
+            AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),session,prompt.userMessageId,prompt.resumeReceipt)
             deliverStartedServices(context)
             assertTrue(awaitServiceCallback(regenerationEntered,5))
             assertEquals(2,owners.size);assertEquals(2,binds.get())
