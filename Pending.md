@@ -1,4 +1,18 @@
-## Prioridad vigente — memoria de Central y de cada workspace — 30-10-2026
+## Prioridad vigente — restauración acotada del menú y Workspaces — 30-10-2026
+
+**v97, candidato 6: Full146/0 y Play146/0**, 28 clases por sabor, cero errores y omisiones; focal21/0 por sabor separado. Revisión independiente de fuentes, artefactos, resultados y captura de la Activity real en host: PASS acotado. Código `bc3639918b36cf0af7831d057c29b90e6f43001e`. Los intentos intermedios y sus fallos de fixtures se conservan, no se suman a este resultado.
+
+El usuario autorizó quitar los chats legacy e integrar la memoria; **todo lo demás debía conservar su diseño y comportamiento**. La simplificación del panel en S2 (`09bd1352`) y la retirada de rutas y controles de Workspaces en S4 (`5ac859b7`) excedieron ese alcance. Se restauran la estructura anterior del panel, **Agente/Central, Workspaces, Bots, Tareas programadas**, y el pie de perfil/Ajustes, conservando el acceso a memoria. Sólo siguen retirados crear/buscar/listar chats legacy; no se añade un rediseño.
+
+Workspaces recupera catálogo, detalle/historial, archivos autorizados de lectura, preview live y controles existentes de tarea/compositor, con identidad durable y permisos actuales. Abrir estas vistas no crea raíces ni runtimes ni revive autoridad histórica; los controles usan el worker autorizado actual. La disponibilidad de decisiones interactivas sigue en Central, no en el antiguo capitán de workspace eliminado. No se revierte Engram ni se añaden funciones auxiliares.
+
+La cohorte actual incluye continuidad de memoria de workspace entre dos compactaciones, reapertura y nueva tarea, además de captura/sesión/flujo Central. El proveedor es guionado: no demuestra selección autónoma, proveedor real, meses transcurridos, reinicio físico ni paridad integral upstream. La evidencia previa del núcleo candidato11 (Full215/0, Play215/0) permanece histórica, separada y no sumada. P5-M sigue aislado; F36/P5, Git/P6 y la paridad total continúan abiertos.
+
+**APK verificado:** `Jarvys-v97-full-arm64-menu-restored-debug.apk`, versionCode97 / `1.2.90-MENU-RESTORE`, Full ARM64, firma DEBUG original D7, 40.652.731 bytes, SHA256 `b512bbc15658271fb77cd2d58be2d62a31a105b269891debbb80cd3c6d003451`. Inspección independiente de firma, alineación, recursos y plantilla: PASS. ZIP lossless en tres partes de 16.777.216 / 16.777.216 / 5.117.804 bytes; reconstrucción y extracción verifican exactamente el APK. **Entrega v97 aceptada por el canal el 30-10-2026 a las 23:59:55 UTC**, con tres adjuntos confirmados en la lectura del mensaje. No se afirma descarga, extracción ni instalación del usuario; las tres partes v97 deben conservarse juntas, sin mezclarlas con v96. La instalación y aceptación física de esta corrección siguen pendientes; no se solicita desinstalar ni borrar datos.
+
+El usuario informó haber instalado v96 y mostró la regresión; eso no sustituye una validación física independiente. Los bloques siguientes son históricos y no autorizan ampliar el alcance ni retirar otros controles.
+
+## Histórico — núcleo de memoria de Central y de cada workspace — 30-10-2026
 
 **Candidato 11: PASS de ejecución acotado, Full215/0 y Play215/0**, 25 clases por sabor, cero errores y omisiones; revisión independiente final PASS. Código `71f30940e0fa9724cc36841232949caffbf3f08b`. Focal69/0 por sabor separado, no sumado a la cohorte final; fuentes y artefactos sellados. No PASS global de Engram; entrega del APK ARM64 en tres partes aceptada por el canal, sin descarga ni instalación comprobadas. Los resultados de candidatos anteriores no se suman para declarar PASS.
 

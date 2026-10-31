@@ -85,8 +85,6 @@ fun SettingsWorkspace(
                 memoryEnabled = memoryEnabled,
                 memoryUsedCharacters = memoryUsedCharacters,
                 onMemory = onMemory,
-                onBots = onBots,
-                onScheduledTasks = onScheduledTasks,
                 onAppearance = { appearanceChoiceOpen = true },
                 onLanguage = { languageChoiceOpen = true },
                 onPreferences = { onNavigate(SettingsWorkspacePage.PREFERENCES) },
@@ -142,8 +140,6 @@ private fun SettingsIndex(
     memoryEnabled: Boolean,
     memoryUsedCharacters: Int,
     onMemory: () -> Unit,
-    onBots: () -> Unit,
-    onScheduledTasks: () -> Unit,
     onAppearance: () -> Unit,
     onLanguage: () -> Unit,
     onPreferences: () -> Unit,
@@ -162,12 +158,6 @@ private fun SettingsIndex(
             R.string.memory_settings_summary_on, memoryUsedCharacters.coerceAtLeast(0), MemoryConstants.MAX_CORE_MEMORY_CHARACTERS,
         ) else stringResource(R.string.memory_settings_summary_off)
         SettingsIndexRow(LucideIcons.Brain, stringResource(R.string.memory_title), memorySubtitle, onMemory)
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Bot, stringResource(R.string.drawer_bots), null, onBots,
-            testTag = "settings-bots-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Calendar, stringResource(R.string.drawer_scheduled_tasks), null, onScheduledTasks,
-            testTag = "settings-scheduled-tasks-row")
         SettingsRule()
         SettingsIndexRow(LucideIcons.SunMoon, stringResource(R.string.settings_color_mode),
             stringResource(themeResource(themeMode)), onAppearance, testTag = "settings-color-mode-row")

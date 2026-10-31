@@ -1,0 +1,22 @@
+<resources>
+<string name="drawer_chat_actions">Opciones de %1$s</string>
+    <plurals name="workspace_coordination_uncertain">
+        <item quantity="one">%1$d intento de respuesta tiene resultado incierto. No reenviar automáticamente.</item>
+        <item quantity="many">%1$d intentos de respuesta tienen resultado incierto. No reenviar automáticamente.</item>
+        <item quantity="other">%1$d intentos de respuesta tienen resultado incierto. No reenviar automáticamente.</item>
+    </plurals>
+    <plurals name="workspace_coordination_pending">
+        <item quantity="one">%1$d entrada de coordinación espera confirmación.</item>
+        <item quantity="many">%1$d entradas de coordinación esperan confirmación.</item>
+        <item quantity="other">%1$d entradas de coordinación esperan confirmación.</item>
+    </plurals>
+    <string name="workspace_coordination_unavailable">La evidencia de coordinación no está disponible. No se repitió trabajo.</string>
+    <string name="workspace_file_unavailable">No se pudo leer el archivo o la página. Su ámbito, revisión o formato puede haber cambiado.</string>
+    <string name="workspace_coding_files">Archivos del proyecto</string>
+    <string name="workspace_shared_files">Archivos compartidos del espacio</string>
+    <string name="workspace_file_read_only">Vista de archivos de solo lectura. Los lectores existentes comprueban ámbito y límites de página.</string>
+    <string name="workspace_parent_folder">Volver a la carpeta</string>
+    <string name="workspace_next_page">Página siguiente</string>
+
+    <string name="workspace_control_failed">No se pudo confirmar el control. Consulta el espacio antes de intentar otra acción.</string>
+</resources>

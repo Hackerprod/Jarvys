@@ -78,6 +78,55 @@ private fun ScopedSnapshotScreen(token: String, sessionId: String?, modifier: Mo
             }.getOrNull(), true)
         }
     }
+    PreviewContentScreen(loaded, modifier)
+}
+
+/** The existing live workspace viewer, admitted only by a current registered durable identity. */
+@Composable
+fun RegisteredWorkspacePreviewScreen(workspaceId: String, projectId: String, sessionId: String,
+                                     modifier: Modifier = Modifier) {
+    key(workspaceId, projectId, sessionId) {
+        val context = LocalContext.current
+        val loaded by produceState(PreviewLoad(), workspaceId, projectId, sessionId) {
+            value = withContext(Dispatchers.IO) {
+                PreviewLoad(runCatching {
+                    val workspace = readOnlyRegisteredPreviewWorkspace(context, workspaceId, projectId, sessionId)
+                    require(workspace.hasIndexHtml())
+                    WorkspacePreviewContent(context.applicationContext, workspace)
+                }.getOrNull(), true)
+            }
+        }
+        PreviewContentScreen(loaded, modifier)
+    }
+}
+
+/** No skills, connectors, runtime preparation, workspace creation or arbitrary project fallback. */
+internal fun readOnlyRegisteredPreviewWorkspace(context: Context, workspaceId: String,
+                                                projectId: String, sessionId: String): WorkspaceStore {
+    val app = context.applicationContext
+    val database = app.getDatabasePath(com.jarvys.agent.workspaces.WorkspaceRegistry.DATABASE_NAME)
+    val databaseStat = try { android.system.Os.lstat(database.path) }
+        catch (missing: android.system.ErrnoException) {
+            if (missing.errno == android.system.OsConstants.ENOENT) null else throw missing
+        }
+    require(databaseStat != null && android.system.OsConstants.S_ISREG(databaseStat.st_mode))
+    com.jarvys.agent.workspaces.WorkspaceRegistry(app).use { registry ->
+        val workspace = requireNotNull(registry.getWorkspace(workspaceId))
+        require(workspace.ownerCentralSessionId == com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION)
+        require(workspace.executionSessionId == sessionId &&
+            sessionId == com.jarvys.agent.workspaces.WorkspaceIdentity.executionSessionId(workspaceId))
+        require(projectId == WorkspaceStore.projectIdForSession(sessionId))
+    }
+    val root = StorageGeneration(app.filesDir.canonicalFile).directory("workspaces")
+    val project = File(root, projectId)
+    require(root.isDirectory && project.isDirectory)
+    require(root.canonicalFile == root.absoluteFile && project.canonicalFile == project.absoluteFile)
+    return WorkspaceStore(root, projectId).withoutAttachments()
+}
+
+@Composable
+private fun PreviewContentScreen(loaded: PreviewLoad, modifier: Modifier) {
+    val context = LocalContext.current
     val content = loaded.content
     if (content == null) {
         Box(modifier.fillMaxSize().testTag("workspace-preview-status"), contentAlignment = Alignment.Center) {

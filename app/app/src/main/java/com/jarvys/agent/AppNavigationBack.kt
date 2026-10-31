@@ -25,6 +25,10 @@ data class AppRouteMeta(
 /** Route names are the single source used by MainActivity's graph and back/title/action metadata. */
 object AppNavigationBackPolicy {
     const val CHAT_ROOT = "chat"
+    const val WORKSPACES = "workspaces"
+    const val COORDINATED_WORKSPACE = "workspace/{workspaceId}"
+    const val COORDINATED_FILES = "workspace/{workspaceId}/files"
+    const val WORKSPACE_SESSION_PREVIEW = "workspace-preview/{workspaceId}/{sessionId}/{projectId}"
     const val SETTINGS = "settings"
     const val SETTINGS_PREFERENCES = "settings/preferences"
     const val SETTINGS_DEVELOPER = "settings/developer"
@@ -65,20 +69,24 @@ object AppNavigationBackPolicy {
     fun providerService(serviceId: String) = "providers/service/${android.net.Uri.encode(serviceId)}"
 
     val registeredRoutePatterns = listOf(
-        CHAT_ROOT, SETTINGS, SETTINGS_PREFERENCES, SETTINGS_DEVELOPER, SETTINGS_STORAGE, SETUP_WIZARD,
+        CHAT_ROOT, WORKSPACES, COORDINATED_WORKSPACE, COORDINATED_FILES, WORKSPACE_SESSION_PREVIEW, SETTINGS, SETTINGS_PREFERENCES, SETTINGS_DEVELOPER, SETTINGS_STORAGE, SETUP_WIZARD,
         PROVIDERS, PROVIDERS_OPENAI, PROVIDERS_OPENROUTER, PROVIDERS_CUSTOM, PROVIDERS_SERVICE,
         MCP_LIST, MCP_NEW, MCP_SERVER, MCP_SERVER_EDIT, SKILLS, MODULES, CONNECTORS,
         CONNECTOR_DEVICE, CONNECTOR_REMOTE, CONNECTOR_GOOGLE, MEMORY,
         TASKS, TASK_DETAIL,
         BOTS, CREW, CREW_BOT, ARTIFACT_PREVIEW, MODULE_ARTIFACT_VIEWER,
     )
-    val rootRoutes = setOf(CHAT_ROOT)
+    val rootRoutes = setOf(CHAT_ROOT, WORKSPACES)
 
     fun requiresBack(route: String): Boolean = route !in rootRoutes
 
     fun metadata(context: Context, route: String, chatTitle: String, crewBotTitle: String?,
                  detailTitle: String?): AppRouteMeta = when (route) {
         CHAT_ROOT -> AppRouteMeta(chatTitle, isRoot = true, action = AppRouteAction.CHAT)
+        WORKSPACES -> AppRouteMeta(context.getString(R.string.workspace_sidebar_heading), true)
+        COORDINATED_WORKSPACE -> AppRouteMeta(context.getString(R.string.workspace_title), false)
+        COORDINATED_FILES -> AppRouteMeta(context.getString(R.string.workspace_open_files), false)
+        WORKSPACE_SESSION_PREVIEW -> AppRouteMeta(context.getString(R.string.chat_open_preview), false)
         SETTINGS -> AppRouteMeta(context.getString(R.string.drawer_settings), false)
         SETTINGS_PREFERENCES -> AppRouteMeta(context.getString(R.string.settings_preferences), false)
         SETTINGS_DEVELOPER -> AppRouteMeta(context.getString(R.string.settings_developer), false)

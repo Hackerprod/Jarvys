@@ -1,0 +1,20 @@
+<resources>
+<string name="drawer_chat_actions">Actions for %1$s</string>
+    <plurals name="workspace_coordination_uncertain">
+        <item quantity="one">%1$d reply attempt has an uncertain outcome. Do not resend automatically.</item>
+        <item quantity="other">%1$d reply attempts have an uncertain outcome. Do not resend automatically.</item>
+    </plurals>
+    <plurals name="workspace_coordination_pending">
+        <item quantity="one">%1$d coordination input is awaiting acknowledgement.</item>
+        <item quantity="other">%1$d coordination inputs are awaiting acknowledgement.</item>
+    </plurals>
+    <string name="workspace_coordination_unavailable">Coordination evidence is unavailable. No work was repeated.</string>
+    <string name="workspace_file_unavailable">This file or page could not be read. Its scope, revision or format may have changed.</string>
+    <string name="workspace_coding_files">Project files</string>
+    <string name="workspace_shared_files">Shared workspace files</string>
+    <string name="workspace_file_read_only">Read-only file view. Existing readers enforce scope and page limits.</string>
+    <string name="workspace_parent_folder">Back to folder</string>
+    <string name="workspace_next_page">Next page</string>
+
+    <string name="workspace_control_failed">The workspace control could not be confirmed. Inspect the workspace before trying another action.</string>
+</resources>

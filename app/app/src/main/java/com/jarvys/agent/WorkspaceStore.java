@@ -480,7 +480,16 @@ public final class WorkspaceStore {
         synchronized (projectLock) { return listLocked(relativePath); }
     }
 
+    /** Read-only browsing: never recreates a missing workspace root. */
+    public List<String> listExisting(String relativePath) {
+        synchronized (projectLock) { return listLocked(relativePath, false); }
+    }
+
     private List<String> listLocked(String relativePath) {
+        return listLocked(relativePath, true);
+    }
+
+    private List<String> listLocked(String relativePath, boolean createMissingRoot) {
         ensureDelegatedRoot();
         boolean projectRoot = isProjectRoot(relativePath);
         String normalized = projectRoot ? "." : normalizePath(relativePath);
@@ -490,7 +499,7 @@ public final class WorkspaceStore {
             if (skillRelative != null) return listSkills(skillRelative);
         }
         File directory = projectRoot ? root : resolveExisting(relativePath);
-        if (!directory.exists() && projectRoot) directory.mkdirs();
+        if (!directory.exists() && projectRoot && createMissingRoot) directory.mkdirs();
         if (!directory.isDirectory()) throw new IllegalArgumentException("Workspace path is not a directory");
         File[] children = directory.listFiles();
         if (children == null) throw new IllegalStateException("Could not list workspace directory");

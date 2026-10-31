@@ -1,0 +1,4 @@
+<resources>
+    <string name="drawer_agent">Agente</string>
+    <string name="drawer_local_profile">Perfil local</string>
+</resources>

@@ -57,6 +57,11 @@ fun JarvysRouteTopBar(
     mascotLiveConversationVisible: Boolean = false,
     mascotSurfaceVisible: Boolean = true,
     centralMascotCentered: Boolean = false,
+    conversationActionsEnabled: Boolean = true,
+    workspaceMenuActionTitle: String? = null,
+    onWorkspaceMenuAction: () -> Unit = {},
+    workspaceBotsActionTitle: String? = null,
+    onWorkspaceBotsAction: () -> Unit = {},
 ) {
     val reducedMotion = LocalReducedMotion.current
     if (!route.showTopBar) return
@@ -106,20 +111,42 @@ fun JarvysRouteTopBar(
             controlledMenuOpen = accountMenuOpen,
             onMenuOpenChange = { accountMenuOpen = it },
         ) { closeMenu ->
-            DropdownMenuItem(
-                text = { Text(stringResource(if (compacting) R.string.compaction_running else R.string.compaction_menu)) },
-                leadingIcon = { Icon(LucideIcons.Layers2, contentDescription = null,
-                    modifier = Modifier.testTag("topbar-compaction-action-icon")) },
-                enabled = canCompact,
-                modifier = Modifier.testTag("topbar-compaction-action"),
-                onClick = { closeMenu(); onCompact() },
-            )
-            DropdownMenuItem(text = { Text(stringResource(R.string.reflection_menu)) },
-                leadingIcon = { Icon(LucideIcons.Brain, contentDescription = null,
-                    modifier = Modifier.testTag("topbar-reflection-action-icon")) },
-                enabled = canReflect,
-                modifier = Modifier.testTag("topbar-reflection-action"),
-                onClick = { closeMenu(); onReflect() })
+            workspaceMenuActionTitle?.takeIf(String::isNotBlank)?.let { actionTitle ->
+                DropdownMenuItem(
+                    text = { Text(actionTitle) },
+                    leadingIcon = { Icon(LucideIcons.FileText, contentDescription = null,
+                        modifier = Modifier.testTag("workspace/topbar-action-icon")) },
+                    enabled = conversationActionsEnabled,
+                    modifier = Modifier.testTag("workspace/topbar-action"),
+                    onClick = { closeMenu(); onWorkspaceMenuAction() },
+                )
+            }
+            workspaceBotsActionTitle?.takeIf(String::isNotBlank)?.let { actionTitle ->
+                DropdownMenuItem(
+                    text = { Text(actionTitle) },
+                    leadingIcon = { Icon(LucideIcons.Bot, contentDescription = null,
+                        modifier = Modifier.testTag("workspace/topbar-bots-icon")) },
+                    enabled = conversationActionsEnabled,
+                    modifier = Modifier.testTag("workspace/topbar-bots-action"),
+                    onClick = { closeMenu(); onWorkspaceBotsAction() },
+                )
+            }
+            if (workspaceMenuActionTitle == null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(if (compacting) R.string.compaction_running else R.string.compaction_menu)) },
+                    leadingIcon = { Icon(LucideIcons.Layers2, contentDescription = null,
+                        modifier = Modifier.testTag("topbar-compaction-action-icon")) },
+                    enabled = canCompact,
+                    modifier = Modifier.testTag("topbar-compaction-action"),
+                    onClick = { closeMenu(); onCompact() },
+                )
+                DropdownMenuItem(text = { Text(stringResource(R.string.reflection_menu)) },
+                    leadingIcon = { Icon(LucideIcons.Brain, contentDescription = null,
+                        modifier = Modifier.testTag("topbar-reflection-action-icon")) },
+                    enabled = canReflect,
+                    modifier = Modifier.testTag("topbar-reflection-action"),
+                    onClick = { closeMenu(); onReflect() })
+            }
         }
     }
     val navigationIcon: @Composable () -> Unit = {
