@@ -122,7 +122,7 @@ class RoomTreeProvenanceCompatibilityTest {
     @Test fun nativeV98AuxiliaryObjectsAndDataAreConservedWithoutRebuild() {
         val file=file("room-v1-native-auxiliary");createV1(file,false)
         open(file).use { db ->
-            DatabaseTriggers.create(db,context,false)
+            JarvysChatDatabaseProvider.DatabaseTriggers.create(db,context,false)
             assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true))
             fun objects()=raw(db).query("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name<>'room_master_table' ORDER BY type,name").use { c ->
                 buildList { while(c.moveToNext())add(listOf(c.getString(0),c.getString(1),c.getString(2))) }
@@ -159,7 +159,7 @@ class RoomTreeProvenanceCompatibilityTest {
         val owner="00000000-0000-0000-0000-000000000001"
         val session=com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
         val before=open(migrated).use { connection ->
-            DatabaseTriggers.create(connection,context,false)
+            JarvysChatDatabaseProvider.DatabaseTriggers.create(connection,context,false)
             connection.execSQL("PRAGMA foreign_keys=ON")
             val sql=raw(connection)
             sql.execSQL("INSERT INTO conversations(id,kind,pinned,archived,created_at,updated_at,last_message_at,message_count,next_seq,history_revision) VALUES(?,'chat',0,0,1000,1000,1000,1,2,1)",arrayOf(session))
@@ -218,7 +218,7 @@ class RoomTreeProvenanceCompatibilityTest {
         )
         mutations.forEachIndexed { index,mutate ->
             val file=file("room-v1-trigger-$index");createV1(file,false)
-            open(file).use { db ->DatabaseTriggers.create(db,context,false);raw(db).execSQL("INSERT INTO storage_meta(key,value) VALUES('retained','unchanged')");mutate(db) }
+            open(file).use { db ->JarvysChatDatabaseProvider.DatabaseTriggers.create(db,context,false);raw(db).execSQL("INSERT INTO storage_meta(key,value) VALUES('retained','unchanged')");mutate(db) }
             val before=file.readBytes()
             open(file).use { db ->
                 assertThrows(RoomCurrentSchemaUnavailable::class.java){upgrade(db)}
