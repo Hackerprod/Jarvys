@@ -8,5 +8,5 @@ internal object WorkspaceTreePolicy {
     const val MAX_EXECUTIONS=96L
     const val MAX_WAKES=48L
     // Fresh reconstruction: remains OFF until independent design + exact prewrite D3 proof.
-    fun admissionEnabled():Boolean=false
+    @JvmStatic fun admissionEnabled():Boolean=false
 }

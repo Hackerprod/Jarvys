@@ -199,6 +199,15 @@ class WorkspaceCoordinator internal constructor(context: Context,
                 "Delegation key conflicts with its original continuation mode"
             }
         }
+        // Exact duplicate observation is not new admission and never adopts/replays a historical row.
+        val observed = registry().use { store ->
+            store.existingAssignment(workspaceId,key,requestId,originalUserRequest,role,mission,tools,name,CrewMissionAccess.parse(missionAccess))
+        }
+        if(observed!=null && observed.state!=WorkspaceAssignmentState.PREPARED) {
+            token.throwIfCancelled();admission.run()
+            context?.existing(EffectInvocation.EffectReferenceKind.ASSIGNMENT,workspaceId,observed.assignmentId)
+            return assignmentJson(observed,null,2000)
+        }
         if (WorkspaceTreePolicy.admissionEnabled()) return delegateTreeCentral(workspaceId,key,role,mission,tools,name,missionAccess,requestId,originalUserRequest,token,admission,context,continueResult)
         var sourcePrepared: WorkspaceAssignment? = null
         if (context != null) {

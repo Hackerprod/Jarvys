@@ -176,6 +176,74 @@ class WorkspaceTreeStoreTest {
         denied {WorkspaceTreeControlStore(tree).claim(TreeNodeFence.of(done),control.requestId,"process",true,certificate(scope.workspaceId),Runnable {})}
         assertEquals(WorkspaceControlState.PENDING,registry.getControl(control.requestId)!!.state)
     }
+    @Test fun cancellationCaptureRejectsSiblingInjectionEvenIfItsOwnDigestIsRepaired() {
+        val central=root();val scope=workspace();val parent=running(queued(central,scope,"capture-parent"))
+        val child=running(queued(parent,scope,"capture-child"));val sibling=running(queued(central,scope,"capture-sibling"))
+        tree.cancelSubtree(TreeNodeFence.of(parent),"CANCELLED","capture-request")
+        val captureKey=WorkspaceTreeStore.identity("cancel-capture","capture-request")
+        val original=registry.treeRead {db -> tree.event(db,parent.rootId,captureKey)!!}
+        val forged=JSONObject(original);forged.getJSONArray("targets").put(JSONObject().put("root",sibling.rootId).put("node",sibling.nodeId)
+            .put("parent",sibling.parentNodeId).put("workspace",sibling.workspaceId).put("assignment",sibling.assignmentId)
+            .put("bot",sibling.botId).put("cycle",sibling.cycleId).put("assignmentRevision",sibling.assignmentRevision))
+        val raw=WorkspaceTreeEvidenceStore.canonical(forged)
+        for(repairOwnDigest in listOf(false,true)) {
+            registry.treeTransaction {db ->db.execSQL("UPDATE bot_tree_event SET receipt=?,payload_digest=? WHERE root_id=? AND event_key=?",
+                arrayOf(raw,WorkspaceTreeStore.identity(if(repairOwnDigest)raw else original),parent.rootId,captureKey))}
+            var callbacks=0
+            val failure=runCatching {tree.cancelSubtree(TreeNodeFence.of(parent),"CANCELLED","capture-request") {callbacks++}}.exceptionOrNull()
+            assertTrue("Corruption must surface: $failure",failure is TreeIntegrityException);assertEquals(0,callbacks)
+        }
+        assertEquals(sibling,tree.requireDispatch(TreeNodeFence.of(sibling)))
+        assertNotEquals(child.nodeId,sibling.nodeId)
+    }
+    @Test fun cancellationReplayRejectsFullEventMetadataMutationBeforeAnyCleanup() {
+        val central=root();val scope=workspace();val parent=running(queued(central,scope,"metadata-parent"))
+        val sibling=running(queued(central,scope,"metadata-sibling"))
+        tree.cancelSubtree(TreeNodeFence.of(parent),"CANCELLED","metadata-request")
+        val mutations=mapOf("kind" to "OTHER","node_id" to sibling.nodeId,"cycle_id" to "replacement-cycle",
+            "source_receipt" to "other-request","payload_ref" to sibling.nodeId,"payload_digest" to "b".repeat(64),
+            "node_revision" to 999L,"wait_id" to "unrelated-wait")
+        for(kind in listOf("cancel-capture","cancel-request")) {
+            val key=WorkspaceTreeStore.identity(kind,"metadata-request")
+            for((column,changed) in mutations) {
+                val old=registry.treeRead {db -> WorkspaceTreeStore.one(db,"bot_tree_event","root_id=? AND event_key=?",arrayOf(parent.rootId,key)) {c ->
+                    val i=c.getColumnIndexOrThrow(column);if(c.isNull(i))null else if(column=="node_revision")c.getLong(i) else c.getString(i)
+                }}
+                registry.treeTransaction {db ->db.execSQL("UPDATE bot_tree_event SET $column=? WHERE root_id=? AND event_key=?",arrayOf(changed,parent.rootId,key))}
+                try {
+                    var callbacks=0
+                    val failure=runCatching {tree.cancelSubtree(TreeNodeFence.of(parent),"CANCELLED","metadata-request") {callbacks++}}.exceptionOrNull()
+                    assertTrue("$kind/$column must reject: $failure",failure is TreeIntegrityException);assertEquals(0,callbacks)
+                } finally {registry.treeTransaction {db ->db.execSQL("UPDATE bot_tree_event SET $column=? WHERE root_id=? AND event_key=?",arrayOf(old,parent.rootId,key))}}
+            }
+        }
+    }
+    @Test fun cancellationCaptureRequiresRootedActualAncestryAndStrictVersionEvenWithReboundDigests() {
+        val central=root();val scope=workspace();val parent=running(queued(central,scope,"ancestry-parent"))
+        val child=running(queued(parent,scope,"ancestry-child"));val sibling=running(queued(central,scope,"ancestry-sibling"))
+        tree.cancelSubtree(TreeNodeFence.of(parent),"CANCELLED","ancestry-request")
+        val captureKey=WorkspaceTreeStore.identity("cancel-capture","ancestry-request");val requestKey=WorkspaceTreeStore.identity("cancel-request","ancestry-request")
+        val originals=registry.treeRead {db -> tree.event(db,parent.rootId,captureKey)!! to tree.event(db,parent.rootId,requestKey)!!}
+        for(case in listOf("outside-parent","cycle","version-string","request-version-string")) {
+            val capture=JSONObject(originals.first);val request=JSONObject(originals.second)
+            val childRow=(0 until capture.getJSONArray("targets").length()).map {capture.getJSONArray("targets").getJSONObject(it)}.single {it.getString("node")==child.nodeId}
+            when(case) {
+                "outside-parent"->childRow.put("parent",sibling.nodeId)
+                "cycle"->childRow.put("parent",child.nodeId)
+                "version-string"->capture.put("version","1")
+                else->request.put("version","1")
+            }
+            val raw=WorkspaceTreeEvidenceStore.canonical(capture);request.put("captureSha256",WorkspaceTreeStore.identity(raw))
+            val bound=WorkspaceTreeEvidenceStore.canonical(request)
+            registry.treeTransaction {db ->
+                db.execSQL("UPDATE bot_tree_event SET receipt=?,payload_digest=? WHERE root_id=? AND event_key=?",arrayOf(raw,WorkspaceTreeStore.identity(raw),parent.rootId,captureKey))
+                db.execSQL("UPDATE bot_tree_event SET receipt=?,payload_digest=? WHERE root_id=? AND event_key=?",arrayOf(bound,WorkspaceTreeStore.identity(bound),parent.rootId,requestKey))
+            }
+            var callbacks=0
+            val failure=runCatching {tree.cancelSubtree(TreeNodeFence.of(parent),"CANCELLED","ancestry-request") {callbacks++}}.exceptionOrNull()
+            assertTrue("$case must reject: $failure",failure is TreeIntegrityException);assertEquals(0,callbacks)
+        }
+    }
     @Test fun preparedFreshCentralRetryConservesChargeSourceAndOnlyRecordsDistinctTrigger() {
         val parent=root();val scope=workspace()
         fun source(call:String)=CentralInvocationSource(origin.storageGeneration,origin.ownerCentralSessionId,origin.originUserMessageId,"batch-$call",call,"native-runtime-run-distinct-from-cycle","process")
