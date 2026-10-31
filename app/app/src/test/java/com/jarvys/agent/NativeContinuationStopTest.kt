@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Mission Stop-all has no captain callback; the DONE child's native hook owns exact cancellation. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = CentralFlowTestApplication::class, shadows = [ArtifactOsShadow::class])
+@Config(sdk = [34], application = TreeNativeTestApplication::class, shadows = [ArtifactOsShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class NativeContinuationStopTest {
     private val storage = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
@@ -50,6 +50,8 @@ class NativeContinuationStopTest {
         val store = LocalRunStore(context)
         val scope = storage.onDatabaseWorker {
             FreshStorageBootstrap.ensure(context)
+            (context as TreeNativeTestApplication).connectionAccess().initializeAsync().get()
+            check((context as TreeNativeTestApplication).connectionAccess().isReady())
             ChatDatabaseBridge.getInstance(context).ensureConversationSync(central, "chat")
             WorkspaceRegistry(context).use { it.createWorkspace(UUID.randomUUID().toString(), "Itinerary stop") }.also {
                 ChatDatabaseBridge.getInstance(context).ensureConversationSync(it.executionSessionId, "workspace")

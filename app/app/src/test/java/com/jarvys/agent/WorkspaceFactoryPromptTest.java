@@ -44,7 +44,9 @@ public class WorkspaceFactoryPromptTest {
   @Test public void coordinationGuidanceRequiresDeclaredCentralToolAndKeepsLocalNoticeSemantics() {
     String central = runtime.instructions(new CoreToolRegistry(
         Collections.singletonList(new Stub("workspaces"))), true);
-    assertTrue(central.contains("Local metadata notices do not launch model turns"));
+    assertTrue(central.contains("Opening a workspace does not authorize recovery or new work"));
+    assertTrue(central.contains("Worker messages arrive as attributed internal conversation inputs"));
+    assertTrue(central.contains("only to inspect retained evidence and receipts"));
     assertTrue(central.contains("results/read_result"));
     assertTrue(central.contains("inbox/read_message"));
     assertTrue(central.contains("reply only to an eligible live request"));
@@ -52,7 +54,7 @@ public class WorkspaceFactoryPromptTest {
     assertTrue(central.contains("do not read the inbox first"));
     assertFalse(central.contains("There is no automatic background delivery"));
     String ordinary = runtime.instructions(new CoreToolRegistry(Collections.emptyList()), true);
-    assertFalse(ordinary.contains("Local metadata notices do not launch model turns"));
+    assertFalse(ordinary.contains("Worker messages arrive as attributed internal conversation inputs"));
   }
 
   @Test public void enabledCrewRoutesFactoryWhileOffDoesNotPromiseAWorker() {

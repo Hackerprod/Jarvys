@@ -19,7 +19,7 @@ import org.robolectric.annotation.SQLiteMode
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, shadows = [ArtifactOsShadow::class])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class CentralAgentInputCatalogTest {
     @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)

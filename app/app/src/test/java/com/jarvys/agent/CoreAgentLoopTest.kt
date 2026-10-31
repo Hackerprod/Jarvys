@@ -8,7 +8,7 @@ import org.junit.Test
 import java.util.concurrent.atomic.AtomicReference
 
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
-@org.robolectric.annotation.Config(sdk = [28])
+@org.robolectric.annotation.Config(sdk = [28], shadows = [ArtifactOsShadow::class])
 class CoreAgentLoopTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore()
 

@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = CentralFlowTestApplication::class, shadows = [ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
+@Config(sdk = [34], application = TreeNativeTestApplication::class, shadows = [ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class AgentForegroundServiceMainThreadAdmissionTest {
     @get:Rule val chatTestStore = ChatTestStore(
@@ -50,7 +50,11 @@ class AgentForegroundServiceMainThreadAdmissionTest {
             val context = ApplicationProvider.getApplicationContext<Context>()
             secretStoreField.set(null, SecretStore(
                 context.getSharedPreferences("main-thread-admission-secrets", Context.MODE_PRIVATE)))
-            chatTestStore.onDatabaseWorker { FreshStorageBootstrap.ensure(context) }
+            chatTestStore.onDatabaseWorker {
+                FreshStorageBootstrap.ensure(context)
+                (context as TreeNativeTestApplication).connectionAccess().initializeAsync().get()
+                check((context as TreeNativeTestApplication).connectionAccess().isReady())
+            }
             val store = LocalRunStore(context)
             val suffix = System.nanoTime().toString()
             val agentSession = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION

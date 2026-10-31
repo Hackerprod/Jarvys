@@ -499,6 +499,10 @@ class WorkspaceCoordinator internal constructor(context: Context,
         mutation.requireTreeAdmission();admission.run()
         val capability=requireNotNull(mutation.treeAdmission)
         val rootId=capability.rootId()
+        // Ephemeral aliases cannot produce a resumable native checkpoint. No queued charge or manager lookup.
+        require(!role.equals("custom",ignoreCase=true)) {
+            "Native workspace delegation requires a saved versioned profile ID; save a custom profile first"
+        }
         val request=TreeChildRequest(workspaceId,key,requestId,originalUserRequest,role,mission,tools,name,
             if(CrewMissionAccess.parse(missionAccess)==CrewMissionAccess.READ_ONLY) TreeMode.CONSULT else TreeMode.WORK,
             if(continueResult) TreeReply.AWAIT else TreeReply.NONE,WorkspaceTreeStore.centralReceipt(requireNotNull(mutation.rootSource)),mutation.rootSource)

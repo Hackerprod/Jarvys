@@ -37,6 +37,25 @@ class WorkspaceTreeStoreTest {
     private fun certificate(scope:String)=JSONObject().put("originCheckpointSha256",hash).put("originScopeIdentity","native-workspace:$scope")
         .put("originSavedAtMs",123L).put("profileSha256",hash).put("transcriptSha256",hash)
         .put("toolLifecycleSha256",hash).put("artifactOwnershipSha256",hash).toString()
+    @Test fun admissionKeysAreWorkspaceScopedWhileSameWorkspaceReplayIsExact() {
+        val parent = root()
+        val a = workspace(); val b = workspace()
+        val first = queued(parent, a, "same-key")
+        val second = queued(tree.getNode(parent.rootId, parent.nodeId)!!, b, "same-key")
+        assertNotEquals(first.nodeId, second.nodeId)
+        assertEquals(a.workspaceId, first.workspaceId); assertEquals(b.workspaceId, second.workspaceId)
+        val before = tree.getRoot(parent.rootId)!!
+        val repeated = queued(tree.getNode(parent.rootId, parent.nodeId)!!, a, "same-key")
+        assertEquals(first, repeated)
+        assertEquals(before, tree.getRoot(parent.rootId))
+        val changed = request(a, "same-key").copy(mission = "Different task")
+        assertThrows(TreeIntegrityException::class.java) {
+            tree.admitChild(TreeNodeFence.of(tree.getNode(parent.rootId, parent.nodeId)!!), changed)
+        }
+        assertEquals(before, tree.getRoot(parent.rootId))
+        assertEquals(2, tree.children(parent.rootId, parent.nodeId).size)
+    }
+
     private fun running(child:TreeNode):TreeNode {
         val reserved=tree.reserveFirstExecution(TreeNodeFence.of(child),"fixture-process")
         val node=tree.getNode(reserved.rootId,reserved.nodeId)!!

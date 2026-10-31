@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger
 /** Real saved generalist/runtime/Registry worker path. Root is explicitly a backend fixture,
  * not fabricated Central USER or invocation authority; Central origin admission has separate tests. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk=[34],application=CentralFlowTestApplication::class,shadows=[ArtifactOsShadow::class])
+@Config(sdk=[34],application=TreeNativeTestApplication::class,shadows=[ArtifactOsShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class WorkspaceTreeNativeRuntimeTest {
     private val storage=ChatTestStore(runTestOnWorker=false,registerApplicationFilesDirectory=true)
@@ -40,6 +40,8 @@ class WorkspaceTreeNativeRuntimeTest {
             .putLong("fetched_offline/tree-native",System.currentTimeMillis()).commit())
         storage.onDatabaseWorker {
             FreshStorageBootstrap.ensure(app)
+            (app as TreeNativeTestApplication).connectionAccess().initializeAsync().get()
+            check((app as TreeNativeTestApplication).connectionAccess().isReady())
             ChatDatabaseBridge.getInstance(app).ensureConversationSync(WorkspaceIdentity.CENTRAL_SESSION,"chat")
             WorkspaceRegistry(app).use { it.upgradeTreeSchema() }
             profileId=CrewProfileRepository(app).create(CrewProfile(CrewProfileRepository.newCustomId(),1,"Planner","Generalist planning",
@@ -590,8 +592,13 @@ class WorkspaceTreeNativeRuntimeTest {
         deny { owner.claimOwnerToken(f.bot,CancellationToken.uncancellable()) }
     }
     @Test fun restoredDtoCannotConstructOpaquePublicationOrParkLease() {
-        assertTrue(CrewManager.TreePublicationLease::class.java.declaredConstructors.all { java.lang.reflect.Modifier.isPrivate(it.modifiers) })
-        assertTrue(CrewManager.TreeParkLease::class.java.declaredConstructors.all { java.lang.reflect.Modifier.isPrivate(it.modifiers) })
+        for(type in listOf(CrewManager.TreePublicationLease::class.java,CrewManager.TreeParkLease::class.java)) {
+            // Java 8 emits package-private ACC_SYNTHETIC constructor bridges for outer-class access.
+            val sourceConstructors=type.declaredConstructors.filterNot {it.isSynthetic}
+            assertTrue(sourceConstructors.isNotEmpty())
+            assertTrue(sourceConstructors.all {java.lang.reflect.Modifier.isPrivate(it.modifiers)})
+            assertTrue(type.constructors.isEmpty()) // No public DTO/JSON constructor may mint either capability.
+        }
     }
     private fun whileNativeRunning(assertion:(Fixture)->Unit) {
         val entered=CountDownLatch(1);val release=CountDownLatch(1);val calls=AtomicInteger()

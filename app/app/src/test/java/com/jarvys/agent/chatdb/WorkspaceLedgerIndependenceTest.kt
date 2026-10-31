@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
 
 /** Central notices and reply intents must be importable before their execution-ledger evidence. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28])
+@Config(sdk = [28], shadows = [com.jarvys.agent.ArtifactOsShadow::class])
 class WorkspaceLedgerIndependenceTest {
     @get:Rule
     val temporary = TemporaryFolder()

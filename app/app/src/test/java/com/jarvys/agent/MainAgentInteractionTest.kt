@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [ArtifactOsShadow::class])
 class MainAgentInteractionTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore(
         runTestOnWorker = false,

@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], shadows = [ContinuousMissionServiceTest.LocalErrorReporter::class, ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
+@Config(sdk = [34], application = TreeNativeTestApplication::class, shadows = [ContinuousMissionServiceTest.LocalErrorReporter::class, ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
 class ContinuousMissionServiceTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     /** Capture synthetic failures locally instead of invoking the diagnostic HTTP endpoint. */
@@ -81,7 +81,11 @@ class ContinuousMissionServiceTest {
         StopController.getInstance().stopRun()
         val context = ApplicationProvider.getApplicationContext<Context>()
         // Production startup is asynchronous; synchronous fixture stores must await it off-main.
-        chatTestStore.onDatabaseWorker { FreshStorageBootstrap.ensure(context) }
+        chatTestStore.onDatabaseWorker {
+            FreshStorageBootstrap.ensure(context)
+            (context as TreeNativeTestApplication).connectionAccess().initializeAsync().get()
+            check((context as TreeNativeTestApplication).connectionAccess().isReady())
+        }
         val controller = Robolectric.buildService(AgentForegroundService::class.java).create()
         val service = controller.get()
         val session = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION

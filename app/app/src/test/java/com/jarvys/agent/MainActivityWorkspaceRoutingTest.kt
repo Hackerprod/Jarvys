@@ -40,7 +40,7 @@ import org.robolectric.annotation.GraphicsMode
 /** Small Activity integration slice: no model turns, service launches, workers or device effects. */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi")
+@Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi", shadows = [ArtifactOsShadow::class])
 class MainActivityWorkspaceRoutingTest {
     // Install Compose's clock before any real Activity is launched. Infinite visual animations stay
     // present, while tests advance finite frames instead of draining Robolectric's Choreographer.

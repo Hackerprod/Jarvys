@@ -16,7 +16,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 34)
+@Config(sdk = 34, shadows = ArtifactOsShadow.class)
 public class CrewContextArtifactsRecoveryTest {
     @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     private final CancellationToken token = CancellationToken.uncancellable();
@@ -120,6 +120,6 @@ public class CrewContextArtifactsRecoveryTest {
         return artifacts.recoveryTool(ignored -> 32768).execute(Collections.singletonMap("artifact_id", id), token);
     }
     private static File artifact(File root, String chat, String bot, String id) {
-        return new File(root, "jarvys/g3/crew-context/" + CrewCheckpointStore.digest(chat.getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest(bot.getBytes(StandardCharsets.UTF_8)) + "/" + id + ".txt");
+        return new File(new StorageGeneration(root).directory("crew-context"),  CrewCheckpointStore.digest(chat.getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest(bot.getBytes(StandardCharsets.UTF_8)) + "/" + id + ".txt");
     }
 }

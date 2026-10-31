@@ -15,7 +15,7 @@ import org.robolectric.annotation.Config;
 
 /** Real loop preparation and fsynced checkpoint evidence; no Coding async opt-in or job receipt. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=34)
+@Config(sdk=34, shadows = ArtifactOsShadow.class)
 public class CrewInvocationSourceTest {
     @Rule public final ChatTestStore fixture = new ChatTestStore();
 

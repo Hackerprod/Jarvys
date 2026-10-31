@@ -64,7 +64,10 @@ class WorkspaceResultNoticeComposeTest {
             events.value = listOf(event.copy(id = 3L), AgentRunUiEvent.messageEvent(4L,
                 "assistant", "Jarvys's answer", 1234568L))
         }
-        compose.waitForIdle()
+        // Markdown parses on Dispatchers.Default; Compose idleness alone is not parse completion.
+        compose.waitUntil {
+            compose.onAllNodesWithText("Jarvys's answer", useUnmergedTree = true).fetchSemanticsNodes().size == 1
+        }
         compose.onAllNodesWithText("Jarvys's answer", useUnmergedTree = true).assertCountEquals(1)
     }
 }

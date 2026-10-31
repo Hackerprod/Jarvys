@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
-@org.robolectric.annotation.Config(sdk = [28])
+@org.robolectric.annotation.Config(sdk = [28], shadows = [ArtifactOsShadow::class])
 class CrewC1cTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore()
     private fun inboxEvidence(transcript: List<ConversationTurn>) = transcript.filter {

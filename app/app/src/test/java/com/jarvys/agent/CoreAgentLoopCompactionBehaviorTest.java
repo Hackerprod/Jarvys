@@ -16,7 +16,7 @@ import org.junit.Test;
 
 /** Focused behavior tests for compaction at model-turn boundaries and its recovery path. */
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner.class)
-@org.robolectric.annotation.Config(sdk = 28)
+@org.robolectric.annotation.Config(sdk = 28, shadows = ArtifactOsShadow.class)
 public class CoreAgentLoopCompactionBehaviorTest {
     @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
 

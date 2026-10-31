@@ -12,7 +12,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
-@org.robolectric.annotation.Config(sdk = [28])
+@org.robolectric.annotation.Config(sdk = [28], shadows = [ArtifactOsShadow::class])
 class CrewMissionPersistenceTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore()
     @get:Rule val temp = TemporaryFolder()

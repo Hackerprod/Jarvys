@@ -24,7 +24,7 @@ import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 34, application = Application.class)
+@Config(sdk = 34, application = Application.class, shadows = ArtifactOsShadow.class)
 public class CentralInvocationSourceTest {
     @Rule public final ChatTestStore fixture = new ChatTestStore();
     private Context context() throws Exception {

@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, shadows = [ArtifactOsShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class WorkspaceSupervisorMessagePipelineTest {
     @get:Rule val chatTestStore = ChatTestStore(

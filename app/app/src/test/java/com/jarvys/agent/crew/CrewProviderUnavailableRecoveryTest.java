@@ -3,6 +3,7 @@ package com.jarvys.agent.crew;
 import static org.junit.Assert.*;
 
 import com.jarvys.agent.CancellationToken;
+import com.jarvys.agent.ConversationInput;
 import com.jarvys.agent.CoreAgentLoop;
 import com.jarvys.agent.CorePromptBudget;
 import com.jarvys.agent.CoreToolRegistry;
@@ -41,11 +42,21 @@ public class CrewProviderUnavailableRecoveryTest {
         RecordingCheckpoints checkpoints = new RecordingCheckpoints();
         CoreAgentLoop.Model model = (transcript, prompt, declarations, token) -> {
             if (requests.incrementAndGet() == 1) throw unavailable();
-            resumedWithCompletionReceipt.set(transcript.stream().anyMatch(turn -> "user".equals(turn.role)
-                    && turn.incomingMetadata != null && "FINDING".equals(turn.incomingMetadata.type)
+            resumedWithCompletionReceipt.set(transcript.stream().anyMatch(turn -> "assistant".equals(turn.role)
+                    && turn.incomingMetadata != null
+                    && turn.incomingMetadata.origin == ConversationInput.Origin.AGENT
+                    && turn.incomingMetadata.provenance != null
+                    && "owned-work".equals(turn.incomingMetadata.provenance.botId)
+                    && turn.incomingMetadata.provenance.messageId.startsWith("owned-job-")
+                    && "FINDING".equals(turn.incomingMetadata.type)
                     && turn.content.contains("job-17 completed; exit code 0")));
-            resumedWithProgressReceipt.set(transcript.stream().anyMatch(turn -> "user".equals(turn.role)
-                    && turn.incomingMetadata != null && "FINDING".equals(turn.incomingMetadata.type)
+            resumedWithProgressReceipt.set(transcript.stream().anyMatch(turn -> "assistant".equals(turn.role)
+                    && turn.incomingMetadata != null
+                    && turn.incomingMetadata.origin == ConversationInput.Origin.AGENT
+                    && turn.incomingMetadata.provenance != null
+                    && "owned-work".equals(turn.incomingMetadata.provenance.botId)
+                    && turn.incomingMetadata.provenance.messageId.startsWith("owned-job-")
+                    && "FINDING".equals(turn.incomingMetadata.type)
                     && turn.content.contains("job-17 is still running")));
             return new ModelReply("Reviewed job-17's retained completion receipt", Collections.emptyList());
         };
@@ -231,9 +242,12 @@ public class CrewProviderUnavailableRecoveryTest {
             assertTrue(manager.hasPendingOwnedWork(bot));
             assertEquals(1, requests.get());
 
-            assertSame(storageFailure, assertThrows(IllegalStateException.class,
+            CrewManager.AdmissionUncertainException uncertain = assertThrows(
+                    CrewManager.AdmissionUncertainException.class,
                     () -> manager.observeOwnedWork(bot, bot.token.generation(), "job-66-done",
-                            "job-66 completed with a retained receipt")));
+                            "job-66 completed with a retained receipt"));
+            assertSame(storageFailure, uncertain.getCause());
+            assertFalse("The failed checkpoint must not claim durable admission", uncertain.admissionCommitted);
             awaitFinished(bot);
             assertEquals(1, failedCommits.get());
             assertEquals(CrewManager.Status.PARTIAL, bot.status());
@@ -386,8 +400,13 @@ public class CrewProviderUnavailableRecoveryTest {
         CountDownLatch release = new CountDownLatch(1);
         try (CrewManager manager = manager((transcript, prompt, declarations, token) -> {
             if (requests.incrementAndGet() == 1) return new ModelReply("Initial work complete", Collections.emptyList());
-            followUpContainsReceipt.set(transcript.stream().anyMatch(turn -> "user".equals(turn.role)
-                    && turn.incomingMetadata != null && "FINDING".equals(turn.incomingMetadata.type)
+            followUpContainsReceipt.set(transcript.stream().anyMatch(turn -> "assistant".equals(turn.role)
+                    && turn.incomingMetadata != null
+                    && turn.incomingMetadata.origin == ConversationInput.Origin.AGENT
+                    && turn.incomingMetadata.provenance != null
+                    && "owned-work".equals(turn.incomingMetadata.provenance.botId)
+                    && turn.incomingMetadata.provenance.messageId.startsWith("owned-job-")
+                    && "FINDING".equals(turn.incomingMetadata.type)
                     && turn.content.contains("job-77 completed after the final answer")));
             resumed.countDown();
             try {

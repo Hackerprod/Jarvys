@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Fresh enabled-admission acceptance. Not selected before D3; no policy shadow or seeded authority. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk=[34],application=CentralFlowTestApplication::class,shadows=[ArtifactOsShadow::class])
+@Config(sdk=[34],application=TreeNativeTestApplication::class,shadows=[ArtifactOsShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class CentralTreeServiceAcceptanceTest {
     private val storage=ChatTestStore(runTestOnWorker=false,registerApplicationFilesDirectory=true)
@@ -49,7 +49,12 @@ class CentralTreeServiceAcceptanceTest {
         ProviderSettings(context).apply {setProvider(ProviderSettings.Provider.OPENROUTER);setOpenRouterModel("offline/tree-service")}
         check(context.getSharedPreferences("provider_context_metadata",0).edit().putInt("model_offline/tree-service",32768)
             .putLong("fetched_offline/tree-service",System.currentTimeMillis()).commit())
-        storage.onDatabaseWorker {FreshStorageBootstrap.ensure(context);ChatDatabaseBridge.getInstance(context).ensureConversationSync(central,"chat")}
+        storage.onDatabaseWorker {
+            FreshStorageBootstrap.ensure(context)
+            (context as TreeNativeTestApplication).connectionAccess().initializeAsync().get()
+            check((context as TreeNativeTestApplication).connectionAccess().isReady())
+            ChatDatabaseBridge.getInstance(context).ensureConversationSync(central,"chat")
+        }
         AgentRunUiState.resetSession(central)
         controller=Robolectric.buildService(AgentForegroundService::class.java).create();service=controller!!.get()
         val scripted=provider {history -> calls.incrementAndGet();reply(history)}

@@ -302,7 +302,7 @@ class CentralWorkspaceToolTest {
         assertFalse(schema.getBoolean("additionalProperties"))
         val properties = schema.getJSONObject("properties")
         val actions = properties.getJSONObject("action").getJSONArray("enum")
-        assertEquals(listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply", "message", "continue_result"), (0 until actions.length()).map { actions.getString(it) })
+        assertEquals(listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply", "message", "continue_result", "cancel"), (0 until actions.length()).map { actions.getString(it) })
         for (field in listOf("pause", "resume", "correct", "control", "user_text", "origin", "session_id",
             "request_id", "requestId", "original_user_request", "originalUserRequest", "admission", "token",
             "destination", "destination_session_id", "source_session_id", "project_id")) {
@@ -426,7 +426,7 @@ class CentralWorkspaceToolTest {
         assertEquals("x".repeat(65536), backend.calls.single().values["mission"])
     }
 
-    @Test fun toolsAreBoundedExactDistinctListAndCustomRoleNeedsNameAndTools() {
+    @Test fun toolsAreBoundedExactDistinctListAndSavedCustomProfileIdIsRequired() {
         val backend = Backend()
         val tool = tool(backend)
         for (bad in listOf<Any>("read_file", setOf("read_file"), listOf(1), listOf("read_file", "read_file"),
@@ -435,8 +435,13 @@ class CentralWorkspaceToolTest {
         assertFalse(tool.execute(delegate + ("role" to "custom"), CancellationToken.uncancellable()).success)
         assertFalse(tool.execute(delegate + mapOf("role" to "custom", "name" to "Auditor"), CancellationToken.uncancellable()).success)
         assertFalse(tool.execute(delegate + mapOf("role" to "custom", "tools" to emptyList<String>()), CancellationToken.uncancellable()).success)
+        assertFalse(tool.execute(delegate + mapOf("role" to "CUSTOM", "name" to "Auditor",
+            "tools" to listOf("read_skill", "board_read")), CancellationToken.uncancellable()).success)
+        assertFalse(tool.execute(delegate + mapOf("role" to "custom", "name" to "Auditor",
+            "tools" to listOf("read_skill", "board_read")), CancellationToken.uncancellable()).success)
         assertEquals(0, backend.entries)
-        assertTrue(tool.execute(delegate + mapOf("role" to "custom", "name" to "Auditor",
+        // Contract-only fake backend: production resolves this canonical saved-profile selector.
+        assertTrue(tool.execute(delegate + mapOf("role" to "custom-saved-profile", "name" to "Auditor",
             "tools" to listOf("read_skill", "board_read"), "mission_access" to "read_only"), CancellationToken.uncancellable()).success)
         assertEquals(listOf("board_read", "read_skill"), backend.calls.single().values["tools"])
         assertEquals("read_only", backend.calls.single().values["missionAccess"])

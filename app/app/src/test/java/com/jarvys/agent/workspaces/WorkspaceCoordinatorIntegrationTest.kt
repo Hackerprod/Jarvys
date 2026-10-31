@@ -105,6 +105,69 @@ class WorkspaceCoordinatorIntegrationTest {
         }))
     }
 
+    @Test fun ephemeralCustomIsRejectedBeforeAssignmentChargeManagerOrProvider() {
+        val scope = workspace("ephemeral-rejected")
+        for (alias in listOf("custom", "CUSTOM", "Custom")) {
+            episode(steps = arrayOf({
+                val frame = requireNotNull(liveFrame)
+                val before = WorkspaceRegistry(context).use { WorkspaceTreeStore(it).getRoot(frame.authority.rootId())!! }
+                val failure = assertThrows(IllegalArgumentException::class.java) {
+                    delegate(scope, key = "ephemeral-$alias", role = alias)
+                }
+                assertTrue(failure.message!!.contains("saved versioned profile"))
+                WorkspaceRegistry(context).use { registry ->
+                    assertTrue(registry.listAssignments(scope.workspaceId).isEmpty())
+                    assertEquals(before, WorkspaceTreeStore(registry).getRoot(frame.authority.rootId()))
+                    assertTrue(WorkspaceTreeStore(registry).children(frame.authority.rootId(), frame.authority.rootId()).isEmpty())
+                }
+                assertFalse(frame.invocation.admitted())
+            }))
+        }
+        assertTrue(managerLookups.isEmpty()); assertEquals(0, keepalives.get()); assertEquals(0, modelCalls.get())
+    }
+
+    @Test fun actualSavedCustomGeneralistUsesCanonicalVersionedRoleAndResumes() {
+        val profiles = com.jarvys.agent.crew.CrewProfileRepository(context)
+        val id = com.jarvys.agent.crew.CrewProfileRepository.newCustomId()
+        val definition = profiles.create(CrewProfile(id, 1, "Saved Generalist", "Synthetic saved profile",
+            "Complete the requested general-purpose task", emptyList(), emptyList(), CrewProfile.WorkspaceMode.LEGACY_CHAT),
+            emptyList(), emptyList())
+        managerFactory = { session -> manager(session, CoreAgentLoop.Model { _, _, _, _ -> modelCalls.incrementAndGet(); done() }).also {
+            it.configureProfiles({ requested -> profiles.definitions().firstOrNull { d -> d.id == requested && d.enabled }
+                ?.let { profiles.resolveRole(it.id, emptyList(), emptyList()) } }, emptyList())
+        } }
+        val scope = workspace("saved-generalist")
+        val row = delegate(scope, role = definition.id)
+        val worker = bot(scope, row); await(worker)
+        assertEquals(definition.id, worker.role.id)
+        assertEquals(definition.profile.version, worker.role.profileVersion)
+        assertEquals(CrewProfile.WorkspaceMode.LEGACY_CHAT, worker.role.workspaceMode)
+        assertEquals(definition.id, currentAssignment(scope, row).role)
+        val previousCycle = worker.cycleId()
+        val correction = submit(scope, row, WorkspaceControlType.CORRECT, "Continue this saved generalist task")
+        coordinator.executeNativeControl(correction.requestId, CancellationToken.cancellable()); await(worker)
+        assertNotEquals(previousCycle, worker.cycleId())
+        assertEquals(WorkspaceControlState.COMPLETE, savedControl(correction).state)
+        assertEquals(2, modelCalls.get())
+    }
+
+    @Test fun savedProfileCaseAliasesNeverReserveExecution() {
+        val scope = workspace("profile-alias-rejected")
+        for (alias in listOf("NATIVE-FIXTURE-GENERALIST", "Native-fixture-generalist")) {
+            val key = "alias-${UUID.randomUUID()}"
+            assertThrows(WorkspacePreAdmissionException::class.java) { delegate(scope, key = key, role = alias) }
+            WorkspaceRegistry(context).use { registry ->
+                val assignment = registry.listAssignments(scope.workspaceId).single { it.assignmentKey == key }
+                assertEquals(WorkspaceAssignmentState.PREPARED, assignment.state); assertNull(assignment.botId)
+                val node = WorkspaceTreeStore(registry).findAssignment(scope.workspaceId, assignment.assignmentId)!!
+                assertEquals(TreeNodeState.QUEUED, node.state); assertNull(node.executionEventId)
+                assertEquals(1L, WorkspaceTreeStore(registry).getRoot(node.rootId)!!.executions)
+            }
+        }
+        assertEquals(0, modelCalls.get()); assertEquals(0, keepalives.get())
+        assertTrue(managers.values.all { it.bots().isEmpty() && it.missionSnapshots().isEmpty() })
+    }
+
     @Test fun rejectedRoleRemainsPreparedAndDoesNotInventAnUncertainSpawn() {
         val scope = workspace("bad-role")
         val failure = assertThrows(WorkspacePreAdmissionException::class.java) {
@@ -191,7 +254,7 @@ class WorkspaceCoordinatorIntegrationTest {
             store.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, "previous-process")
         }
         val reopened = freshCoordinator()
-        val duplicate = reopened.delegate(scope.workspaceId, "assignment", "custom", MISSION, emptyList(),
+        val duplicate = reopened.delegate(scope.workspaceId, "assignment", "native-fixture-generalist", MISSION, emptyList(),
             "Synthetic worker", "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), noAdmission)
         WorkspaceRegistry(context).use { assertNull(WorkspaceTreeStore(it).findAssignment(scope.workspaceId, started.assignmentId)) }
         assertEquals(started.assignmentId, duplicate.getString("assignment_id"))
@@ -300,6 +363,8 @@ class WorkspaceCoordinatorIntegrationTest {
         val admittedControl = AtomicReference<WorkspaceUserControl>()
         val userText = "Pause this exact worker from the central UI"
 
+        val priorCentralIds = LocalRunStore(context).readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION)
+            .map { it.getString("messageId") }.toSet()
         coordinator.enqueueNativeControl(scope.workspaceId, assignment.getString("assignment_id"),
             assignment.getLong("revision"), WorkspaceControlType.PAUSE, userText,
             onAdmitted = {
@@ -312,6 +377,7 @@ class WorkspaceCoordinatorIntegrationTest {
                     assertEquals(assignment.getLong("revision"), control.assignmentRevision)
                     assertEquals(userText, control.userText)
                     val centralMessages = LocalRunStore(context).readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION)
+                        .filter { it.getString("messageId") !in priorCentralIds }
                     val user = centralMessages.single { it.getString("role") == "user" }
                     assertEquals("$userText\n[Workspace ${scope.workspaceId}; assignment ${control.assignmentId}; native control ${control.requestId}]",
                         user.getString("content"))
@@ -355,6 +421,7 @@ class WorkspaceCoordinatorIntegrationTest {
         assertEquals(WorkspaceControlState.COMPLETE, savedControl(control).state)
         assertEquals(control.assignmentRevision + 1, currentAssignment(scope, assignment).revision)
         val centralMessages = LocalRunStore(context).readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION)
+                        .filter { it.getString("messageId") !in priorCentralIds }
         assertEquals(1, centralMessages.count { it.getString("role") == "user" })
         assertEquals(1, centralMessages.count { it.getString("role") == "assistant" && it.getString("content") == receipt.get() })
         WorkspaceRegistry(context).use { assertEquals(1, it.listControls(scope.workspaceId).size) }
@@ -474,6 +541,9 @@ class WorkspaceCoordinatorIntegrationTest {
             } catch (failure: Throwable) { assertions.set(failure); throw failure }
         })
         managers[scope.executionSessionId] = owner
+        val historicalProfile = CrewProfile("coding", 1, "Coding", "Synthetic project work", "Synthetic mission", emptyList(),
+            emptyList(), CrewProfile.WorkspaceMode.CONVERSATION_PROJECT).resolveRole(emptyList(), emptyList())
+        owner.configureProfiles({ id -> if (id == historicalProfile.id) historicalProfile else null }, emptyList())
         val recovered = restore(owner, scope, target)
         owner.configureCheckpoints(object : CrewManager.CheckpointSupport {
             override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) {
@@ -561,7 +631,7 @@ class WorkspaceCoordinatorIntegrationTest {
             "stale-answer-${UUID.randomUUID()}", ConversationInput.Kind.ANSWER, "Old answer")
         val replacedAssignment = WorkspaceRegistry(context).use { registry ->
             registry.prepareAssignment(scope.workspaceId, UUID.randomUUID().toString(), UUID.randomUUID().toString(),
-                "Owner request", "custom", MISSION, emptyList(), "Replacement", CrewMissionAccess.STANDARD)
+                "Owner request", "native-fixture-generalist", MISSION, emptyList(), "Replacement", CrewMissionAccess.STANDARD)
         }
         val missingAssignmentTask = appendSupervisorInput(scope, assignment, worker.id,
             "replaced-task-${UUID.randomUUID()}", ConversationInput.Kind.TASK, "Replaced task",
@@ -695,7 +765,7 @@ class WorkspaceCoordinatorIntegrationTest {
             store.readConversationInputState(scope.executionSessionId, staleRowId))
     }
 
-    @Test fun lateCentralStopCannotCancelNativeCorrectionCycleWhileOriginalCleanupRegistrationStillExists() {
+    @Test fun unfinishedCleanupRejectsCorrectionAndLateCentralStopCannotCancelSafeSuccessor() {
         val firstCleanup = CountDownLatch(1)
         val releaseCleanup = gate()
         val nextTurn = CountDownLatch(1)
@@ -724,8 +794,15 @@ class WorkspaceCoordinatorIntegrationTest {
         val originalCycle = worker.token
         assertFalse(worker.isQuiescent)
         val control = submit(scope, assignment, WorkspaceControlType.CORRECT, "Now apply this correction")
-        coordinator.executeNativeControl(control.requestId, CancellationToken.cancellable())
+        assertThrows(IllegalStateException::class.java) {
+            coordinator.executeNativeControl(control.requestId, CancellationToken.cancellable())
+        }
+        assertEquals(WorkspaceControlState.PENDING, savedControl(control).state)
+        assertSame(originalCycle, worker.token)
+        assertEquals(1, modelCalls.get())
         releaseCleanup.countDown()
+        await(worker)
+        coordinator.executeNativeControl(control.requestId, CancellationToken.cancellable())
         requireLatch(nextTurn, "Native correction did not start a distinct cycle")
         assertNotSame(originalCycle, worker.token)
         assertTrue(centralToken.cancel())
@@ -876,11 +953,12 @@ class WorkspaceCoordinatorIntegrationTest {
     @Test fun historicalPreparedAssignmentCannotAcquireNewTreeAuthority() {
         val scope = workspace("historical-prepared")
         val prepared = WorkspaceRegistry(context).use { it.prepareAssignment(scope.workspaceId,
-            "assignment", REQUEST_ID, ORIGINAL_REQUEST, "custom", MISSION, emptyList(), "Synthetic worker",
+            "assignment", REQUEST_ID, ORIGINAL_REQUEST, "native-fixture-generalist", MISSION, emptyList(), "Synthetic worker",
             CrewMissionAccess.STANDARD, noAdmission, centralSource()) }
         assertThrows(IllegalArgumentException::class.java) { delegate(scope) }
         WorkspaceRegistry(context).use {
-            assertEquals(prepared, it.getAssignment(scope.workspaceId, prepared.assignmentId))
+            val retained = requireNotNull(it.getAssignment(scope.workspaceId, prepared.assignmentId))
+            assertEquals(assignmentFields(prepared), assignmentFields(retained))
             assertNull(WorkspaceTreeStore(it).findAssignment(scope.workspaceId, prepared.assignmentId))
         }
         assertTrue(managerLookups.isEmpty()); assertEquals(0, modelCalls.get())
@@ -956,7 +1034,7 @@ class WorkspaceCoordinatorIntegrationTest {
     }
 
     private fun delegate(scope: WorkspaceRecord, key: String = "assignment", token: CancellationToken = CancellationToken.cancellable(),
-                         owner: WorkspaceCoordinator = coordinator, role: String = "custom", selectedTools: List<String>? = emptyList(),
+                         owner: WorkspaceCoordinator = coordinator, role: String = "native-fixture-generalist", selectedTools: List<String>? = emptyList(),
                          workerName: String? = "Synthetic worker", admission: Runnable = noAdmission): JSONObject {
         if (liveFrame == null) {
             var result: JSONObject? = null
@@ -979,7 +1057,12 @@ class WorkspaceCoordinatorIntegrationTest {
     }
 
     private fun prepare(store: WorkspaceRegistry, scope: WorkspaceRecord) = store.prepareAssignment(scope.workspaceId,
-        "assignment", REQUEST_ID, ORIGINAL_REQUEST, "custom", MISSION, emptyList(), "Synthetic worker", CrewMissionAccess.STANDARD)
+        "assignment", REQUEST_ID, ORIGINAL_REQUEST, "native-fixture-generalist", MISSION, emptyList(), "Synthetic worker", CrewMissionAccess.STANDARD)
+
+    /** WorkspaceAssignment has identity equality; compare every persisted field for conservation. */
+    private fun assignmentFields(a: WorkspaceAssignment): List<Any?> = listOf(a.workspaceId, a.assignmentId,
+        a.assignmentKey, a.requestId, a.originalUserRequest, a.missionId, a.role, a.missionText, a.tools, a.name,
+        a.missionAccess, a.revision, a.processId, a.state, a.botId, a.createdAt, a.updatedAt, a.centralSource)
 
     private fun currentAssignment(scope: WorkspaceRecord, row: JSONObject) = WorkspaceRegistry(context).use {
         it.getAssignment(scope.workspaceId, row.getString("assignment_id"))!!

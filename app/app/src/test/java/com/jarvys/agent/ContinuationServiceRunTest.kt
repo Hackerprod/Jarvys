@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Real service entry + CoreAgentRuntime/loop + scripted provider, not a claim counter substituted for inference. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = CentralFlowTestApplication::class, shadows = [ArtifactOsShadow::class])
+@Config(sdk = [34], application = TreeNativeTestApplication::class, shadows = [ArtifactOsShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class ContinuationServiceRunTest {
     private val storage=ChatTestStore(runTestOnWorker=false,registerApplicationFilesDirectory=true)
@@ -45,6 +45,8 @@ class ContinuationServiceRunTest {
         storage.localRunStore(context.filesDir)
         storage.onDatabaseWorker {
             FreshStorageBootstrap.ensure(context)
+            (context as TreeNativeTestApplication).connectionAccess().initializeAsync().get()
+            check((context as TreeNativeTestApplication).connectionAccess().isReady())
             ChatDatabaseBridge.getInstance(context).ensureConversationSync(central,"chat")
             val store=LocalRunStore(context)
             val old=store.readPendingInternalConversationInputs(central).map { it.getString("messageId") }

@@ -17,7 +17,7 @@ import org.robolectric.annotation.Config;
 
 /** Provider failures in context-management operations share the resumable UX38 contract. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 34)
+@Config(sdk = 34, shadows = ArtifactOsShadow.class)
 public class CoreAgentLoopProviderCompactionRecoveryTest {
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
 

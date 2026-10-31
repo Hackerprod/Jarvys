@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = CentralFlowTestApplication::class, shadows = [com.jarvys.agent.ArtifactOsShadow::class])
+@Config(sdk = [34], application = TreeNativeTestApplication::class, shadows = [com.jarvys.agent.ArtifactOsShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class AgentMessagingPipelineTest {
     @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false)
@@ -64,6 +64,11 @@ class AgentMessagingPipelineTest {
                 store.markConversationMessagesResolved(WorkspaceIdentity.CENTRAL_SESSION, staleCentralInputs)
         }
         installSecretStore()
+        chatTestStore.onDatabaseWorker {
+            FreshStorageBootstrap.ensure(context)
+            (applicationContext as TreeNativeTestApplication).connectionAccess().initializeAsync().get()
+            check((applicationContext as TreeNativeTestApplication).connectionAccess().isReady())
+        }
     }
 
     @After fun cleanup() {

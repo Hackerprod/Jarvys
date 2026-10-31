@@ -13,7 +13,7 @@ import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 34, application = android.app.Application.class)
+@Config(sdk = 34, application = android.app.Application.class, shadows = ArtifactOsShadow.class)
 public class CrewInputContextExtractorTest {
     @Rule public final ChatTestStore fixture = new ChatTestStore();
     private static final String CYCLE = "11111111-1111-1111-1111-111111111111";

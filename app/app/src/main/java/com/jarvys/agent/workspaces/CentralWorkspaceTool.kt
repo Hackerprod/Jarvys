@@ -186,7 +186,7 @@ class CentralWorkspaceTool internal constructor(
                 "expected_sha256" to mapOf("type" to "string", "pattern" to "^[a-f0-9]{64}$",
                     "minLength" to 64, "maxLength" to 64, "description" to "Required for deliver, read_result, continue_result, read_message and reply: exact SHA-256 returned by the corresponding reference or inspection."),
                 "filename" to textSchema(MAX_DELIVERY_TEXT, "Optional nonempty single-line delivery filename; no directory separators."),
-                "role" to tokenSchema("Built-in role ID or custom; custom requires name and tools."),
+                "role" to tokenSchema("Exact case-sensitive enabled saved profile ID (built-in or user-created). Save a custom profile first; ephemeral custom and display-name aliases are unsupported."),
                 "mission" to textSchema(MAX_TEXT_BYTES, "Exact worker mission for delegate. This is not user-authored provenance."),
                 "tools" to mapOf("type" to "array", "maxItems" to MAX_TOOLS, "uniqueItems" to true,
                     "items" to tokenSchema("Exact tool name within the parent's available capability scope.")),
@@ -468,7 +468,7 @@ class CentralWorkspaceTool internal constructor(
                     }
                     values["mission_access"] = if (!arguments.containsKey("mission_access")) "standard"
                         else string("mission_access").also { require(it == "standard" || it == "read_only") }
-                    if (values["role"] == "custom") require(values.containsKey("name") && values.containsKey("tools"))
+                    require(!values["role"].toString().equals("custom",ignoreCase=true)) { "Save a versioned custom profile first, then use its exact ID" }
                 }
                 "inspect_file" -> {
                     uuid("workspace_id")

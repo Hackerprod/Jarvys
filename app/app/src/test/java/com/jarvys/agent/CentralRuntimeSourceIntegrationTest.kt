@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicReference
  * READ connector execute4 currently delegates execute2 without context; that adapter is not covered.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, shadows = [ArtifactOsShadow::class])
 class CentralRuntimeSourceIntegrationTest {
     @get:Rule val fixture = ChatTestStore()
 

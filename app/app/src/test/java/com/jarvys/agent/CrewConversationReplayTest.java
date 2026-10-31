@@ -29,7 +29,7 @@ import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 34, application = Application.class)
+@Config(sdk = 34, application = Application.class, shadows = ArtifactOsShadow.class)
 public final class CrewConversationReplayTest {
     @Rule public final ChatTestStore chatTestStore = new ChatTestStore(false, true);
 

@@ -27,7 +27,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, shadows = [ArtifactOsShadow::class])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class WorkspaceResultDeliveryTest {
     @Rule @JvmField val chatTestStore = ChatTestStore(registerApplicationFilesDirectory = true)

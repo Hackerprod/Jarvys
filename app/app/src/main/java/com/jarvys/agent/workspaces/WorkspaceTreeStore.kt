@@ -61,7 +61,7 @@ internal class WorkspaceTreeStore(internal val registry:WorkspaceRegistry) {
                 source.sourceMessageId==origin.originUserMessageId && parent.cycleId.startsWith(source.sourceProcessId+":") &&
                 centralReceipt(source)==request.sourceReceipt,"Central admission provenance changed")
         }
-        val key=identity("admit",parent.nodeId,request.assignmentKey); val payload=admissionDigest(request)
+        val key=identity("admit",parent.nodeId,request.workspaceId,request.assignmentKey); val payload=admissionDigest(request)
         event(db,parent.rootId,key)?.let {
             integrity(it==payload,"Admission payload changed")
             val id=one(db,"assignment","workspace_id=? AND assignment_key=?",arrayOf(request.workspaceId,request.assignmentKey)) { c -> c.s("assignment_id") }
@@ -109,7 +109,7 @@ internal class WorkspaceTreeStore(internal val registry:WorkspaceRegistry) {
         integrity(centralReceipt(original)==child.sourceReceipt && centralReceipt(source)==request.sourceReceipt &&
             request.sourceReceipt!=child.sourceReceipt,"Retry requires distinct canonical trigger")
         integrity(assignment.workspaceId==request.workspaceId && assignment.assignmentKey==request.assignmentKey &&
-            event(db,parent.rootId,identity("admit",parent.nodeId,request.assignmentKey))==admissionDigest(request.copy(sourceReceipt=child.sourceReceipt)),
+            event(db,parent.rootId,identity("admit",parent.nodeId,request.workspaceId,request.assignmentKey))==admissionDigest(request.copy(sourceReceipt=child.sourceReceipt)),
             "Retry semantic payload changed")
         val key=identity("central-prepared-retry",child.nodeId,request.sourceReceipt)
         val receipt=identity(request.sourceReceipt,source.sourceMessageId,source.sourceBatchId,source.sourceCallId,source.sourceRunId,source.sourceProcessId)

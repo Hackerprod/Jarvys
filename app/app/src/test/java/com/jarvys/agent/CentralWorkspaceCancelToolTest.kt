@@ -27,7 +27,14 @@ class CentralWorkspaceCancelToolTest {
         val core=WorkspaceTreeStore(registry)
         val root=core.getNode(admission.rootId(),admission.rootId())!!
         val workspace=f.createProject("Cancellation fixture")
-        val backend=WorkspaceCoordinator(f.context,{ error("Queued cancellation must not create or restore a runtime") },{})
+        var backendFailure:Throwable?=null
+        private val nativeBackend=WorkspaceCoordinator(f.context,{ error("Queued cancellation must not create or restore a runtime") },{})
+        val backend=object:CentralWorkspaceTool.Backend by nativeBackend {
+            override fun cancel(workspaceId:String,assignmentId:String,botId:String?,revision:Long,key:String,
+                token:CancellationToken,admission:Runnable,context:WorkspaceMutationContext):JSONObject = try {
+                nativeBackend.cancel(workspaceId,assignmentId,botId,revision,key,token,admission,context)
+            } catch(failure:Throwable) { backendFailure=failure;throw failure }
+        }
         val tool=CentralWorkspaceTool(f.context,central,"native-runtime-${UUID.randomUUID()}","Cancel only the requested subtree",backend,admission)
         val results=ArrayList<CoreToolResult>()
         var captured:EffectInvocation?=null
@@ -67,7 +74,7 @@ class CentralWorkspaceCancelToolTest {
         WorkspaceMemoryFixture(storage).use { f -> Session(f).use { s ->
             val target=s.queued("target");val sibling=s.queued("sibling")
             s.run(listOf(s.args(target),s.args(target)))
-            assertEquals(2,s.results.size);assertTrue(s.results.all { it.success })
+            assertEquals(2,s.results.size);assertTrue(s.backendFailure?.stackTraceToString(),s.results.all { it.success })
             val cancelled=s.node(target)
             assertEquals(TreeNodeState.TERMINAL,cancelled.state);assertEquals("CANCELLED",cancelled.terminalOutcome)
             assertNull(cancelled.botId);assertNull(cancelled.executionEventId);assertEquals(sibling,s.node(sibling))
@@ -90,7 +97,7 @@ class CentralWorkspaceCancelToolTest {
         WorkspaceMemoryFixture(storage).use { f -> Session(f).use { s ->
             val target=s.queued("target");val sibling=s.queued("sibling")
             s.run(listOf(s.args(target,"same-key"),s.args(sibling,"same-key")))
-            assertTrue(s.results.first().success);assertFalse(s.results.last().success)
+            assertTrue(s.backendFailure?.stackTraceToString(),s.results.first().success);assertFalse(s.results.last().success)
             assertEquals(sibling,s.node(sibling));assertEquals(TreeNodeState.TERMINAL,s.node(target).state)
         } }
     }

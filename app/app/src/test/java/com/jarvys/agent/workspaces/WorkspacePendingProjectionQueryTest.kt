@@ -12,7 +12,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, shadows = [com.jarvys.agent.ArtifactOsShadow::class])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class WorkspacePendingProjectionQueryTest {
     @Test fun pendingQueryIsExactCurrentRevisionAndCannotHideOlderUncertainEffects() {

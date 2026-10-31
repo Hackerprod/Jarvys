@@ -58,11 +58,23 @@ class NativeWorkspaceCheckpointRecoveryTest {
         val workspace = f.createProject("Itinerary")
         val manager = manager(f, workspace.executionSessionId, calls, true)
         val store = CrewCheckpointStore(f.files)
-        val delegated = WorkspaceCoordinator(f.context, { manager }, {}).delegateContinuing(
-            workspace.workspaceId, "trip-assignment", role.id, "Plan a trip with missing travel dates",
-            listOf("ask_chief"), "Planner", "standard", "trip-request", "Plan a trip",
-            CancellationToken.uncancellable(), Runnable {}, null)
-        val bot = checkNotNull(manager.bot(delegated.getString("bot_id")))
+        // Deliberate retained-v98 fixture: real old native assignment/checkpoint path, not a new P2 admission.
+        // No policy switch, synthetic capability, tree enrollment or constructor witness is used.
+        val bot = WorkspaceRegistry(f.context).use { registry ->
+            val key = "continuation-v1:" + UUID.nameUUIDFromBytes("trip-assignment".toByteArray(Charsets.UTF_8))
+            val prepared = registry.prepareAssignment(workspace.workspaceId, key, "trip-request", "Plan a trip",
+                role.id, "Plan a trip with missing travel dates", listOf("ask_chief"), "Planner", CrewMissionAccess.STANDARD)
+            val started = registry.markStarted(workspace.workspaceId, prepared.assignmentId, prepared.revision, CrewProcessIdentity.ID)
+            val worker = manager.spawnForMissionDeferred(started.missionId, started.originalUserRequest,
+                started.role, started.missionText, started.tools, started.name, started.missionAccess, workspace.title, started)
+            val bound = registry.bindBot(workspace.workspaceId, started.assignmentId, started.revision, worker.id)
+            WorkspaceContinuationDelivery.initialize(f.context, bound, manager, worker)
+            assertNull("Retained P1 fixture must not acquire new tree authority",
+                WorkspaceTreeStore(registry).findAssignment(workspace.workspaceId, bound.assignmentId))
+            manager.startPreparedForMission(worker)
+            WorkspaceMissionCards.delegated(f.context, workspace, bound)
+            worker
+        }
         run {
             waitDone(bot)
             assertEquals(bot.error(), CrewManager.Status.PARTIAL, bot.status())

@@ -24,7 +24,7 @@ class WorkspaceTreeP1PreclaimTest {
         val core=WorkspaceTreeStore(registry)
         val scope=f.createProject("Enrolled result fixture")
         val bot="native-fixture-bot"
-        val cycle="fixture-child-cycle"
+        val cycle=java.util.UUID.randomUUID().toString()
         val originalUser=f.store.appendConversationMessage(WorkspaceIdentity.CENTRAL_SESSION,"user","Original request")
         val origin=f.store.captureCentralUserRoot(WorkspaceIdentity.CENTRAL_SESSION,originalUser)
         val root:TreeNode

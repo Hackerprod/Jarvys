@@ -1585,7 +1585,18 @@ public final class CrewManager implements AutoCloseable {
             String requestedName, CrewMissionAccess missionAccess) {
         if (mission == null || mission.trim().isEmpty()) throw new IllegalArgumentException("mission must be a non-empty string");
         CrewRole role;
-        if ("custom".equalsIgnoreCase(roleId)) {
+        if (treeSupport != null && WorkspaceIdentity.isExecutionSession(conversationId)) {
+            if (!profilesConfigured || "custom".equalsIgnoreCase(roleId))
+                throw new IllegalArgumentException("Native workspace delegation requires the exact ID of an enabled saved versioned profile; save a custom profile first");
+            role = profileResolver.apply(roleId);
+            if (role == null || role.profileVersion < 1 || !role.id.equals(roleId))
+                throw new IllegalArgumentException("Native workspace role must be an exact case-sensitive saved profile ID, not a display name or ephemeral custom alias");
+            if (requestedTools != null) {
+                List<String> selected = validateRequestedTools(requestedTools, capabilityNames(role));
+                if (!role.tools.containsAll(selected)) throw new IllegalArgumentException("Requested tools exceed this role's capabilities");
+                role = role.withTools(selected);
+            }
+        } else if ("custom".equalsIgnoreCase(roleId)) {
             if (requestedName == null || requestedName.trim().isEmpty()) throw new IllegalArgumentException("custom role name is required");
             if (requestedTools == null) throw new IllegalArgumentException("custom role tools are required");
             role = CrewRoleTemplates.custom(requestedName, mission, requestedTools, captainTools);

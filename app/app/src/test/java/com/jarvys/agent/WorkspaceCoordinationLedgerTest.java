@@ -35,7 +35,7 @@ import org.robolectric.annotation.Config;
 
 /** Synthetic Room records only. No worker, provider, policy approval, or external action is replayed. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 34, application = Application.class)
+@Config(sdk = 34, application = Application.class, shadows = ArtifactOsShadow.class)
 public class WorkspaceCoordinationLedgerTest {
     @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     private static final String WORKSPACE = "62a92262-977e-4c43-8e6a-5640a0c193c3";

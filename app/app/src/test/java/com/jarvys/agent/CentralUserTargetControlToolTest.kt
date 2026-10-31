@@ -27,11 +27,19 @@ class CentralUserTargetControlToolTest {
         val core=WorkspaceTreeStore(registry)
         val root=core.getNode(admission.rootId(),admission.rootId())!!
         val workspace=f.createProject("Cancellation fixture")
-        val backend=WorkspaceCoordinator(f.context,{ error("Queued cancellation must not create or restore a runtime") },{})
+        var backendFailure:Throwable?=null
+        private val nativeBackend=WorkspaceCoordinator(f.context,{ error("Queued cancellation must not create or restore a runtime") },{})
+        val backend=object:CentralWorkspaceTool.Backend by nativeBackend {
+            override fun cancel(workspaceId:String,assignmentId:String,botId:String?,revision:Long,key:String,
+                token:CancellationToken,admission:Runnable,context:WorkspaceMutationContext):JSONObject = try {
+                nativeBackend.cancel(workspaceId,assignmentId,botId,revision,key,token,admission,context)
+            } catch(failure:Throwable) { backendFailure=failure;throw failure }
+        }
         val tool=CentralWorkspaceTool(f.context,central,"native-runtime-${UUID.randomUUID()}","Cancel only the requested subtree",backend,admission)
         val results=ArrayList<CoreToolResult>()
         var captured:EffectInvocation?=null
         var beforeExecute:((EffectInvocation)->Unit)?=null
+        var afterExecute:(()->Unit)?=null
         var replaceArguments:((Map<String,Any>?)->Map<String,Any>?)?=null
         fun queued(key:String)=core.admitChild(TreeNodeFence.of(root),TreeChildRequest(workspace.workspaceId,key,"request","Original task",
             "analyst","Queued $key",emptyList(),null,TreeMode.WORK,TreeReply.AWAIT,"synthetic-queued-data-$key"))
@@ -47,8 +55,11 @@ class CentralUserTargetControlToolTest {
                 override fun execute(arguments:Map<String,Any>?,token:CancellationToken):CoreToolResult=error("execute4 required")
                 override fun execute(arguments:Map<String,Any>?,token:CancellationToken,progress:CoreTool.ProgressListener?,invocation:EffectInvocation?):CoreToolResult {
                     val actual=requireNotNull(invocation);requireNotNull(actual.centralSource()).requireInvocationCurrent()
-                    captured=actual;beforeExecute?.invoke(actual)
-                    return tool.execute(replaceArguments?.invoke(arguments) ?: arguments,token,progress,actual).also { results.add(it) }
+                    captured=actual
+                    try {
+                        beforeExecute?.invoke(actual)
+                        return tool.execute(replaceArguments?.invoke(arguments) ?: arguments,token,progress,actual).also { results.add(it) }
+                    } finally { afterExecute?.invoke() }
                 }
             }
             val tools=CoreToolRegistry(listOf(forwarding)).withInvocationSourceProvider(writer.centralSourceProvider(user,run))
@@ -68,7 +79,7 @@ class CentralUserTargetControlToolTest {
         WorkspaceMemoryFixture(storage).use { f -> Session(f).use { s ->
             val target=s.queued("target");val sibling=s.queued("sibling")
             s.run(listOf(s.args(target),s.args(target)))
-            assertEquals(2,s.results.size);assertTrue(s.results.all { it.success })
+            assertEquals(2,s.results.size);assertTrue(s.backendFailure?.stackTraceToString(),s.results.all { it.success })
             val cancelled=s.node(target)
             assertEquals(TreeNodeState.TERMINAL,cancelled.state);assertEquals("CANCELLED",cancelled.terminalOutcome)
             assertNull(cancelled.botId);assertNull(cancelled.executionEventId);assertEquals(sibling,s.node(sibling))
@@ -91,7 +102,7 @@ class CentralUserTargetControlToolTest {
         WorkspaceMemoryFixture(storage).use { f -> Session(f).use { s ->
             val target=s.queued("target");val sibling=s.queued("sibling")
             s.run(listOf(s.args(target,"same-key"),s.args(sibling,"same-key")))
-            assertTrue(s.results.first().success);assertFalse(s.results.last().success)
+            assertTrue(s.backendFailure?.stackTraceToString(),s.results.first().success);assertFalse(s.results.last().success)
             assertEquals(sibling,s.node(sibling));assertEquals(TreeNodeState.TERMINAL,s.node(target).state)
         } }
     }
@@ -136,7 +147,7 @@ class CentralUserTargetControlToolTest {
             Session(f).use { later ->
                 val before=original.core.getRoot(target.rootId)!!
                 later.run(listOf(later.args(target)))
-                assertTrue(later.results.single().success)
+                assertTrue(later.backendFailure?.stackTraceToString(),later.results.single().success)
                 assertEquals(TreeNodeState.TERMINAL,original.node(target).state)
                 assertEquals(sibling,original.node(sibling))
                 val after=original.core.getRoot(target.rootId)!!
@@ -185,7 +196,7 @@ class CentralUserTargetControlToolTest {
             val retained=old.node(target)
             Session(f).use { later ->
                 later.run(listOf(later.args(retained)))
-                assertTrue(later.results.single().success)
+                assertTrue(later.backendFailure?.stackTraceToString(),later.results.single().success)
                 assertEquals(stopped,old.core.getRoot(target.rootId))
                 assertEquals(retained,old.node(target))
                 assertTrue(runCatching { old.core.reserveFirstExecution(TreeNodeFence.of(retained),com.jarvys.agent.crew.CrewProcessIdentity.ID) }.isFailure)
@@ -206,19 +217,45 @@ class CentralUserTargetControlToolTest {
                     checked=true
                 }
                 later.run(listOf(later.args(target)))
-                assertTrue(checked);assertTrue(later.results.single().success);assertEquals(sibling,old.node(sibling))
+                assertTrue(checked);assertTrue(later.backendFailure?.stackTraceToString(),later.results.single().success);assertEquals(sibling,old.node(sibling))
             }
         } }
     }
     @Test fun canonicalWorkspaceOwnerMutationDeniesLaterUserControl() {
         WorkspaceMemoryFixture(storage).use { f -> Session(f).use { old ->
             val target=old.queued("selected")
-            old.registry.treeTransaction { db -> db.execSQL("UPDATE workspace SET owner_central_session_id=? WHERE workspace_id=?",arrayOf("foreign-owner",target.workspaceId)) }
             Session(f).use { later ->
+                // Corrupt only during the real live execute4, after its canonical transcript source exists.
+                // Restoring fixture bytes afterward lets the independent result checkpoint persist; it grants no authority.
+                later.beforeExecute={ old.registry.treeTransaction { db -> db.execSQL("UPDATE workspace SET owner_central_session_id=? WHERE workspace_id=?",arrayOf("foreign-owner",target.workspaceId)) } }
+                later.afterExecute={ old.registry.treeTransaction { db -> db.execSQL("UPDATE workspace SET owner_central_session_id=? WHERE workspace_id=?",arrayOf(central,target.workspaceId)) } }
                 later.run(listOf(later.args(target)))
                 assertFalse(later.results.single().success)
                 assertEquals(target,old.node(target))
             }
+        } }
+    }
+
+    @Test fun actualStartedCallHasNoResultLifecycleButNativeCallReaderConfirmsExactSource() {
+        WorkspaceMemoryFixture(storage).use { f -> Session(f).use { s ->
+            val target=s.queued("source-reader")
+            var checked=false;var retainedSource:CentralInvocationSource?=null
+            val payload=WorkspaceTreeEvidenceStore.canonical(JSONObject(s.args(target)))
+            s.beforeExecute={ invocation ->
+                val source=requireNotNull(invocation.centralSource()).source();retainedSource=source
+                val row=f.store.readEpisodeToolSource(source.ownerCentralSessionId,source.sourceBatchId,source.sourceCallId)!!
+                assertNull(row.lifecycle);assertNull(row.output) // Result lifecycle absent for real STARTED call.
+                val confirmed=CentralTargetControlSource.capture(f.store,source,payload)
+                assertEquals(s.admission.originDigest(),confirmed.originDigest)
+                val changed=JSONObject(s.args(target)).put("key","different-request")
+                assertTrue(runCatching { CentralTargetControlSource.capture(f.store,source,
+                    WorkspaceTreeEvidenceStore.canonical(changed)) }.isFailure)
+                checked=true
+            }
+            s.run(listOf(s.args(target)))
+            assertTrue(checked);assertTrue(s.backendFailure?.stackTraceToString(),s.results.single().success)
+            // The same data tuple cannot become authority after RESULT is committed.
+            assertTrue(runCatching { CentralTargetControlSource.capture(f.store,retainedSource!!,payload) }.isFailure)
         } }
     }
 

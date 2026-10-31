@@ -15,7 +15,7 @@ import org.robolectric.annotation.Config
 
 /** Real native stores; Android/Room execution still requires the authorized SDK. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, shadows = [ArtifactOsShadow::class])
 class WorkspaceEffectReceiptTest {
     @get:Rule val chatStore = ChatTestStore()
 

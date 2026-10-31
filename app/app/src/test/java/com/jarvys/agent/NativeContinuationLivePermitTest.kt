@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Native callback authority, not a fixture that manufactures a trusted live event from persisted text. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = CentralFlowTestApplication::class,
+@Config(sdk = [34], application = TreeNativeTestApplication::class,
     shadows = [ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class NativeContinuationLivePermitTest {
@@ -71,6 +71,8 @@ class NativeContinuationLivePermitTest {
             CrewProfile.WorkspaceMode.LEGACY_CHAT)
         init {
             FreshStorageBootstrap.ensure(context)
+            (context as TreeNativeTestApplication).connectionAccess().initializeAsync().get()
+            check((context as TreeNativeTestApplication).connectionAccess().isReady())
             CrewProfileRepository(context).create(profile, emptyList(), emptyList())
             ChatDatabaseBridge.getInstance(context).ensureConversationSync(central, "chat")
             ProviderSettings(context).apply {

@@ -48,7 +48,7 @@ object NativeCentralTreeEpisodeFixture {
 
     /** Preserve fake provider/barriers; install the same durable adapters as CoreAgentRuntime. */
     @JvmStatic fun installManager(context: Context, session: String, manager: CrewManager) {
-        val role = CrewRole("custom", "Synthetic worker", "general", "Synthetic general-purpose work", emptyList(), null,
+        val role = CrewRole("native-fixture-generalist", "Synthetic worker", "general", "Synthetic general-purpose work", emptyList(), null,
             "Synthetic native profile", 1, emptyList(), CrewProfile.WorkspaceMode.LEGACY_CHAT)
         manager.configureProfiles({ id -> if (id == role.id) role else null }, emptyList())
         manager.configureCheckpoints(CrewCheckpointCoordinator(context, session) { bot -> bot.role })

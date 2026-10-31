@@ -94,7 +94,7 @@ class CentralWorkspaceCoordinationToolTest {
         val properties = schema.getJSONObject("properties")
         val enum = properties.getJSONObject("action").getJSONArray("enum")
         assertEquals(listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result",
-            "inbox", "read_message", "reply", "message", "continue_result"), (0 until enum.length()).map { enum.getString(it) })
+            "inbox", "read_message", "reply", "message", "continue_result", "cancel"), (0 until enum.length()).map { enum.getString(it) })
         for (field in listOf("message_id", "after_message_id"))
             assertEquals("^workspace-coordination-[a-f0-9]{64}$", properties.getJSONObject(field).getString("pattern"))
         assertEquals(65536, properties.getJSONObject("text").getInt("maxLength"))

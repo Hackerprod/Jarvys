@@ -38,3 +38,14 @@ The nested Registry correction borrows only the same-thread, same-canonical-data
 
 
 Matching integrated pre-write Full99/Play99 and separate native store/evidence Full28/Play28 passed on identical source bindings. Local admission is enabled for the next real service/tool/worker acceptance candidate; historical OFF entries above describe their checkpoint state. No implementation or delivery PASS is claimed. Exact final-source repetition and independent review remain required.
+
+
+## First enabled acceptance diagnostic and bounded repairs
+
+The first enabled native cohort executed 212 cases with 68 failures. The full preregistered 116-class Full cohort then executed **1,063 cases with 324 failures, 0 errors and 0 skipped**. This is diagnostic evidence, not acceptance PASS; the prior compatibility proof is not substituted for full acceptance.
+
+Three production corrections are proposed in this checkpoint: (1) admission/retry event identity includes workspace ID as well as parent and assignment key, matching native assignment uniqueness; (2) fresh USER control verifies STARTED/no-result via the existing committed-invocation reader, rather than confusing the result lifecycle with call lifecycle; (3) native workspace roles resolve exact versioned saved profiles first, preserving real user-created generalists and rejecting ephemeral `custom` aliases before request charge/manager lookup. Unknown saved definitions can remain PREPARED while Crew is OFF but cannot reserve execution until actual native profile preflight succeeds. Unrelated legacy Crew resolution is unchanged. These new P2 identities have never been delivered as production writes; no reinterpretation/import of earlier draft rows is introduced.
+
+Confirmed host-fixture corrections are inventoried separately: 26 classes needed the existing real-filesystem adapter; nine native/service test classes need genuine application-owned connector access initialized after bootstrap, with the title runtime constructed on its existing worker rule. These are real native stores, not authority mocks. Additional corrections preserve exact retained-v98 unenrolled setup, canonical UUIDs, current USER episode provenance, full historical field comparison, additive cancel schema expectations and safe quiescence before native control. Internal owned-work receipts are asserted as attributed AGENT inputs, not mislabeled USER permission; uncertain enqueue failure assertions now require the exact wrapper/cause and uncommitted state.
+
+The Spanish timeline test now waits for its observable asynchronous Markdown parse using the existing default bounded wait before asserting exactly one assistant response. Internal result/link/control invisibility assertions remain unchanged. No UI source changes or timeout increases. All repairs require fresh compilation, corresponding focused cases, full matching Full/Play final-source acceptance and independent review.

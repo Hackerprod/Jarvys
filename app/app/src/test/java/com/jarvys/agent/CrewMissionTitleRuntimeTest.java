@@ -28,10 +28,10 @@ import org.robolectric.annotation.Config;
 
 /** Scripted runtime contracts, not a claim about live-model title quality. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 34)
+@Config(sdk = 34, application = TreeNativeTestApplication.class)
 public class CrewMissionTitleRuntimeTest {
     private static final CoreToolRegistry EMPTY = new CoreToolRegistry(Collections.emptyList());
-    @Rule public ChatTestStore chatTestStore = new ChatTestStore(false, true);
+    @Rule public ChatTestStore chatTestStore = new ChatTestStore(true, true);
     private Context context;
     private Object previousSecrets;
 
@@ -43,6 +43,9 @@ public class CrewMissionTitleRuntimeTest {
         android.content.SharedPreferences preferences = context.getSharedPreferences("crew-title-secrets", Context.MODE_PRIVATE);
         assertTrue(preferences.edit().clear().commit());
         field.set(null, new SecretStore(preferences));
+        FreshStorageBootstrap.ensure(context);
+        ((TreeNativeTestApplication) context).connectionAccess().initializeAsync().get();
+        assertTrue(((TreeNativeTestApplication) context).connectionAccess().isReady());
         CrewMode.write(context, CrewMode.AUTO);
     }
 

@@ -19,7 +19,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 34)
+@Config(sdk = 34, shadows = ArtifactOsShadow.class)
 public class CrewCheckpointRecoveryTest {
     @Rule
     public final ChatTestStore chatTestStore = new ChatTestStore();
@@ -153,7 +153,7 @@ public class CrewCheckpointRecoveryTest {
     }
 
     private static File checkpoint(File root) {
-        return new File(root, "jarvys/g3/crew-context/" + CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest("bot-one".getBytes(StandardCharsets.UTF_8)) + "/checkpoint.json");
+        return new File(new StorageGeneration(root).directory("crew-context"),  CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest("bot-one".getBytes(StandardCharsets.UTF_8)) + "/checkpoint.json");
     }
 
     private static void writePayload(File file, JSONObject payload) throws Exception {
