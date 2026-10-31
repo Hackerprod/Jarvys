@@ -199,11 +199,11 @@ class CentralTreeServiceAcceptanceTest {
                 val field=CrewManager::class.java.getDeclaredField("treePublicationListener").apply {isAccessible=true}
                 val originalListener=field.get(manager!!) as CrewManager.TreePublicationListener
                 field.set(manager!!,object:CrewManager.TreePublicationListener {
-                    override fun onTreeResult(bot:CrewManager.Bot,evidence:CrewResultEvidence,lease:CrewManager.TreePublicationLease) {
+                    override fun onTreeResult(bot:CrewManager.Bot,evidence:com.jarvys.agent.crew.CrewResultEvidence,lease:CrewManager.TreePublicationLease) {
                         treeEntered.countDown();check(releaseTree.await(20,TimeUnit.SECONDS))
                         originalListener.onTreeResult(bot,evidence,lease)
                     }
-                    override fun onTreeQuestion(bot:CrewManager.Bot,evidence:CrewCoordinationEvidence,lease:CrewManager.TreePublicationLease)=originalListener.onTreeQuestion(bot,evidence,lease)
+                    override fun onTreeQuestion(bot:CrewManager.Bot,evidence:com.jarvys.agent.crew.CrewCoordinationEvidence,lease:CrewManager.TreePublicationLease)=originalListener.onTreeQuestion(bot,evidence,lease)
                 })
             }
             scope to profile

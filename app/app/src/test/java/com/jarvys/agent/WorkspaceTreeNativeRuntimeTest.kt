@@ -121,6 +121,94 @@ class WorkspaceTreeNativeRuntimeTest {
         } }
     }
 
+    @Test fun actualAnyConsumesOnlyFirstReportAndImplicitAllStillAwaitsUnfinishedSibling() {
+        val parentCalls=AtomicInteger();val firstCalls=AtomicInteger();val secondCalls=AtomicInteger()
+        val firstEntered=CountDownLatch(1);val secondEntered=CountDownLatch(1)
+        val releaseFirst=CountDownLatch(1);val releaseSecond=CountDownLatch(1);val anyResumed=CountDownLatch(1);val finalResumed=CountDownLatch(1)
+        val f=start { history,_,token ->
+            when {
+                task(history).contains("ANY_FIRST")-> {firstCalls.incrementAndGet();firstEntered.countDown();assertTrue(releaseFirst.await(15,TimeUnit.SECONDS));token.throwIfCancelled();ModelReply("FIRST_EXACT_EVIDENCE",emptyList())}
+                task(history).contains("ANY_SECOND")-> {secondCalls.incrementAndGet();secondEntered.countDown();assertTrue(releaseSecond.await(15,TimeUnit.SECONDS));token.throwIfCancelled();ModelReply("SECOND_EXACT_EVIDENCE",emptyList())}
+                else->when(parentCalls.incrementAndGet()) {
+                    1->call("any-first","delegate_subtask",mapOf("objective" to "ANY_FIRST","tools" to emptyList<String>()))
+                    2->call("any-second","delegate_subtask",mapOf("objective" to "ANY_SECOND","tools" to emptyList<String>()))
+                    3->{
+                        val ids=history.filter {it.kind==ConversationTurn.Kind.TOOL_RESULT && it.content.startsWith("native-tree-child:")}
+                            .map {it.content.substringAfter("native-tree-child:").substringBefore('\n')}
+                        assertEquals(2,ids.size);call("join-any","wait_children",mapOf("ids" to ids,"mode" to "ANY"))
+                    }
+                    4->{
+                        assertTrue(history.any {it.content.contains("FIRST_EXACT_EVIDENCE")});assertFalse(history.any {it.content.contains("SECOND_EXACT_EVIDENCE")})
+                        assertFalse(liveManager.bots().single {it.mission=="ANY_SECOND"}.token.isCancellationRequested)
+                        anyResumed.countDown();ModelReply("Draft after first result, not final while second is awaited",emptyList())
+                    }
+                    5->{assertTrue(history.any {it.content.contains("SECOND_EXACT_EVIDENCE")});finalResumed.countDown();ModelReply("Both results synthesized",emptyList())}
+                    else->error("Duplicate child cause resumed the parent")
+                }
+            }
+        }
+        try {
+            assertTrue(firstEntered.await(15,TimeUnit.SECONDS));assertTrue(secondEntered.await(15,TimeUnit.SECONDS));await(f.bot)
+            assertEquals(CrewManager.Status.WAITING,f.bot.status());assertEquals(3,parentCalls.get())
+            releaseFirst.countDown();assertTrue(anyResumed.await(15,TimeUnit.SECONDS));await(f.bot)
+            assertEquals(f.bot.error(),CrewManager.Status.WAITING,f.bot.status());assertNull(f.bot.resultEvidence());assertEquals(4,parentCalls.get())
+            val second=f.manager.bots().single {it.mission=="ANY_SECOND"};assertFalse(second.token.isCancellationRequested);assertNull(second.resultEvidence())
+            storage.onDatabaseWorker {WorkspaceRegistry(app).use {db ->
+                val tree=WorkspaceTreeStore(db);val parent=tree.findAssignment(f.scope.workspaceId,f.bot.assignmentId())!!
+                val children=tree.children(f.root,parent.nodeId);val secondNode=children.single {it.botId==second.id}
+                val waits=WorkspaceTreeWaitStore(tree).list(f.root,parent.nodeId);assertEquals(2,waits.size)
+                val any=waits.single {!it.implicit};assertEquals(TreeJoin.ANY,any.join);assertEquals(TreeWaitState.ACKNOWLEDGED,any.state)
+                assertEquals(1,any.selectedCauses!!.size);assertNotEquals(secondNode.nodeId,any.selectedCauses!!.single().nodeId)
+                val remaining=waits.single {it.implicit};assertEquals(TreeJoin.ALL,remaining.join);assertEquals(TreeWaitState.WAITING,remaining.state)
+                assertEquals(listOf(secondNode.nodeId),remaining.children)
+            }}
+            releaseSecond.countDown();assertTrue(finalResumed.await(15,TimeUnit.SECONDS));await(f.bot)
+            assertEquals(f.bot.error(),CrewManager.Status.DONE,f.bot.status());assertEquals(5,parentCalls.get());assertEquals(1,firstCalls.get());assertEquals(1,secondCalls.get())
+            storage.onDatabaseWorker {WorkspaceRegistry(app).use {db ->
+                val tree=WorkspaceTreeStore(db);val parent=tree.findAssignment(f.scope.workspaceId,f.bot.assignmentId())!!
+                val waits=WorkspaceTreeWaitStore(tree).list(f.root,parent.nodeId)
+                assertTrue(waits.all {it.state==TreeWaitState.ACKNOWLEDGED})
+                val causes=waits.flatMap {it.selectedCauses!!};assertEquals(2,causes.size);assertEquals(2,causes.map {it.eventKey}.distinct().size)
+                fun events(kind:String,node:String)=db.treeRead {sql -> sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND node_id=? AND kind=?",arrayOf(f.root,node,kind)).use {c->c.moveToFirst();c.getInt(0)}}
+                assertEquals(2,events("CHILD_WAIT_EXECUTION",parent.nodeId));assertEquals(2,events("CONSUMED",parent.nodeId))
+                tree.children(f.root,parent.nodeId).forEach {child ->assertEquals(1,events("ADMISSION",child.nodeId));assertEquals(1,events("EXECUTION",child.nodeId))}
+            }}
+        } finally {releaseFirst.countDown();releaseSecond.countDown()}
+    }
+
+    @Test fun actualReplyNoneChildIsExcludedFromImplicitWaitAndCannotWakeFinishedParent() {
+        val parentCalls=AtomicInteger();val childCalls=AtomicInteger();val entered=CountDownLatch(1);val release=CountDownLatch(1)
+        val f=start {history,tools,token ->
+            if(task(history).contains("NO_REPLY_CHILD")) {
+                childCalls.incrementAndGet();assertFalse(tools.any {it.name in setOf("crew_spawn","workspaces")})
+                entered.countDown();assertTrue(release.await(15,TimeUnit.SECONDS));token.throwIfCancelled();ModelReply("NO_REPLY_EVIDENCE",emptyList())
+            } else when(parentCalls.incrementAndGet()) {
+                1->call("no-reply-admission","delegate_subtask",mapOf("objective" to "NO_REPLY_CHILD","mode" to "work","reply" to "none","tools" to emptyList<String>()))
+                2->ModelReply("Parent completed without awaiting reply-none work",emptyList())
+                else->error("Reply-none child must not wake the parent")
+            }
+        }
+        try {
+            assertTrue(entered.await(15,TimeUnit.SECONDS));await(f.bot)
+            assertEquals(f.bot.error(),CrewManager.Status.DONE,f.bot.status());assertEquals(2,parentCalls.get());assertNotNull(f.bot.resultEvidence())
+            val child=f.manager.bots().single {it.id!=f.bot.id};assertFalse(child.token.isCancellationRequested);assertNull(child.resultEvidence())
+            val cycle=f.bot.cycleId()
+            storage.onDatabaseWorker {WorkspaceRegistry(app).use {db ->
+                val tree=WorkspaceTreeStore(db);val parent=tree.findAssignment(f.scope.workspaceId,f.bot.assignmentId())!!
+                assertTrue(WorkspaceTreeWaitStore(tree).list(f.root,parent.nodeId).isEmpty())
+                val node=tree.children(f.root,parent.nodeId).single();assertEquals(TreeReply.NONE,node.reply);assertEquals(TreeMode.WORK,node.mode)
+            }}
+            release.countDown();await(child);assertEquals(child.error(),CrewManager.Status.DONE,child.status())
+            assertEquals(cycle,f.bot.cycleId());assertEquals(2,parentCalls.get());assertEquals(1,childCalls.get())
+            storage.onDatabaseWorker {WorkspaceRegistry(app).use {db ->
+                val tree=WorkspaceTreeStore(db);val parent=tree.findAssignment(f.scope.workspaceId,f.bot.assignmentId())!!
+                assertTrue(WorkspaceTreeWaitStore(tree).list(f.root,parent.nodeId).isEmpty())
+                val node=tree.children(f.root,parent.nodeId).single();assertNotNull(node.reportReceipt)
+                db.treeRead {sql -> sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND node_id=? AND kind IN ('CHILD_WAIT_EXECUTION','CONSUMED')",arrayOf(f.root,parent.nodeId)).use {c->c.moveToFirst();assertEquals(0,c.getInt(0))}}
+            }}
+        } finally {release.countDown()}
+    }
+
     @Test fun confirmedParkSourceRemainsExactThroughNativeFinalPublicationBeforeWake() {
         val calls=AtomicInteger();val childEntered=CountDownLatch(1);val releaseChild=CountDownLatch(1);val successor=CountDownLatch(1)
         val fixture=start { history,_,_ ->

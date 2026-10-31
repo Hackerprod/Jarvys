@@ -105,10 +105,8 @@ class WorkspaceTreeEvidenceStoreTest {
             registry.submitNativeControl(id,scope.workspaceId,n.assignmentId!!,n.botId!!,n.assignmentRevision,
                 WorkspaceControlType.CORRECT,"samecycle correction $index",Runnable {})
             // Synthetic immutable preclaim source fixture: native adapter must confirm this snapshot before claim.
-            registry.treeTransaction { db -> core.appendEvent(db,n,WorkspaceTreeStore.identity("control-predecessor",id),
-                "CONTROL_PREDECESSOR",certificate(),id,WorkspaceTreeStore.identity(certificate()),n.cycleId) }
             val control=WorkspaceTreeControlStore(core)
-            val claim=control.claim(TreeNodeFence.of(n),id,"process",false,Runnable {})
+            val claim=control.claim(TreeNodeFence.of(n),id,"process",false,certificate(),Runnable {})
             denied { producer(claim.node) }
             evidence.requireCertifiedPredecessor(n.rootId,n.nodeId,n.cycleId,n.assignmentId!!,n.botId!!,
                 "native-workspace:${scope.workspaceId}",digest,"generation",certificate(),digest,pendingControlId=id)
