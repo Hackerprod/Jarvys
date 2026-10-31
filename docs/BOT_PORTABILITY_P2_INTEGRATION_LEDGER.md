@@ -91,3 +91,9 @@ Final test-only corrections preserve verified v98 memory-OFF semantics (actual c
 
 
 The first race-fix export compiled production but stopped test compilation on three invalid timeline-projection fields in the added regeneration boundary case. The fixture now uses the same atomic `regenerateAssistantIfLatest` receipt-producing API as MainActivity and asserts its exact original USER owner before invoking native regeneration. No production or regeneration policy changed; original failed build is retained.
+
+## Fifth diagnostic: exact outbound task history
+
+Focused run5 executed **135 cases with five failures, 0 errors/skips**. Central service17, main chat54, messaging14, source integration1, menu routing9 and title checkpoint7 all passed; worker28/33 passed. All five remaining failures reject a parent's retained outgoing TREE_TASK as if it were that parent's pending child-addressed inbox item. The duplicate USER regression and all three parked-source interleavings now pass. This is diagnostic evidence, not full acceptance.
+
+Historical sender copies now require a read-only canonical verifier: actual parent/child Registry relationship, immutable original invocation/ADMISSION/EXECUTION/BIND receipts, exact objective/provenance/UTF16 digest, original assignment revision and child cycle. Later genuine child successors do not invalidate original history. Pending inputs retain strict recipient validation; this path returns no capability, mailbox work or execution claim. Six added native cases cover real successor conservation, pending rejection, cross-parent/workspace/sibling/payload/cycle mutations, initial certificate/relationship corruption and rehashed malformed JSON scalars. New source/tests are unrun at this checkpoint and require independent review. No generic target bypass or legacy reinterpretation is added.

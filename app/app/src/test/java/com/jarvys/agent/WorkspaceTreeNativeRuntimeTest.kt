@@ -727,4 +727,130 @@ class WorkspaceTreeNativeRuntimeTest {
         } finally {releaseConfirm.countDown();releaseChild.countDown()}
     }
 
+    private fun outboundTaskFixture(twoChildren:Boolean=false):Pair<Fixture,CrewMessage> {
+        val childCalls=AtomicInteger();val parentCalls=AtomicInteger()
+        val childEntered=CountDownLatch(1);val parentReported=CountDownLatch(1)
+        val objective="HISTORY_CHILD café e\u0301 \uD83D\uDE80"
+        val f=start(beforeMessage={_,bot,message ->
+            if(bot.mission=="PARENT_PLAN" && message.type==CrewMessage.Type.RESULT)parentReported.countDown()
+        }) { history,_,_ ->
+            if(task(history).contains("HISTORY_CHILD")) {childEntered.countDown();childCalls.incrementAndGet();ModelReply("Child history retained",emptyList())}
+            else {
+                val step=parentCalls.incrementAndGet()
+                if(step==1 || twoChildren && step==2)call("history-delegate-$step","delegate_subtask",mapOf("objective" to objective+if(step==1)"" else " sibling","tools" to emptyList<String>()))
+                else ModelReply("Parent history retained",emptyList())
+            }
+        }
+        assertTrue(childEntered.await(15,TimeUnit.SECONDS));assertTrue(parentReported.await(15,TimeUnit.SECONDS))
+        f.manager.bots().filter {it.id!=f.bot.id}.forEach {await(it)};await(f.bot)
+        val message=f.manager.messageBus().snapshot().single {it.from==f.bot.id && it.type==CrewMessage.Type.TASK && it.text==objective}
+        assertEquals(objective,message.text)
+        storage.onDatabaseWorker {WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,f.bot.id,f.bot.missionId,message)}
+        return f to message
+    }
+    private fun decodeTaskHistory(f:Fixture,message:CrewMessage,pending:Boolean) {
+        val method=CrewCheckpointCoordinator::class.java.getDeclaredMethod("decodeMessages",org.json.JSONArray::class.java,
+            String::class.java,String::class.java,Boolean::class.javaPrimitiveType).apply {isAccessible=true}
+        try {method.invoke(CrewCheckpointCoordinator(app,f.scope.executionSessionId) {it.role},org.json.JSONArray().put(message.toJson()),f.bot.id,f.bot.missionId,pending)}
+        catch(wrapped:java.lang.reflect.InvocationTargetException){throw wrapped.targetException}
+    }
+    @Test fun canonicalOutboundTaskHistorySurvivesRealChildSuccessorWithoutBecomingPendingInput() {
+        val (f,message)=outboundTaskFixture();val child=f.manager.bot(message.to)!!;val originalCycle=child.cycleId()
+        storage.onDatabaseWorker {
+            decodeTaskHistory(f,message,false);deny {decodeTaskHistory(f,message,true)}
+            val control=WorkspaceRegistry(app).use {db ->
+                val assignment=db.getAssignment(f.scope.workspaceId,child.assignmentId())!!
+                db.nativeControls().submit(UUID.randomUUID().toString(),f.scope.workspaceId,assignment.assignmentId,child.id,
+                    assignment.revision,WorkspaceControlType.RESUME,"Review the retained child history")
+            }
+            WorkspaceCoordinator(app,{f.manager},{}).executeNativeControl(control.requestId,CancellationToken.uncancellable())
+        }
+        await(child);assertNotEquals(originalCycle,child.cycleId())
+        storage.onDatabaseWorker {decodeTaskHistory(f,message,false);deny {decodeTaskHistory(f,message,true)}}
+        assertEquals(message.inputBinding.admissionCycleId,originalCycle)
+    }
+    @Test fun canonicalOutboundTaskRejectsCrossParentWorkspaceAndWrongObjectiveEvenWithValidDtoHash() {
+        val (f,message)=outboundTaskFixture()
+        storage.onDatabaseWorker {
+            deny {WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,message.to,f.bot.missionId,message)}
+            deny {WorkspaceTreeTaskEvidence.requireOutbound(app,WorkspaceIdentity.executionSessionId(UUID.randomUUID().toString()),f.bot.id,f.bot.missionId,message)}
+            // Invalid UTF16/NUL are tampered historical DTO data, never newly admitted missions.
+            for(suffix in listOf(" altered","\u0000","\uD800")) {
+                val altered=CrewMessage(message.id,message.conversationId,message.from,message.to,message.type,message.text+suffix,message.refs,message.timestampMillis)
+                val binding=CrewInputBinding.fromJsonStrict(message.inputBinding.toJson().put("deliverySha256",CrewInputBinding.deliverySha256(altered)))
+                val forged=altered.withInputBinding(binding).withInputProvenance(message.inputProvenance)
+                deny {WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,f.bot.id,f.bot.missionId,forged)}
+            }
+        }
+    }
+    @Test fun canonicalOutboundTaskRejectsChangedOriginalParentAndChildCycles() {
+        val (f,message)=outboundTaskFixture()
+        storage.onDatabaseWorker {
+            val hash=CrewInputBinding::class.java.getDeclaredMethod("hashText",String::class.java,String::class.java).apply {isAccessible=true}
+            val p=ConversationInput.Provenance.fromJson(message.inputProvenance.toJson().put("cycleId",UUID.randomUUID().toString()))
+            val binding=CrewInputBinding.fromJsonStrict(message.inputBinding.toJson().put("sourcePayloadSha256",hash.invoke(null,"tree-task-provenance-v1",p.toJson().toString())))
+            val bare=CrewMessage(message.id,message.conversationId,message.from,message.to,message.type,message.text,message.refs,message.timestampMillis)
+            deny {WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,f.bot.id,f.bot.missionId,bare.withInputBinding(binding).withInputProvenance(p))}
+            val wrongChildCycle=CrewInputBinding.fromJsonStrict(message.inputBinding.toJson().put("admissionCycleId",UUID.randomUUID().toString()))
+            deny {WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,f.bot.id,f.bot.missionId,bare.withInputBinding(wrongChildCycle).withInputProvenance(message.inputProvenance))}
+        }
+    }
+    @Test fun canonicalOutboundTaskRejectsTamperedInitialBindCertificateAndParentRelation() {
+        val (f,message)=outboundTaskFixture()
+        storage.onDatabaseWorker {WorkspaceRegistry(app).use {db ->
+            val tree=WorkspaceTreeStore(db);val child=tree.findAssignment(f.scope.workspaceId,message.inputBinding.assignmentId)!!
+            val key=WorkspaceTreeStore.identity("bind",child.nodeId,message.inputBinding.admissionCycleId)
+            db.treeTransaction {sql ->
+                val digest=sql.rawQuery("SELECT payload_digest FROM bot_tree_event WHERE root_id=? AND event_key=?",arrayOf(child.rootId,key)).use {c->check(c.moveToFirst());c.getString(0)}
+                sql.execSQL("UPDATE bot_tree_event SET payload_digest=? WHERE root_id=? AND event_key=?",arrayOf("b".repeat(64),child.rootId,key))
+                deny {WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,f.bot.id,f.bot.missionId,message)}
+                sql.execSQL("UPDATE bot_tree_event SET payload_digest=? WHERE root_id=? AND event_key=?",arrayOf(digest,child.rootId,key))
+                sql.execSQL("UPDATE bot_tree_node SET parent_node_id=? WHERE root_id=? AND node_id=?",arrayOf(child.nodeId,child.rootId,child.nodeId))
+                deny {WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,f.bot.id,f.bot.missionId,message)}
+                sql.execSQL("UPDATE bot_tree_node SET parent_node_id=? WHERE root_id=? AND node_id=?",arrayOf(child.parentNodeId,child.rootId,child.nodeId))
+            }
+            WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,f.bot.id,f.bot.missionId,message)
+        }}
+    }
+
+    @Test fun canonicalOutboundTaskCannotBeRetargetedToGenuineSameWorkspaceSibling() {
+        val (f,message)=outboundTaskFixture(true)
+        val sibling=f.manager.bots().single {it.id!=f.bot.id && it.id!=message.to}
+        val bare=CrewMessage(message.id,message.conversationId,message.from,sibling.id,message.type,message.text,message.refs,message.timestampMillis)
+        val binding=CrewInputBinding.fromJsonStrict(message.inputBinding.toJson().put("botId",sibling.id).put("deliverySha256",CrewInputBinding.deliverySha256(bare)))
+        val forged=bare.withInputBinding(binding).withInputProvenance(message.inputProvenance)
+        storage.onDatabaseWorker {deny {WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,f.bot.id,f.bot.missionId,forged)}}
+    }
+
+    @Test fun canonicalOutboundTaskRejectsRehashedCoercibleResultScalars() {
+        val (f,message)=outboundTaskFixture()
+        storage.onDatabaseWorker {WorkspaceRegistry(app).use {db ->
+            val tree=WorkspaceTreeStore(db);val child=tree.findAssignment(f.scope.workspaceId,message.inputBinding.assignmentId)!!
+            val invocation=WorkspaceTreeEvidenceStore(tree).invocationReceipts(child.rootId,child.parentNodeId!!,message.inputProvenance.cycleId)
+                .single {it.sourceReceipt==child.sourceReceipt}
+            val key=WorkspaceTreeStore.identity("invocation-result",invocation.sourceKey)
+            val original=invocation.resultJson!!
+            val stringBoolean=org.json.JSONObject(original).put("success","true")
+            val fractionalRevision=org.json.JSONObject(original)
+            val prefix="native-tree-child:${child.nodeId}\n"
+            val admitted=org.json.JSONObject(fractionalRevision.getString("content").removePrefix(prefix))
+            admitted.put("revision",admitted.getLong("revision").toDouble()+0.5)
+            fractionalRevision.put("content",prefix+admitted.toString())
+            val extraField=org.json.JSONObject(original).put("unknown",true)
+            for(malformed in listOf(stringBoolean,fractionalRevision,extraField)) {
+                val altered=WorkspaceTreeEvidenceStore.canonical(malformed)
+                try {
+                    db.treeTransaction {sql -> sql.execSQL("UPDATE bot_tree_event SET receipt=?,payload_digest=? WHERE root_id=? AND event_key=?",
+                        arrayOf(altered,WorkspaceTreeStore.identity(altered),child.rootId,key))}
+                    // Full event digest still matches: scalar/shape validation, not a hash mismatch, must deny.
+                    deny {WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,f.bot.id,f.bot.missionId,message)}
+                } finally {
+                    db.treeTransaction {sql -> sql.execSQL("UPDATE bot_tree_event SET receipt=?,payload_digest=? WHERE root_id=? AND event_key=?",
+                        arrayOf(original,WorkspaceTreeStore.identity(original),child.rootId,key))}
+                }
+                WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,f.bot.id,f.bot.missionId,message)
+            }
+        }}
+    }
+
 }

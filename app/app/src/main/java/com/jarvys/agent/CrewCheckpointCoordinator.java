@@ -561,7 +561,15 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             if (message.coordination != null && (!botId.equals(message.coordination.botId)
                     || !missionId.equals(message.coordination.missionId)))
                 throw new IllegalStateException("Checkpoint causal source belongs to another mission");
-            if (message.inputBinding != null && (!botId.equals(message.inputBinding.botId)
+            boolean outboundTreeTask = !pending && botId.equals(message.from) && !botId.equals(message.to)
+                    && message.inputBinding != null && message.inputBinding.sourceKind
+                        == com.jarvys.agent.crew.CrewInputBinding.SourceKind.TREE_TASK;
+            if (outboundTreeTask) {
+                // Historical sender copy only: canonical initial assignment/EXECUTION/BIND and invocation
+                // receipts authenticate it. It never becomes this parent's pending input or a new grant.
+                com.jarvys.agent.workspaces.WorkspaceTreeTaskEvidence.requireOutbound(context,conversation,botId,missionId,message);
+            }
+            if (message.inputBinding != null && !outboundTreeTask && (!botId.equals(message.inputBinding.botId)
                     || !missionId.equals(message.inputBinding.missionId)
                     || !conversation.equals(message.inputBinding.executionSessionId)))
                 throw new IllegalStateException("Checkpoint input source belongs to another mission");
