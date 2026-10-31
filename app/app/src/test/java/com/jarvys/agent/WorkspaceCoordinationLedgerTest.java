@@ -232,12 +232,18 @@ public class WorkspaceCoordinationLedgerTest {
         assertTrue(store.listWorkspaceCoordinationNotices(CENTRAL, 10, null).isEmpty());
     }
 
-    @Test public void deletedCentralIsNeverRecreated() {
+    @Test public void centralDeletionIsRejectedWithoutChangingRowsAndNoticeRetryIsIdempotent() {
         WorkspaceCoordinationReference reference = persistReference(evidence("a", "result"));
-        assertTrue(store.deleteConversation(CENTRAL));
-        assertThrows(IllegalStateException.class, () -> store.appendWorkspaceCoordinationNoticeIfAbsent(reference, () -> { }));
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceCoordinationNotices(CENTRAL, 10, null));
-        assertTrue(ChatDatabaseBridge.getInstance(context).isTombstonedSync(CENTRAL));
+        store.appendWorkspaceCoordinationNoticeIfAbsent(reference, () -> { });
+        List<String> sourceBefore = coordinationState(SOURCE), centralBefore = coordinationState(CENTRAL);
+        assertThrows(IllegalStateException.class, () -> store.deleteConversation(CENTRAL));
+        assertFalse(ChatDatabaseBridge.getInstance(context).isTombstonedSync(CENTRAL));
+        assertEquals(sourceBefore, coordinationState(SOURCE));
+        assertEquals(centralBefore, coordinationState(CENTRAL));
+        reopened().appendWorkspaceCoordinationNoticeIfAbsent(reference, this::reject);
+        assertEquals(1, reopened().listWorkspaceCoordinationNotices(CENTRAL, 10, null).size());
+        assertEquals(sourceBefore, coordinationState(SOURCE));
+        assertEquals(centralBefore, coordinationState(CENTRAL));
     }
 
     @Test public void missingSourceFailsClosedEvenForExactReadsAndFirstEvidence() {
@@ -486,7 +492,7 @@ public class WorkspaceCoordinationLedgerTest {
         assertTrue(store.deleteConversation(SOURCE));
         assertThrows(IllegalStateException.class, () -> store.markWorkspaceCoordinationReplyStarted(initial, () -> { }));
         assertThrows(IllegalStateException.class, () -> store.readWorkspaceCoordinationReply(CENTRAL, reference.referenceId));
-        File databaseFile = new File(new File(context.getFilesDir(), "jarvys"), "jarvys-chat.db");
+        File databaseFile = new File(new StorageGeneration(context).chatRoot(), "agent.db");
         try (SQLiteDatabase database = SQLiteDatabase.openDatabase(databaseFile.getPath(), null, SQLiteDatabase.OPEN_READONLY)) {
             try (Cursor replyRow = database.rawQuery(
                     "SELECT state FROM workspace_coordination_replies WHERE conversation_id=? AND reference_id=?",

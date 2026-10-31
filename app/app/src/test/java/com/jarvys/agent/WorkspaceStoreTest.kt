@@ -20,7 +20,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], shadows = [ArtifactOsShadow::class])
+@Config(sdk = [34], application = TreeNativeTestApplication::class, shadows = [ArtifactOsShadow::class])
 class WorkspaceStoreTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
 
@@ -241,7 +241,8 @@ Read and verify the project files.
         assertFalse(File(projectRoot, "memory").exists())
     }
 
-    private class FilesDirContext(base: Context, private val filesDirectory: File) : ContextWrapper(base) {
+    private class FilesDirContext(base: Context, private val filesDirectory: File) : ContextWrapper(base)  , com.jarvys.agent.connectors.ConnectionAccessProvider {
+        override fun connectionAccess() = (baseContext.applicationContext as TreeNativeTestApplication).connectionAccess()
         override fun getApplicationContext(): Context = this
         override fun getFilesDir(): File = filesDirectory
     }

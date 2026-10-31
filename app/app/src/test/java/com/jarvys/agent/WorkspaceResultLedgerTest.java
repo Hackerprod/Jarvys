@@ -372,11 +372,18 @@ public class WorkspaceResultLedgerTest {
         assertTrue(store.listWorkspaceResultNotices(CENTRAL, 100, null).isEmpty());
     }
 
-    @Test public void deletedCentralIsNeverRecreated() {
+    @Test public void centralDeletionIsRejectedWithoutChangingRowsAndNoticeRetryIsIdempotent() {
         WorkspaceResultReference reference = persistReference(evidence("a", "result"));
-        assertTrue(store.deleteConversation(CENTRAL));
-        assertThrows(IllegalStateException.class, () -> store.appendWorkspaceResultNoticeIfAbsent(reference, () -> { }));
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceResultNotices(CENTRAL, 10, null));
+        store.appendWorkspaceResultNoticeIfAbsent(reference, () -> { });
+        List<String> sourceBefore = resultState(SOURCE), centralBefore = resultState(CENTRAL);
+        assertThrows(IllegalStateException.class, () -> store.deleteConversation(CENTRAL));
+        assertFalse(ChatDatabaseBridge.getInstance(context).isTombstonedSync(CENTRAL));
+        assertEquals(sourceBefore, resultState(SOURCE));
+        assertEquals(centralBefore, resultState(CENTRAL));
+        reopened().appendWorkspaceResultNoticeIfAbsent(reference, this::reject);
+        assertEquals(1, reopened().listWorkspaceResultNotices(CENTRAL, 10, null).size());
+        assertEquals(sourceBefore, resultState(SOURCE));
+        assertEquals(centralBefore, resultState(CENTRAL));
     }
 
     @Test public void tombstonedSourceFailsClosedEvenForExactReadsAndFirstEvidence() {

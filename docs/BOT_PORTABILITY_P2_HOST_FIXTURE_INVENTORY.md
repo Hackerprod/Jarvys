@@ -36,3 +36,13 @@ Fresh selected acceptance, not historical coverage restoration. All listed chang
 - `app/app/src/test/java/com/jarvys/agent/MainActivityWorkspaceRoutingTest.kt`: Current service boundary rejects stale and worker sessions; null/Central positives + actual Activity/picker routing assertions retained. Offline launcher violation not claimed resolved.
 - `app/app/src/test/java/com/jarvys/agent/CrewMissionTitleCheckpointTest.java`: Keep genuine current project spawn/title/fullinstructions positive, run on DB worker. Four saved-scope synthetic recovery expectations become failclosed/display-only/ledger preservation; redaction+mismatch cases unchanged; no project identity fabricated.
 - `app/app/src/test/java/com/jarvys/agent/CrewConversationReplayTest.java`: Four old fake saved-scope/project autorestoration/replay tests reclassified as explicit no authority/no receipt/no replay/no migration negatives over2reopens. Actual generalist P1 positive restoration remains NativeWorkspaceCheckpointRecoveryTest; no legacy replay resurrected.
+
+## Remaining current-source fixtures
+
+- `app/app/src/test/java/com/jarvys/agent/WorkspaceResultLedgerTest.java`: Reject forbidden Central deletion, conserve source/Central rows and preserve exact dedupe; coordination raw SQL inspection uses current native generation path.
+- `app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationLedgerTest.java`: Reject forbidden Central deletion, conserve source/Central rows and preserve exact dedupe; coordination raw SQL inspection uses current native generation path.
+- `app/app/src/test/java/com/jarvys/agent/chatdb/WorkspaceLedgerIndependenceTest.kt`: Use existing exact SQLite constraint numeric classifier for bundled native driver, never arbitrary exception; add state/transition conservation.
+- `app/app/src/test/java/com/jarvys/agent/WorkspaceEffectReceiptTest.kt`: Actual canonical Central owner/run and native beginMemorySession producer bound to transcript before committed calls; real source provider for effect observer. Preserve every mutation/admission/source/persistence assertion.
+- NativeContinuationLivePermitTest and NativeContinuationStopTest: actual retained-v98 assignment/checkpoint producer setup, no tree enrollment or fabricated capability; all existing control/restart assertions retained.
+- WorkspaceMemoryContinuityTest: genuine saved general-purpose profile, unchanged namespace and compaction assertions.
+- WorkspaceStoreTest and WorkspaceSupervisorMessagePipelineTest: actual application connector owner through existing isolated context wrapper.

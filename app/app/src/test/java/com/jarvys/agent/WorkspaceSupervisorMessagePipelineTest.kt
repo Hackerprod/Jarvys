@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = Application::class, shadows = [ArtifactOsShadow::class])
+@Config(sdk = [34], application = TreeNativeTestApplication::class, shadows = [ArtifactOsShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class WorkspaceSupervisorMessagePipelineTest {
     @get:Rule val chatTestStore = ChatTestStore(
@@ -370,7 +370,8 @@ class WorkspaceSupervisorMessagePipelineTest {
         assertTrue("$label did not finish: status=${bot.status()} error=${bot.error()}", bot.isQuiescent)
     }
 
-    private class IsolatedWorkspaceContext(base: Context, private val files: File) : ContextWrapper(base) {
+    private class IsolatedWorkspaceContext(base: Context, private val files: File) : ContextWrapper(base)  , com.jarvys.agent.connectors.ConnectionAccessProvider {
+        override fun connectionAccess() = (baseContext.applicationContext as TreeNativeTestApplication).connectionAccess()
         init { check(files.isDirectory || files.mkdirs()) }
         override fun getApplicationContext(): Context = this
         override fun getFilesDir(): File = files

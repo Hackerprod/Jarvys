@@ -27,10 +27,16 @@ class WorkspaceEffectReceiptTest {
                 override fun getFilesDir() = files
             }
             val db = ChatDatabaseBridge.getInstance(context)
-            val session = "native-effect-session"
+            val session = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
             val owner = store.appendConversationMessage(session, "user", "Write and edit a local note")
-            val runId = "native-effect-run"
+            val runId = java.util.UUID.randomUUID().toString()
             val transcript = MainChatTranscriptStore(files, session, store)
+            MemoryWritePolicy.forContext(context).setEnabledBlocking(true)
+            val token = CancellationToken.cancellable()
+            val memorySession = db.beginMemorySession(MemoryWritePolicy.forContext(context).captureTicket(),
+                token, java.util.UUID.randomUUID().toString(), session, owner, runId,
+                com.jarvys.agent.crew.CrewProcessIdentity.ID)
+            transcript.setMemorySessionBinding(memorySession)
             val workspace = WorkspaceStore(File(files, "workspace"), WorkspaceStore.projectIdForSession(session))
             val target = File(File(files, "workspace"), "${workspace.projectId()}/note.txt")
             val recorder = EpisodeRecorder(context, session, owner, runId, transcript)
@@ -57,6 +63,7 @@ class WorkspaceEffectReceiptTest {
                     recorder.afterDispatch(tool, callId, result, failure, receipt)
             }
             val registry = CoreToolRegistry(WorkspaceTools.create(workspace)).withInvocationObserver(observer)
+                .withInvocationSourceProvider(transcript.centralSourceProvider(owner, runId))
             var turns = 0
             val model = CoreAgentLoop.Model { _, _, _, _ ->
                 when (turns++) {
@@ -68,9 +75,9 @@ class WorkspaceEffectReceiptTest {
                 }
             }
             val loop = CoreAgentLoop(model, registry, "Use the requested local file operations", session)
-            transcript.attach(loop, emptyList(), owner)
+            transcript.attach(loop, emptyList(), owner, runId)
             val result = loop.run("Write and edit a local note", emptyList(), emptyList(),
-                CancellationToken.cancellable(), null, owner, runId)
+                token, null, owner, runId)
             assertEquals("COMPLETED", result.outcome)
             assertEquals(runId, result.runId)
             assertEquals("after", workspace.read("note.txt"))
@@ -120,6 +127,12 @@ class WorkspaceEffectReceiptTest {
             val owner = store.appendConversationMessage(session, "user", "Save this note, update it, then forget it")
             val runId = java.util.UUID.randomUUID().toString()
             val transcript = MainChatTranscriptStore(files, session, store)
+            MemoryWritePolicy.forContext(context).setEnabledBlocking(true)
+            val token = CancellationToken.cancellable()
+            val memorySession = db.beginMemorySession(MemoryWritePolicy.forContext(context).captureTicket(),
+                token, java.util.UUID.randomUUID().toString(), session, owner, runId,
+                com.jarvys.agent.crew.CrewProcessIdentity.ID)
+            transcript.setMemorySessionBinding(memorySession)
             var completed = 0
             val native = PersonalMemoryTools.create(context, owner, session).filter {
                 it.declaration().name in setOf("memory_save", "memory_update", "memory_forget")
@@ -167,7 +180,7 @@ class WorkspaceEffectReceiptTest {
             }, tools, "Use the requested native observation operations", session)
             transcript.attach(loop, emptyList(), owner, runId)
             val result = loop.run("Save this note, update it, then forget it", emptyList(), emptyList(),
-                CancellationToken.cancellable(), null, owner, runId)
+                token, null, owner, runId)
             assertEquals("COMPLETED", result.outcome)
             assertEquals(3, completed)
             assertTrue(db.personalAgentGet(listOf(savedId)).isEmpty())

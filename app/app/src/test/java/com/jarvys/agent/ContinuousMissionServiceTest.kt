@@ -116,6 +116,9 @@ class ContinuousMissionServiceTest {
         }, null)
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { nativeContext, nativeSession, skills ->
             CoreAgentRuntime(nativeContext,nativeSession,skills,CorePromptBudget.standard(),object : ModelProviderClient {
+                override fun completeConversation(systemPrompt:String,history:List<ConversationTurn>,userPrompt:String,
+                    images:List<com.jarvys.agent.device.ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply =
+                    error("The instrumented service runner must not call a provider")
                 override fun complete(systemPrompt: String,userPrompt: String,images: List<com.jarvys.agent.device.ScreenData>,
                     tools: List<ToolSpec>,sessionId: String,token: CancellationToken): ModelReply =
                     throw AssertionError("Continuous service fixture must use its injected main-chat runner")

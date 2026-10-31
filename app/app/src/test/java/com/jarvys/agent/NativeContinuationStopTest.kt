@@ -87,12 +87,23 @@ class NativeContinuationStopTest {
         val exactToken = ownerController.beginRun()!!
         var replacement: CancellationToken? = null
         try {
-            val delegated = storage.onDatabaseWorker {
-                WorkspaceCoordinator(context, { manager }, {}).delegateContinuing(scope.workspaceId,
-                    "stop-assignment", profile.id, "Prepare itinerary", emptyList(), "Planner", "standard",
-                    "stop-request", "Plan a trip", CancellationToken.uncancellable(), Runnable {}, null)
+            val bot = storage.onDatabaseWorker {
+                // Deliberate retained-v98 native producer: no P2 admission or synthetic Central authority.
+                val bot = WorkspaceRegistry(context).use { registry ->
+                    val prepared = registry.prepareAssignment(scope.workspaceId, "continuation-v1:" + UUID.nameUUIDFromBytes("stop-assignment".toByteArray(Charsets.UTF_8)), "stop-request", "Plan a trip",
+                        profile.id, "Prepare itinerary", emptyList(), "Planner", CrewMissionAccess.STANDARD)
+                    val started = registry.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, CrewProcessIdentity.ID)
+                    val worker = manager.spawnForMissionDeferred(started.missionId, started.originalUserRequest,
+                        started.role, started.missionText, started.tools, started.name, started.missionAccess, scope.title, started)
+                    val bound = registry.bindBot(scope.workspaceId, started.assignmentId, started.revision, worker.id)
+                    WorkspaceContinuationDelivery.initialize(context, bound, manager, worker)
+                    assertNull("Retained P1 fixture must remain unenrolled", WorkspaceTreeStore(registry).findAssignment(scope.workspaceId, bound.assignmentId))
+                    manager.startPreparedForMission(worker)
+                    WorkspaceMissionCards.delegated(context, scope, bound)
+                    worker
+                }
+                bot
             }
-            val bot = manager.bot(delegated.getString("bot_id"))!!
             executor.submit { bot.awaitTermination() }.get(15, TimeUnit.SECONDS)
             assertEquals(bot.error(), CrewManager.Status.DONE, bot.status())
             val checkpoints = CrewCheckpointStore(context.filesDir)

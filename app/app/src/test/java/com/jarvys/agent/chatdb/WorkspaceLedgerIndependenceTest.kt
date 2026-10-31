@@ -1,7 +1,7 @@
 package com.jarvys.agent.chatdb
 
 import android.content.Context
-import android.database.sqlite.SQLiteConstraintException
+import android.database.SQLException
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -123,7 +123,10 @@ class WorkspaceLedgerIndependenceTest {
                 arrayOf(central, reply.reply_id),
             )
         }.exceptionOrNull()
-        assertTrue("PREPARED cannot skip STARTED", skippedUpdate is SQLiteConstraintException)
+        assertTrue("PREPARED cannot skip STARTED", skippedUpdate is SQLException && isChatSqlConstraint(skippedUpdate))
+        assertEquals(1L, scalarLong(sqlite,
+            "SELECT COUNT(*) FROM workspace_coordination_replies WHERE conversation_id=? AND reply_id=? AND state='PREPARED' AND state_at_ms=12",
+            arrayOf(central, reply.reply_id)))
         val skippedTransition = runCatching {
             sqlite.execSQL(
                 "INSERT INTO workspace_coordination_reply_transitions(schema_version,conversation_id,reply_id,seq,state,state_at_ms) " +
@@ -131,7 +134,8 @@ class WorkspaceLedgerIndependenceTest {
                 arrayOf(1, central, reply.reply_id, 4L, "ACCEPTED_LOCAL", 13L),
             )
         }.exceptionOrNull()
-        assertTrue("PREPARED cannot skip STARTED", skippedTransition is SQLiteConstraintException)
+        assertTrue("PREPARED cannot skip STARTED", skippedTransition is SQLException && isChatSqlConstraint(skippedTransition))
+        assertEquals(0L, rowCount(sqlite, "workspace_coordination_reply_transitions"))
         sqlite.execSQL(
             "INSERT INTO workspace_coordination_reply_transitions(schema_version,conversation_id,reply_id,seq,state,state_at_ms) " +
                 "VALUES(?,?,?,?,?,?)",
@@ -144,7 +148,7 @@ class WorkspaceLedgerIndependenceTest {
                 arrayOf(1, central, reply.reply_id, 6L, "STARTED", 15L),
             )
         }.exceptionOrNull()
-        assertTrue("one transition per state is enforced", duplicateTransition is SQLiteConstraintException)
+        assertTrue("one transition per state is enforced", duplicateTransition is SQLException && isChatSqlConstraint(duplicateTransition))
         sqlite.execSQL(
             "UPDATE workspace_coordination_replies SET state='STARTED',state_at_ms=14 WHERE conversation_id=? AND reply_id=?",
             arrayOf(central, reply.reply_id),
@@ -164,7 +168,7 @@ class WorkspaceLedgerIndependenceTest {
                 arrayOf(central, reply.reply_id),
             )
         }.exceptionOrNull()
-        assertTrue("terminal reply state cannot move backwards", backwardsUpdate is SQLiteConstraintException)
+        assertTrue("terminal reply state cannot move backwards", backwardsUpdate is SQLException && isChatSqlConstraint(backwardsUpdate))
 
         assertEquals(1L, rowCount(sqlite, "workspace_result_refs"))
         assertEquals(1L, rowCount(sqlite, "workspace_coordination_refs"))

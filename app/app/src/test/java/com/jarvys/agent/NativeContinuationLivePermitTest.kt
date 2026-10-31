@@ -106,10 +106,20 @@ class NativeContinuationLivePermitTest {
         }
         fun complete(): Episode {
             val id = UUID.randomUUID().toString()
-            val receipt = WorkspaceCoordinator(context,{ manager },{}).delegateContinuing(scope.workspaceId,
-                "assignment-$id",profile.id,"Prepare itinerary",emptyList(),"Planner","standard",
-                "request-$id","Plan a trip",CancellationToken.uncancellable(),Runnable {},null)
-            val bot = manager.bot(receipt.getString("bot_id"))!!
+            // Deliberate retained-v98 native producer: no P2 admission or synthetic Central authority.
+            val bot = WorkspaceRegistry(context).use { registry ->
+                val prepared = registry.prepareAssignment(scope.workspaceId, "continuation-v1:" + UUID.nameUUIDFromBytes("assignment-$id".toByteArray(Charsets.UTF_8)), "request-$id", "Plan a trip",
+                    profile.id, "Prepare itinerary", emptyList(), "Planner", CrewMissionAccess.STANDARD)
+                val started = registry.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, CrewProcessIdentity.ID)
+                val worker = manager.spawnForMissionDeferred(started.missionId, started.originalUserRequest,
+                    started.role, started.missionText, started.tools, started.name, started.missionAccess, scope.title, started)
+                val bound = registry.bindBot(scope.workspaceId, started.assignmentId, started.revision, worker.id)
+                WorkspaceContinuationDelivery.initialize(context, bound, manager, worker)
+                assertNull("Retained P1 fixture must remain unenrolled", WorkspaceTreeStore(registry).findAssignment(scope.workspaceId, bound.assignmentId))
+                manager.startPreparedForMission(worker)
+                WorkspaceMissionCards.delegated(context, scope, bound)
+                worker
+            }
             bot.awaitTermination()
             assertEquals(bot.error(),if (failProvider) CrewManager.Status.FAILED else CrewManager.Status.DONE,bot.status())
             settleReceipts()

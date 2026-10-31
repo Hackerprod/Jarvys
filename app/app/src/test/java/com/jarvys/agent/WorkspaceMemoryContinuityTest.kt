@@ -36,6 +36,9 @@ internal class WorkspaceMemoryFixture(storage: ChatTestStore, directBridge: Bool
         override fun getDatabasePath(name: String): File = if (File(name).isAbsolute) File(name)
             else File(files, "databases/$name").also { it.parentFile!!.mkdirs() }
     }
+    val generalPurposeProfile = CrewProfile(CrewProfileRepository.newCustomId(), 1, "Memory analyst",
+        "General-purpose retained knowledge analysis", "Analyze requirements, evidence, and retained decisions.",
+        emptyList(), listOf("board_read"), CrewProfile.WorkspaceMode.LEGACY_CHAT)
     val central = WorkspaceIdentity.CENTRAL_SESSION
     val bridge get() = ChatDatabaseBridge.getInstance(context)
     val db get() = JarvysChatDatabaseProvider.getInstance(context)
@@ -48,6 +51,7 @@ internal class WorkspaceMemoryFixture(storage: ChatTestStore, directBridge: Bool
         else ChatDatabaseBridge.getInstance(context)
         storage.localRunStore(files)
         FreshStorageBootstrap.ensure(context)
+        CrewProfileRepository(context).create(generalPurposeProfile, listOf("board_read"), emptyList())
         assertTrue(bridge.ensureConversationSync(central, "chat") is ChatDbResult.Success)
         policy.setEnabledBlocking(true)
         policy.requestSetPromptCaptureEnabled(false).get(10, TimeUnit.SECONDS)
@@ -68,7 +72,7 @@ internal class WorkspaceMemoryFixture(storage: ChatTestStore, directBridge: Bool
     data class TaskRun(val bot: CrewManager.Bot, val manager: CrewManager, val assignment: WorkspaceAssignment)
     fun runTask(record: WorkspaceRecord, provider: ModelProviderClient,
                 access: CrewMissionAccess = CrewMissionAccess.STANDARD,
-                role: String = CrewRoleTemplates.ANALYST,
+                role: String = generalPurposeProfile.id,
                 mission: String = "Continue the assigned project using retained requirements and evidence.",
                 transform: ((CoreToolRegistry) -> CoreToolRegistry)? = null): TaskRun {
         val runtime = CoreAgentRuntime(context, record.executionSessionId, emptyList(), CorePromptBudget.standard(), provider)
@@ -276,7 +280,8 @@ class WorkspaceMemoryContinuityTest {
         f.awaitDone(first)
         assertTrue("At least two genuine summary requests", summaries >= 2)
         assertTrue(summaryTexts.none { it.contains("cobalt") || it.contains("horizontal scrolling") })
-        assertTrue("Task is general-purpose, not Coding", first.bot.role.id == CrewRoleTemplates.ANALYST)
+        assertEquals("Task retains its exact saved general-purpose profile", f.generalPurposeProfile.id, first.bot.role.id)
+        assertNotEquals("Task must not inherit Coding authority", CrewRoleTemplates.CODING, first.bot.role.id)
         assertEquals(CrewProfile.WorkspaceMode.LEGACY_CHAT, first.bot.role.workspaceMode)
         assertTrue(observedPrompts.any { it.contains("DURABLE WORKSPACE MEMORY") && it.contains("Before resuming work") && it.contains("proactively save") && it.contains("do not wait for the user") })
         assertEquals(listOf(listOf(corrected)), f.rows("SELECT text FROM memory_entries WHERE id=?", requireNotNull(decisionId)))
