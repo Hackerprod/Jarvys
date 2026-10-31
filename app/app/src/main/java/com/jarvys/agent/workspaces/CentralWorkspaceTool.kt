@@ -135,6 +135,7 @@ class CentralWorkspaceTool internal constructor(
             "Reply retry identity includes its original runtime central turn; another turn must inspect the saved inbox state instead of resending. " +
             "delegate needs workspace_id, a stable key, role and mission. Reuse the same key and payload on retries. " +
             "Optional tools restrict the worker; standard grants no extra authority and read_only restricts mutations. " +
+            "For reply/cancel select the exact owned target from current evidence. If the user target is ambiguous, ask for clarification; do not guess. " +
             "list and read are bounded; continue pages with returned IDs. read with assignment_id selects one assignment " +
             "and cannot use pagination fields. Runtime binds the actual user request; tool arguments cannot author user instructions. " +
             "inspect_file needs workspace_id and path and returns the current source SHA-256 and byte size. " +
@@ -260,7 +261,11 @@ class CentralWorkspaceTool internal constructor(
                 admission.run()
                 val mutation = if (payload.isMutation && invocation != null)
                     WorkspaceMutationContext(payload.action, payload.optionalString("workspace_id"),
-                        sourceWitness, invocation, admission, treeAdmission, token).also { holder?.set(it) }
+                        sourceWitness, invocation, admission, treeAdmission, token).also {
+                            if(payload.action in setOf("reply","cancel"))
+                                it.bindControlArguments(WorkspaceTreeEvidenceStore.canonical(JSONObject(requireNotNull(arguments))))
+                            holder?.set(it)
+                        }
                     else null
                 val data = when (payload.action) {
                     "create" -> if (mutation == null) backend.create(payload.string("key"), payload.string("title"),

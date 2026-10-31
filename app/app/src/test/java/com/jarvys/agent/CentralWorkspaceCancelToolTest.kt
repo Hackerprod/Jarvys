@@ -94,7 +94,7 @@ class CentralWorkspaceCancelToolTest {
             assertEquals(sibling,s.node(sibling));assertEquals(TreeNodeState.TERMINAL,s.node(target).state)
         } }
     }
-    @Test fun freshOriginalRootCannotCancelExactTargetOwnedByAnotherRoot() {
+    @Test fun staleOriginalUserCannotCancelNewerRootDespiteExactTarget() {
         WorkspaceMemoryFixture(storage).use { f -> Session(f).use { first -> Session(f).use { second ->
             val foreign=second.queued("foreign");val local=first.queued("local")
             first.run(listOf(first.args(foreign)))

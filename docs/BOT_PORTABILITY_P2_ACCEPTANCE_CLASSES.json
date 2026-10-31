@@ -8,6 +8,7 @@
   "com.jarvys.agent.CentralRuntimeSourceIntegrationTest",
   "com.jarvys.agent.CentralTreeAdmissionTest",
   "com.jarvys.agent.CentralTreeServiceAcceptanceTest",
+  "com.jarvys.agent.CentralUserTargetControlToolTest",
   "com.jarvys.agent.CentralWorkspaceCancelToolTest",
   "com.jarvys.agent.ContinuationGenerationReceiptTest",
   "com.jarvys.agent.ContinuationServiceRunTest",

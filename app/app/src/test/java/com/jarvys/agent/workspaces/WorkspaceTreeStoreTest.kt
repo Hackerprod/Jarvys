@@ -282,6 +282,63 @@ class WorkspaceTreeStoreTest {
         assertEquals(TreeNodeState.RUNNING,bound.state)
         denied { tree.bindExecution(TreeNodeFence.of(started),"bot","cycle",certificate(scope.workspaceId)) }
     }
+    @Test fun explicitNeverStartedWithdrawalNeedsRealCentralExitButNoFabricatedIncorporation() {
+        val central=root();val scope=workspace();val child=queued(central,scope,"withdraw-before-exit")
+        tree.cancelSubtree(TreeNodeFence.of(child),"CANCELLED","explicit-withdrawal")
+        assertEquals(TreeNodeState.RUNNING,tree.getNode(central.rootId,central.nodeId)!!.state)
+        assertFalse(tree.getRoot(central.rootId)!!.admissionsClosed)
+        val terminal=tree.finishCentral(TreeNodeFence.of(central),"confirmed-exit",false)
+        assertEquals(TreeNodeState.TERMINAL,terminal.state);assertEquals("COMPLETED",tree.getRoot(central.rootId)!!.closeReason)
+        registry.treeRead {db ->db.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind IN ('CENTRAL_CLAIM','CENTRAL_INCORPORATED')",arrayOf(central.rootId)).use {c->c.moveToFirst();assertEquals(0,c.getInt(0))}}
+        val cancelled=tree.getNode(child.rootId,child.nodeId)!!;assertNull(cancelled.botId);assertNull(cancelled.executionEventId)
+        assertNotNull(cancelled.terminalHash);assertNotNull(cancelled.reportReceipt)
+    }
+    @Test fun withdrawalReconcilesExistingConfirmedCentralWaitWithoutNewExecutionOrExit() {
+        val central=root();val scope=workspace();val child=queued(central,scope,"withdraw-after-exit")
+        tree.finishCentral(TreeNodeFence.of(central),"confirmed-retained-exit",false)
+        val exitKey=WorkspaceTreeStore.identity("central-exit",central.cycleId)
+        val before=registry.treeRead {db ->tree.event(db,central.rootId,exitKey)!!}
+        val executions=registry.treeRead {db ->db.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind IN ('EXECUTION','USER_EXECUTION','CHILD_WAIT_EXECUTION')",arrayOf(central.rootId)).use {c->c.moveToFirst();c.getInt(0)}}
+        tree.cancelSubtree(TreeNodeFence.of(child),"CANCELLED","late-explicit-withdrawal")
+        val closed=tree.getRoot(central.rootId)!!;assertEquals("COMPLETED",closed.closeReason)
+        val events=count("bot_tree_event");registry.close();registry=WorkspaceRegistry(context)
+        assertEquals(TreeNodeState.TERMINAL,WorkspaceTreeCentralStore(tree).reconcileWithdrawals(central.rootId).state)
+        assertEquals(closed,tree.getRoot(central.rootId));assertEquals(events,count("bot_tree_event"))
+        registry.treeRead {db ->
+            assertEquals(before,tree.event(db,central.rootId,exitKey))
+            db.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind IN ('EXECUTION','USER_EXECUTION','CHILD_WAIT_EXECUTION')",arrayOf(central.rootId)).use {c->c.moveToFirst();assertEquals(executions,c.getInt(0))}
+            db.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind='CENTRAL_EXIT'",arrayOf(central.rootId)).use {c->c.moveToFirst();assertEquals(1,c.getInt(0))}
+        }
+    }
+    @Test fun withdrawnQueuedSiblingDoesNotExemptStartedOrUnincorporatedWork() {
+        val central=root();val scope=workspace();val queued=queued(central,scope,"withdraw-only-this")
+        val running=running(queued(central,scope,"still-await"))
+        tree.finishCentral(TreeNodeFence.of(central),"confirmed-mixed-exit",false)
+        tree.cancelSubtree(TreeNodeFence.of(queued),"CANCELLED","withdraw-one")
+        assertEquals(TreeNodeState.WAITING,WorkspaceTreeCentralStore(tree).reconcileWithdrawals(central.rootId).state)
+        val terminal=settle(running)
+        WorkspaceTreeEvidenceStore(tree).markReported(terminal.rootId,terminal.nodeId,terminal.terminalRef!!,terminal.terminalHash!!,"real-running-report")
+        assertEquals(TreeNodeState.WAITING,WorkspaceTreeCentralStore(tree).reconcileWithdrawals(central.rootId).state)
+        assertFalse(tree.getRoot(central.rootId)!!.admissionsClosed)
+    }
+    @Test fun budgetCancellationIsNotSuccessfulDependencyWithdrawal() {
+        val central=root();val scope=workspace();val child=queued(central,scope,"budget-not-withdrawal")
+        tree.finishCentral(TreeNodeFence.of(central),"confirmed-budget-exit",false)
+        tree.cancelSubtree(TreeNodeFence.of(child),"BUDGET","budget-disposition")
+        assertEquals(TreeNodeState.WAITING,WorkspaceTreeCentralStore(tree).reconcileWithdrawals(central.rootId).state)
+        assertFalse(tree.getRoot(central.rootId)!!.admissionsClosed)
+    }
+    @Test fun withdrawalCannotCloseWithoutConfirmedExitOrWithCorruptedCapture() {
+        val central=root();val scope=workspace();val child=queued(central,scope,"withdraw-proof")
+        tree.cancelSubtree(TreeNodeFence.of(child),"CANCELLED","proof-withdrawal")
+        registry.treeTransaction {db ->db.execSQL("UPDATE bot_tree_node SET state='WAITING' WHERE root_id=? AND node_id=?",arrayOf(central.rootId,central.nodeId))}
+        assertEquals(TreeNodeState.WAITING,WorkspaceTreeCentralStore(tree).reconcileWithdrawals(central.rootId).state)
+        registry.treeTransaction {db ->db.execSQL("UPDATE bot_tree_event SET payload_digest=? WHERE root_id=? AND event_key=?",
+            arrayOf("b".repeat(64),central.rootId,WorkspaceTreeStore.identity("cancel-capture","proof-withdrawal")))}
+        denied {tree.finishCentral(TreeNodeFence.of(tree.getNode(central.rootId,central.nodeId)!!),"would-be-confirmed-exit",false)}
+        assertFalse(tree.getRoot(central.rootId)!!.admissionsClosed)
+        registry.treeRead {db ->assertNull(tree.event(db,central.rootId,WorkspaceTreeStore.identity("central-exit",central.cycleId)))}
+    }
     @Test fun centralCompletionWaitsForReportedAndIncorporatedAwaitedChild() {
         val parent=root();val scope=workspace();val child=running(queued(parent,scope,"awaited"))
         val waiting=tree.finishCentral(TreeNodeFence.of(parent),"confirmed-exit-fixture",false)

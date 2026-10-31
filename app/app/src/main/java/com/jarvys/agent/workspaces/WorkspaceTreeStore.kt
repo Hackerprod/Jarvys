@@ -209,60 +209,14 @@ internal class WorkspaceTreeStore(internal val registry:WorkspaceRegistry) {
         val key=requestKey?.let { nonempty(it);identity("cancel-request",it) }
         val payload=identity(fence.nodeId,fence.cycleId,fence.assignmentRevision.toString(),reason)
         if(key!=null && event(db,fence.rootId,key)!=null) {
-            val exactRequest=requireNotNull(requestKey)
-            fun boundEvent(eventKey:String,kind:String):Pair<String,Long> = one(db,"bot_tree_event","root_id=? AND event_key=?",arrayOf(fence.rootId,eventKey)) { c ->
-                val raw=c.s("receipt")
-                integrity(c.s("kind")==kind && c.s("node_id")==fence.nodeId && c.s("cycle_id")==fence.cycleId &&
-                    c.s("source_receipt")==exactRequest && c.s("payload_ref")==fence.nodeId && c.optional("wait_id")==null &&
-                    c.s("payload_digest")==identity(raw),"Cancellation event binding changed")
-                val revision=c.getLong(c.getColumnIndexOrThrow("node_revision"));integrity(revision>0,"Invalid capture revision")
-                raw to revision
-            } ?: throw TreeIntegrityException("Missing bound cancellation event")
-            fun objectReceipt(raw:String,keys:Set<String>):JSONObject {
-                val value=try { JSONObject(raw) } catch(invalid:org.json.JSONException) { throw TreeIntegrityException("Malformed cancellation JSON") }
-                integrity(value.keys().asSequence().toSet()==keys && raw==WorkspaceTreeEvidenceStore.canonical(value),"Noncanonical cancellation receipt")
-                return value
-            }
-            fun integer(value:Any):Long { integrity(value is Int || value is Long,"Cancellation integer type changed");return (value as Number).toLong() }
-            val requestEvent=boundEvent(key,"CANCEL_REQUEST")
-            val request=objectReceipt(requestEvent.first,setOf("version","requestPayload","captureSha256"))
-            integrity(integer(request.get("version"))==1L && request.get("requestPayload") is String && request.getString("requestPayload")==payload &&
-                request.get("captureSha256") is String,"Cancellation cannot retarget")
-            val captureEvent=boundEvent(identity("cancel-capture",exactRequest),"CANCEL_CAPTURE")
-            integrity(captureEvent.second==requestEvent.second && identity(captureEvent.first)==request.getString("captureSha256"),"Cancellation capture commitment changed")
-            val capture=objectReceipt(captureEvent.first,setOf("version","targets"))
-            integrity(integer(capture.get("version"))==1L && capture.get("targets") is org.json.JSONArray,"Malformed cancellation capture")
-            val rows=capture.getJSONArray("targets");val captured=LinkedHashMap<String,JSONObject>();val retry=ArrayList<TreeNode>()
-            for(index in 0 until rows.length()) {
-                integrity(rows.get(index) is JSONObject,"Cancellation tuple is not an object")
-                val row=rows.getJSONObject(index)
-                integrity(row.keys().asSequence().toSet()==setOf("root","node","parent","workspace","assignment","bot","cycle","assignmentRevision"),"Malformed cancellation target")
-                listOf("root","node","cycle").forEach { integrity(row.get(it) is String && row.getString(it).isNotBlank(),"Invalid cancellation identity") }
-                listOf("parent","workspace","assignment","bot").forEach { integrity(row.isNull(it) || row.get(it) is String && row.getString(it).isNotBlank(),"Invalid nullable cancellation identity") }
-                integrity(integer(row.get("assignmentRevision"))>=0,"Invalid captured assignment revision")
-                integrity(row.isNull("bot") || !row.isNull("workspace") && !row.isNull("assignment"),"Captured native owner is incomplete")
-                val id=row.getString("node");integrity(captured.put(id,row)==null && row.getString("root")==fence.rootId,"Cancellation target owner changed")
-            }
-            integrity(captured.containsKey(fence.nodeId),"Cancellation root absent from capture")
-            val capturedRoot=requireNotNull(captured[fence.nodeId])
-            integrity(capturedRoot.getString("cycle")==fence.cycleId && capturedRoot.getLong("assignmentRevision")==fence.assignmentRevision,
-                "Captured requester cycle/revision changed")
-            captured.forEach { (id,row) ->
-                var cursor=id;val ancestry=HashSet<String>()
-                while(cursor!=fence.nodeId) {
-                    integrity(ancestry.add(cursor),"Cyclic cancellation capture")
-                    val ancestor=captured[cursor] ?: throw TreeIntegrityException("Capture escapes owned subtree")
-                    integrity(!ancestor.isNull("parent"),"Capture is disconnected")
-                    cursor=ancestor.getString("parent")
-                }
+            val captured=confirmedCancellationCapture(db,fence,reason,requireNotNull(requestKey))
+            val retry=captured.mapNotNull { (id,row) ->
                 val current=requireNode(db,fence.rootId,id)
-                integrity(current.parentNodeId==(if(row.isNull("parent"))null else row.getString("parent")),"Captured ancestry changed")
                 if(!row.isNull("bot") && current.botId==row.getString("bot") && current.cycleId==row.getString("cycle") &&
                     current.workspaceId==row.getString("workspace") && current.assignmentId==row.getString("assignment") &&
                     current.assignmentRevision==row.getLong("assignmentRevision")) {
-                    requireNativeAssignment(current)
-                    retry.add(current)
-                }
+                    requireNativeAssignment(current);current
+                } else null
             }
             beforeDenial?.invoke(retry.toList())
             return@treeTransaction retry
@@ -303,7 +257,64 @@ internal class WorkspaceTreeStore(internal val registry:WorkspaceRegistry) {
             else updateNode(db,child,values("admissions_closed" to 1L,"wakes_closed" to 1L,"stop_epoch" to next(child.stopEpoch)))
         }
         if(settled) resetProgress(db,parent.rootId)
+        WorkspaceTreeCentralStore(this).reconcileWithdrawals(parent.rootId)
         result
+    }
+    /** Read-only proof shared by duplicate STOP cleanup and never-started dependency withdrawal. */
+    internal fun confirmedCancellationCapture(db:SQLiteDatabase,fence:TreeNodeFence,reason:String,requestKey:String):Map<String,JSONObject> {
+        val key=identity("cancel-request",requestKey)
+        val payload=identity(fence.nodeId,fence.cycleId,fence.assignmentRevision.toString(),reason)
+        val exactRequest=requestKey
+        fun boundEvent(eventKey:String,kind:String):Pair<String,Long> = one(db,"bot_tree_event","root_id=? AND event_key=?",arrayOf(fence.rootId,eventKey)) { c ->
+            val raw=c.s("receipt")
+            integrity(c.s("kind")==kind && c.s("node_id")==fence.nodeId && c.s("cycle_id")==fence.cycleId &&
+                c.s("source_receipt")==exactRequest && c.s("payload_ref")==fence.nodeId && c.optional("wait_id")==null &&
+                c.s("payload_digest")==identity(raw),"Cancellation event binding changed")
+            val revision=c.getLong(c.getColumnIndexOrThrow("node_revision"));integrity(revision>0,"Invalid capture revision")
+            raw to revision
+        } ?: throw TreeIntegrityException("Missing bound cancellation event")
+        fun objectReceipt(raw:String,keys:Set<String>):JSONObject {
+            val value=try { JSONObject(raw) } catch(invalid:org.json.JSONException) { throw TreeIntegrityException("Malformed cancellation JSON") }
+            integrity(value.keys().asSequence().toSet()==keys && raw==WorkspaceTreeEvidenceStore.canonical(value),"Noncanonical cancellation receipt")
+            return value
+        }
+        fun integer(value:Any):Long { integrity(value is Int || value is Long,"Cancellation integer type changed");return (value as Number).toLong() }
+        val requestEvent=boundEvent(key,"CANCEL_REQUEST")
+        val request=objectReceipt(requestEvent.first,setOf("version","requestPayload","captureSha256"))
+        integrity(integer(request.get("version"))==1L && request.get("requestPayload") is String && request.getString("requestPayload")==payload &&
+            request.get("captureSha256") is String,"Cancellation cannot retarget")
+        val captureEvent=boundEvent(identity("cancel-capture",exactRequest),"CANCEL_CAPTURE")
+        integrity(captureEvent.second==requestEvent.second && identity(captureEvent.first)==request.getString("captureSha256"),"Cancellation capture commitment changed")
+        val capture=objectReceipt(captureEvent.first,setOf("version","targets"))
+        integrity(integer(capture.get("version"))==1L && capture.get("targets") is org.json.JSONArray,"Malformed cancellation capture")
+        val rows=capture.getJSONArray("targets");val captured=LinkedHashMap<String,JSONObject>()
+        for(index in 0 until rows.length()) {
+            integrity(rows.get(index) is JSONObject,"Cancellation tuple is not an object")
+            val row=rows.getJSONObject(index)
+            integrity(row.keys().asSequence().toSet()==setOf("root","node","parent","workspace","assignment","bot","cycle","assignmentRevision"),"Malformed cancellation target")
+            listOf("root","node","cycle").forEach { integrity(row.get(it) is String && row.getString(it).isNotBlank(),"Invalid cancellation identity") }
+            listOf("parent","workspace","assignment","bot").forEach { integrity(row.isNull(it) || row.get(it) is String && row.getString(it).isNotBlank(),"Invalid nullable cancellation identity") }
+            integrity(integer(row.get("assignmentRevision"))>=0,"Invalid captured assignment revision")
+            integrity(row.isNull("bot") || !row.isNull("workspace") && !row.isNull("assignment"),"Captured native owner is incomplete")
+            val id=row.getString("node");integrity(captured.put(id,row)==null && row.getString("root")==fence.rootId,"Cancellation target owner changed")
+        }
+        integrity(captured.containsKey(fence.nodeId),"Cancellation root absent from capture")
+        val capturedRoot=requireNotNull(captured[fence.nodeId])
+        integrity(capturedRoot.getString("cycle")==fence.cycleId && capturedRoot.getLong("assignmentRevision")==fence.assignmentRevision,
+            "Captured requester cycle/revision changed")
+        captured.forEach { (id,row) ->
+            var cursor=id;val ancestry=HashSet<String>()
+            while(cursor!=fence.nodeId) {
+                integrity(ancestry.add(cursor),"Cyclic cancellation capture")
+                val ancestor=captured[cursor] ?: throw TreeIntegrityException("Capture escapes owned subtree")
+                integrity(!ancestor.isNull("parent"),"Capture is disconnected")
+                cursor=ancestor.getString("parent")
+            }
+            val current=requireNode(db,fence.rootId,id)
+            integrity(current.parentNodeId==(if(row.isNull("parent"))null else row.getString("parent")),"Captured ancestry changed")
+
+        }
+        return captured
     }
     internal fun cancelQueued(db:SQLiteDatabase,child:TreeNode,owner:TreeNode,reason:String):TreeNode {
         val ref=identity("cancelled-admission",child.nodeId,child.cycleId)

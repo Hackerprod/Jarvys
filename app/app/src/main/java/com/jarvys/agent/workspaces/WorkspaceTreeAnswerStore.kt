@@ -26,6 +26,23 @@ internal class WorkspaceTreeAnswerStore(private val core:WorkspaceTreeStore) {
         core.appendEvent(db,child,key,"ANSWER_PREPARED",receipt,source,identity(receipt),question)
         decode(receipt,key)
     }
+    /** USER-only retention; a stopped worker parent does not gain new authority. The root must remain open. */
+    fun prepareUser(grant:TreeUserTargetControl,payload:String):TreeAnswer = grant.transact(core,"reply",payload) { db,child,auth ->
+        val text=JSONObject(payload).getString("text");nonempty(text)
+        eligible(child.reply==TreeReply.AWAIT && child.state==TreeNodeState.NEEDS_INPUT && child.reportReceipt!=null,"No formal question")
+        val question=requireNotNull(child.terminalRef);val questionHash=requireNotNull(child.terminalHash)
+        val key=identity("answer-prepared",child.nodeId,question)
+        // Exact repeat is idempotent; a new invocation must not replace already-retained text/source.
+        core.event(db,child.rootId,key)?.let { old ->
+            val existing=decode(old,key)
+            integrity(existing.questionCycle==child.cycleId && existing.questionHash==questionHash && existing.text==text,"Answer cannot be replaced")
+            return@transact existing
+        }
+        val receipt=WorkspaceTreeEvidenceStore.canonical(JSONObject().put("root",child.rootId).put("child",child.nodeId)
+            .put("question",question).put("questionHash",questionHash).put("cycle",child.cycleId).put("text",text).put("source",auth))
+        core.appendEvent(db,child,key,"ANSWER_PREPARED",receipt,auth,identity(receipt),question)
+        decode(receipt,key)
+    }
     fun pending(rootId:String,childId:String):TreeAnswer?=core.registry.treeRead { db ->
         if(db.version==1)return@treeRead null
         val child=core.requireNode(db,rootId,childId)

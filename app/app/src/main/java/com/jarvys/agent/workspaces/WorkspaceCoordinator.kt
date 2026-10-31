@@ -546,16 +546,17 @@ class WorkspaceCoordinator internal constructor(context: Context,
     override fun cancel(workspaceId:String,assignmentId:String,botId:String?,revision:Long,key:String,token:CancellationToken,
         admission:Runnable,context:WorkspaceMutationContext):JSONObject {
         check(WorkspaceTreePolicy.admissionEnabled());context.requireTreeAdmission();admission.run()
-        val rootId=requireNotNull(context.treeAdmission).rootId()
-        val requestKey=WorkspaceTreeStore.identity("native-user-subtree-cancel",rootId,key)
-        context.admitMutation()
-        val targets=context.withCurrentWorkspaceTransaction {
-            registry().use { db ->
-                context.requireInsideCurrentLease();context.requireTreeAdmission();admission.run()
-                val tree=WorkspaceTreeStore(db);val target=requireNotNull(tree.findAssignment(workspaceId,assignmentId))
-                check(target.rootId==rootId) { "Cancellation target belongs to another original request" }
-                check(target.botId==botId && target.assignmentRevision==revision)
-                tree.cancelSubtree(TreeNodeFence.of(target),"CANCELLED",requestKey) { captured -> captured.forEach {
+        val targets=registry().use { db ->
+            val tree=WorkspaceTreeStore(db);val target=requireNotNull(tree.findAssignment(workspaceId,assignmentId))
+            check(target.botId==botId && target.assignmentRevision==revision)
+            val payload=context.requireControlArguments()
+            check(JSONObject(payload).getString("key")==key)
+            val grant=TreeUserTargetControl.capture(app,context,target,"cancel",payload)
+            val requestKey=WorkspaceTreeStore.identity("native-user-subtree-cancel",target.rootId,key)
+            context.admitMutation()
+            grant.transact(tree,"cancel",payload) { _,current,_ ->
+                admission.run()
+                tree.cancelSubtree(TreeNodeFence.of(current),"CANCELLED",requestKey) { captured -> captured.forEach {
                     WorkspaceTreeStops.latchExact(db.treeStorageIdentity,it.rootId,it.nodeId,it.cycleId)
                 } }
             }

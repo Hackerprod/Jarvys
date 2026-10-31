@@ -306,4 +306,148 @@ class CentralTreeServiceAcceptanceTest {
         }
     }
 
+    @Test fun laterNaturalUserWithdrawsRealCrewOffQueuedDependencyAndClosesConfirmedOldWait() {
+        val previousMode=CrewMode.read(context)
+        try {
+            CrewMode.write(context,CrewMode.OFF)
+            val (scope,profile)=storage.onDatabaseWorker {
+                val workspace=WorkspaceRegistry(context).use {it.createWorkspace(UUID.randomUUID().toString(),"Queued native withdrawal")}
+                ChatDatabaseBridge.getInstance(context).ensureConversationSync(workspace.executionSessionId,"workspace")
+                val definition=CrewProfileRepository(context).create(CrewProfile(CrewProfileRepository.newCustomId(),1,"Generalist","General-purpose planning",
+                    "Plan from retained evidence",emptyList(),emptyList(),CrewProfile.WorkspaceMode.LEGACY_CHAT),emptyList(),emptyList())
+                workspace to definition
+            }
+            val original=user("Prepare an itinerary using a generalist worker")
+            var firstStep=0
+            reply={history -> if(firstStep++==0)ModelReply("",listOf(ModelReply.Call("crew-off-real-delegate",CentralWorkspaceTool.NAME,mapOf(
+                "action" to "delegate","workspace_id" to scope.workspaceId,"key" to "crew-off-retained",
+                "role" to profile.id,"mission" to "Plan itinerary","tools" to emptyList<String>(),"continue_result" to true))))
+                else {
+                    val result=history.single {it.toolCallId=="crew-off-real-delegate" && it.kind==ConversationTurn.Kind.TOOL_RESULT}.content
+                    assertTrue(result,result.contains("CREW_DISABLED"));assertTrue(result,result.contains("NOT_STARTED"))
+                    ModelReply("Crew is OFF; the prepared assignment has not started.",emptyList())
+                }
+            }
+            runStored(original);assertNull(failure.get());assertEquals(2,firstStep)
+            val oldRoot=root(original)
+            val queued=storage.onDatabaseWorker {WorkspaceRegistry(context).use {db ->
+                val tree=WorkspaceTreeStore(db);assertEquals(TreeNodeState.WAITING,tree.getNode(oldRoot.rootId,oldRoot.rootId)!!.state)
+                assertFalse(oldRoot.admissionsClosed)
+                val node=tree.children(oldRoot.rootId,oldRoot.rootId).single()
+                assertEquals(TreeNodeState.QUEUED,node.state);assertNull(node.botId);assertNull(node.executionEventId)
+                assertEquals(WorkspaceAssignmentState.PREPARED,db.getAssignment(scope.workspaceId,node.assignmentId!!)!!.state)
+                node
+            }}
+            val exitKey=WorkspaceTreeStore.identity("central-exit",storage.onDatabaseWorker {WorkspaceRegistry(context).use {WorkspaceTreeStore(it).getNode(oldRoot.rootId,oldRoot.rootId)!!.cycleId}})
+            val exit=storage.onDatabaseWorker {WorkspaceRegistry(context).use {db ->db.treeRead {sql ->WorkspaceTreeStore(db).event(sql,oldRoot.rootId,exitKey)!!}}}
+            val later=user("Cancel that unstarted itinerary assignment; do not enable Crew or start a worker")
+            var laterStep=0
+            reply={history -> if(laterStep++==0)ModelReply("",listOf(ModelReply.Call("later-exact-withdrawal",CentralWorkspaceTool.NAME,mapOf(
+                "action" to "cancel","workspace_id" to scope.workspaceId,"assignment_id" to queued.assignmentId,
+                "expected_assignment_revision" to queued.assignmentRevision,"key" to "withdraw-never-started"))))
+                else {
+                    assertEquals("workspace_data",JSONObject(history.single {it.toolCallId=="later-exact-withdrawal" && it.kind==ConversationTurn.Kind.TOOL_RESULT}.content).getString("kind"))
+                    ModelReply("The exact unstarted dependency was withdrawn; no worker executed.",emptyList())
+                }
+            }
+            runStored(later);assertNull(failure.get());assertEquals(2,laterStep);assertEquals(4,calls.get())
+            assertEquals(CrewMode.OFF,CrewMode.read(context))
+            storage.onDatabaseWorker {WorkspaceRegistry(context).use {db ->
+                val tree=WorkspaceTreeStore(db);val closed=tree.getRoot(oldRoot.rootId)!!
+                assertEquals(oldRoot.origin,closed.origin);assertEquals("COMPLETED",closed.closeReason)
+                assertEquals(TreeNodeState.TERMINAL,tree.getNode(oldRoot.rootId,oldRoot.rootId)!!.state)
+                val child=tree.getNode(queued.rootId,queued.nodeId)!!
+                assertEquals("CANCELLED",child.terminalOutcome);assertNull(child.botId);assertNull(child.executionEventId)
+                assertNotNull(child.reportReceipt);assertNotNull(child.terminalHash)
+                assertEquals(WorkspaceAssignmentState.PREPARED,db.getAssignment(scope.workspaceId,queued.assignmentId!!)!!.state)
+                db.treeRead {sql ->
+                    assertEquals(exit,tree.event(sql,oldRoot.rootId,exitKey))
+                    sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind IN ('CENTRAL_CLAIM','CENTRAL_INCORPORATED','CHILD_WAIT_EXECUTION','USER_EXECUTION')",arrayOf(oldRoot.rootId)).use {c->c.moveToFirst();assertEquals(0,c.getInt(0))}
+                    sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND node_id=? AND kind='EXECUTION'",arrayOf(oldRoot.rootId,queued.nodeId)).use {c->c.moveToFirst();assertEquals(0,c.getInt(0))}
+                    sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind='CENTRAL_EXIT'",arrayOf(oldRoot.rootId)).use {c->c.moveToFirst();assertEquals(1,c.getInt(0))}
+                }
+            }}
+            assertNotEquals(oldRoot.rootId,root(later).rootId)
+        } finally {CrewMode.write(context,previousMode)}
+    }
+
+    /** Insert into CentralTreeServiceAcceptanceTest: all origins, calls and question evidence are native. */
+    @Test fun naturalLaterUserAnswerRetainsOldQuestionThenNativeResumeConsumesOnce()=laterUserFormalAnswer("none")
+    @Test fun laterUserReplyCannotRacePendingNativePause()=laterUserFormalAnswer("pending")
+    @Test fun laterUserReplyCannotRaceStartedNativePause()=laterUserFormalAnswer("started")
+    private fun laterUserFormalAnswer(controlState:String) {
+        val childCalls=AtomicInteger();val answerSeen=java.util.concurrent.atomic.AtomicBoolean()
+        val (scope,profile)=storage.onDatabaseWorker {
+            val scope=WorkspaceRegistry(context).use { it.createWorkspace(UUID.randomUUID().toString(),"Later answer") }
+            ChatDatabaseBridge.getInstance(context).ensureConversationSync(scope.executionSessionId,"workspace")
+            val caps=listOf("ask_chief")
+            val profile=CrewProfileRepository(context).create(CrewProfile(CrewProfileRepository.newCustomId(),1,"Generalist","Planning",
+                "Ask for the date",emptyList(),caps,CrewProfile.WorkspaceMode.LEGACY_CHAT),caps,emptyList())
+            val runtime=CoreAgentRuntime(context,scope.executionSessionId,emptyList(),CorePromptBudget.standard())
+            manager=runtime.configureCrewManager(runtime.createTools(),CoreAgentModel(context,provider { history ->
+                if(childCalls.incrementAndGet()==1) ModelReply("",listOf(ModelReply.Call("actual-question","ask_chief",mapOf("question" to "Which travel dates?"))))
+                else { answerSeen.set(history.any { it.content.contains("June 12") });ModelReply("Itinerary for June 12",emptyList()) }
+            },scope.executionSessionId),null)
+            scope to profile
+        }
+        val original=user("Plan my trip; ask for the dates");var step=0
+        reply={ if(step++==0) ModelReply("",listOf(ModelReply.Call("delegate-question",CentralWorkspaceTool.NAME,mapOf(
+            "action" to "delegate","workspace_id" to scope.workspaceId,"key" to "ask-dates","role" to profile.id,
+            "mission" to "Ask the travel date","tools" to listOf("ask_chief"),"continue_result" to true))))
+            else ModelReply("The planner will ask for the date",emptyList()) }
+        runStored(original)
+        waitUntil("Formal question persisted") { manager!!.bots().singleOrNull()?.let { it.isQuiescent && it.requiresExplicitResume() }==true }
+        val bot=manager!!.bots().single()
+        val (question,node)=storage.onDatabaseWorker {
+            val node=WorkspaceRegistry(context).use { WorkspaceTreeStore(it).findAssignment(scope.workspaceId,bot.assignmentId())!! }
+            assertEquals(TreeNodeState.NEEDS_INPUT,node.state);assertNotNull(node.reportReceipt)
+            LocalRunStore(context).listWorkspaceCoordinationReferences(scope.executionSessionId,100,null).single { it.evidenceId==node.terminalRef } to node
+        }
+        if(controlState!="none") storage.onDatabaseWorker {
+            // Stage the actual native USER control row without executing it; test the pre-dispatch/claimed window.
+            val control=WorkspaceCoordinator(context,{ manager!! },{}).submitNativeControl(scope.workspaceId,node.assignmentId!!,
+                node.assignmentRevision,WorkspaceControlType.PAUSE,"Pause the planner")
+            if(controlState=="started") WorkspaceRegistry(context).use { db ->
+                db.markControlStarted(control.requestId,control.revision,CrewProcessIdentity.ID)
+            }
+        }
+        val oldRoot=root(original);val later=user("June 12 for the planner's travel-date question");var replyStep=0
+        reply={ history -> if(replyStep++==0) ModelReply("",listOf(ModelReply.Call("natural-answer",CentralWorkspaceTool.NAME,mapOf(
+            "action" to "reply","workspace_id" to scope.workspaceId,"message_id" to question.referenceId,
+            "expected_sha256" to question.contentSha256,"expected_assignment_revision" to question.observedAssignmentRevision,
+            "key" to "answer-date","text" to "June 12"))))
+            else { val output=history.single { it.toolCallId=="natural-answer" && it.kind==ConversationTurn.Kind.TOOL_RESULT }.content
+                if(controlState=="none") assertTrue(output.contains("requires_explicit_resume"))
+                else assertTrue(output.contains("Workspace request could not complete"))
+                ModelReply("Answer retained. Use Resume for the planner.",emptyList()) } }
+        runStored(later)
+        assertEquals(1,childCalls.get());assertEquals(oldRoot,root(original))
+        if(controlState!="none") {
+            storage.onDatabaseWorker { WorkspaceRegistry(context).use { db ->
+                assertNull(WorkspaceTreeAnswerStore(WorkspaceTreeStore(db)).pending(node.rootId,node.nodeId))
+                db.treeRead { sql -> sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind='USER_CONTROL_AUTH'",arrayOf(node.rootId)).use { c ->
+                    assertTrue(c.moveToFirst());assertEquals(0,c.getInt(0))
+                } }
+            } }
+            return
+        }
+        storage.onDatabaseWorker { WorkspaceRegistry(context).use { db ->
+            val answer=WorkspaceTreeAnswerStore(WorkspaceTreeStore(db)).pending(node.rootId,node.nodeId)!!
+            assertEquals("June 12",answer.text);assertEquals(question.contentSha256,answer.questionHash)
+        } }
+        val finished=CountDownLatch(1);val failure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        WorkspaceCoordinator(context,{ manager!! },{}).enqueueNativeControl(scope.workspaceId,node.assignmentId!!,
+            node.assignmentRevision,WorkspaceControlType.RESUME,"Resume planner") { result ->
+                result.exceptionOrNull()?.let { failure.set(it) };finished.countDown()
+            }
+        assertTrue(finished.await(20,TimeUnit.SECONDS));failure.get()?.let { throw AssertionError("Native resume failed",it) }
+        waitUntil("Answered planner finishes") { bot.isQuiescent && childCalls.get()==2 }
+        assertTrue(answerSeen.get());assertEquals(2,childCalls.get())
+        storage.onDatabaseWorker { WorkspaceRegistry(context).use { db -> db.treeRead { sql ->
+            sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND node_id=? AND kind='ANSWER_STARTED'",arrayOf(node.rootId,node.nodeId)).use { c ->
+                assertTrue(c.moveToFirst());assertEquals(1,c.getInt(0))
+            }
+        } } }
+    }
+
 }

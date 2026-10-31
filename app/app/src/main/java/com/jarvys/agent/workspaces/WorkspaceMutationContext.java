@@ -46,6 +46,20 @@ public final class WorkspaceMutationContext {
                 null, "central_workspace");
     }
 
+    private String controlArguments;
+    /** Called exactly once by the native execute4 adapter, never from model-supplied metadata. */
+    void bindControlArguments(String canonicalArguments) {
+        if (closed || controlArguments != null) throw new IllegalStateException("Arguments already bound");
+        controlArguments = Objects.requireNonNull(canonicalArguments);
+    }
+    public String requireControlArguments() {
+        checkAccess.run();
+        requireTreeAdmission();
+        if (!("reply".equals(action) || "cancel".equals(action)) || controlArguments == null)
+            throw new IllegalStateException("No exact USER target control");
+        return controlArguments;
+    }
+
     public void requireTreeAdmission() {
         if(closed || treeAdmission==null || treeToken==null || sourceWitness==null)
             throw new IllegalStateException("Fresh native Central tree authority required");

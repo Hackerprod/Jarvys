@@ -16,20 +16,17 @@ internal object WorkspaceTreeCentralAnswers {
         val target=WorkspaceRegistry(app).use { db -> WorkspaceTreeStore(db).findAssignment(workspace,reference.assignmentId) } ?: return null
         if(target.state!=TreeNodeState.NEEDS_INPUT)return null // Existing ordinary coordination semantics are preserved.
         context.requireTreeAdmission()
-        check(target.rootId==requireNotNull(context.treeAdmission).rootId()) { "Formal question belongs to another original request" }
+
         check(reference.contentSha256==hash && reference.observedAssignmentRevision==revision && target.assignmentRevision==revision &&
             reference.botId==target.botId && reference.cycleId==target.cycleId && reference.evidenceId==target.terminalRef)
         val evidence=requireNotNull(ledger.readCrewCoordinationEvidence(session,reference.evidenceId))
         check(evidence.contentSha256==hash && evidence.botId==target.botId && evidence.cycleId==target.cycleId)
+        val payload=context.requireControlArguments()
+        val grant=TreeUserTargetControl.capture(app,context,target,"reply",payload)
         context.admitMutation()
-        val answer=context.withCurrentWorkspaceTransaction {
-            WorkspaceRegistry(app).use { db ->
-                admission.run();context.requireInsideCurrentLease();context.requireTreeAdmission()
-                val tree=WorkspaceTreeStore(db);val parent=requireNotNull(tree.getNode(target.rootId,requireNotNull(target.parentNodeId)))
-                check(parent.mode==TreeMode.CENTRAL) { "Only the actual parent may answer this formal request" }
-                WorkspaceTreeAnswerStore(tree).prepare(TreeNodeFence.of(parent),TreeNodeFence.of(target),text,
-                    WorkspaceTreeStore.centralReceipt(requireNotNull(context.rootSource)))
-            }
+        val answer=WorkspaceRegistry(app).use { db ->
+            admission.run()
+            WorkspaceTreeAnswerStore(WorkspaceTreeStore(db)).prepareUser(grant,payload)
         }
         context.acceptedInput(workspace,answer.eventKey)
         return JSONObject().put("answer_id",answer.eventKey).put("state","PREPARED").put("requires_explicit_resume",true)
