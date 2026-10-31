@@ -34,6 +34,10 @@ public interface CrewTreeSupport {
     default void requireCompletedUserResume(CrewManager.Bot bot,CancellationToken token,CrewManager.ResumeCheckpointCommit commit) {
         throw new IllegalStateException("Completed tree worker needs exact fresh USER control");
     }
+    /** Mailbox-only staging inside the actual registered USER successor commit. */
+    default void requireUserSuccessorStaging(CrewManager.Bot bot,CancellationToken token,CrewManager.ResumeCheckpointCommit commit,CrewMessage message) {
+        throw new IllegalStateException("Exact registered USER successor required");
+    }
     final class WaitTicket {
         public static final String FIELD="workerTreeWaitV1";
         public final String rootId,nodeId,waitId,cycleId,draft;

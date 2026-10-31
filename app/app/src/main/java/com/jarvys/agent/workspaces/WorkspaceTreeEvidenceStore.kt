@@ -132,9 +132,32 @@ internal class WorkspaceTreeEvidenceStore(private val core:WorkspaceTreeStore) {
         requireProducerChain(rootId,nodeId,cycleId,assignmentId,botId,scopeIdentity,profileSha256,storageGeneration,
             Predecessor(savedSourceCertificate,checkpointSha256,pendingWaitId,pendingControlId))
     }
+    /** Denial/reporting only: never accepted by restore, dispatch, admission or resume validators. */
+    fun requirePausedProducer(claim:TreeControlClaim,scopeIdentity:String,profileSha256:String,
+        storageGeneration:String,currentCertificate:String) {
+        val n=claim.node;val c=claim.control
+        core.registry.treeRead { db ->
+            val node=core.requireNode(db,n.rootId,n.nodeId)
+            integrity(c.type==WorkspaceControlType.PAUSE && c.state==WorkspaceControlState.STARTED &&
+                core.registry.getControl(c.requestId)==c && node.cycleId==n.cycleId && node.assignmentRevision==n.assignmentRevision &&
+                node.controlIntent==null && node.admissionsClosed && node.wakesClosed && node.state==TreeNodeState.WAITING,
+                "Exact completed PAUSE denial fence required")
+            val receipt=one(db,"bot_tree_event","root_id=? AND event_key=?",arrayOf(n.rootId,identity("control-successor",c.requestId))) { row ->
+                integrity(row.s("kind")=="CONTROL_SUCCESSOR" && row.s("node_id")==n.nodeId && row.s("cycle_id")==n.cycleId &&
+                    row.s("payload_ref")==n.cycleId && row.s("source_receipt")==c.requestId &&
+                    row.s("payload_digest")==identity(row.s("receipt")) && row.positive("node_revision")<node.revision,
+                    "PAUSE checkpoint binding changed")
+                row.s("receipt")
+            } ?: throw TreeIntegrityException("Missing PAUSE checkpoint binding")
+            integrity(canonical(WorkspaceTreeStore.requireSourceCertificate(receipt,scopeIdentity))==
+                canonical(WorkspaceTreeStore.requireSourceCertificate(currentCertificate,scopeIdentity)),"Stopped checkpoint changed")
+        }
+        requireProducerChain(n.rootId,n.nodeId,n.cycleId,requireNotNull(n.assignmentId),requireNotNull(n.botId),
+            scopeIdentity,profileSha256,storageGeneration,null,c.requestId)
+    }
     private data class Predecessor(val certificate:String,val checkpoint:String,val waitId:String?,val controlId:String?)
     private fun requireProducerChain(rootId:String,nodeId:String,cycleId:String,assignmentId:String,botId:String,
-        scopeIdentity:String,profileSha256:String,storageGeneration:String,predecessor:Predecessor?) = core.registry.treeRead { db ->
+        scopeIdentity:String,profileSha256:String,storageGeneration:String,predecessor:Predecessor?,pauseDenialId:String?=null) = core.registry.treeRead { db ->
         val node=core.requireNode(db,rootId,nodeId);val root=core.requireRoot(db,rootId)
         integrity(root.origin.storageGeneration==storageGeneration && root.origin.ownerCentralSessionId==WorkspaceIdentity.CENTRAL_SESSION &&
             node.assignmentId==assignmentId && node.botId==botId && node.cycleId==cycleId &&
@@ -182,7 +205,8 @@ internal class WorkspaceTreeEvidenceStore(private val core:WorkspaceTreeStore) {
                             control.workspaceId==node.workspaceId && control.assignmentId==assignmentId && control.botId==botId &&
                             control.assignmentRevision==revision && control.admittedAssignmentRevision==next(revision) &&
                             control.processId==string(r,"process") && control.type.name==string(r,"type") &&
-                            control.state in setOf(WorkspaceControlState.STARTED,WorkspaceControlState.COMPLETE),"Native control owner/revision changed")
+                            (control.state in setOf(WorkspaceControlState.STARTED,WorkspaceControlState.COMPLETE) ||
+                                pauseDenialId!=null && id!=pauseDenialId && control.state==WorkspaceControlState.UNCERTAIN),"Native control owner/revision changed")
                         revision=next(revision)
                         pendingControl=id
                         continue
@@ -193,7 +217,8 @@ internal class WorkspaceTreeEvidenceStore(private val core:WorkspaceTreeStore) {
                         currentCycle=c.s("payload_ref");pendingWait=null
                     }
                     "CONTROL_SUCCESSOR"->{
-                        integrity(currentCycle!=null && c.s("cycle_id")==currentCycle && pendingControl!=null && c.s("source_receipt")==pendingControl,
+                        integrity(currentCycle!=null && c.s("cycle_id")==currentCycle && pendingControl!=null && c.s("source_receipt")==pendingControl &&
+                            c.s("event_key")==identity("control-successor",pendingControl!!),
                             "Control successor chain changed")
                         currentCycle=c.s("payload_ref");pendingControl=null
                     }

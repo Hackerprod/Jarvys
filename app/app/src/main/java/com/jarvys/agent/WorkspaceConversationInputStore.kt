@@ -242,6 +242,32 @@ internal object WorkspaceConversationInputStore {
         }
     }
 
+    /** Original exact Room outbox only; native registered commit owns staging and the next checkpoint. */
+    fun stagePendingSupervisorIntentsForUserSuccessor(context:Context,session:String,manager:CrewManager,
+        bot:CrewManager.Bot,commit:CrewManager.ResumeCheckpointCommit) {
+        val pending=pendingSupervisorIntents(context,session,bot.assignmentId())
+        com.jarvys.agent.workspaces.WorkspaceRegistry(context).use { registry ->
+            for(input in pending) {
+                val provenance=requireNotNull(input.provenance)
+                val assignment=requireNotNull(registry.getAssignment(provenance.workspaceId,provenance.assignmentId))
+                check(assignment.state==com.jarvys.agent.workspaces.WorkspaceAssignmentState.BOUND &&
+                    assignment.assignmentId==bot.assignmentId() && assignment.botId==bot.id && assignment.missionId==bot.missionId)
+                // An already retained mailbox ID is not replayed; verify exact content/provenance instead.
+                val existing=manager.messageBus().snapshot().filter { it.id==input.messageId }
+                if(existing.isNotEmpty()) {
+                    check(existing.size==1 && existing.single().to==bot.id && existing.single().from=="chief" &&
+                        existing.single().type==CrewMessage.Type.MESSAGE && existing.single().text==input.content &&
+                        existing.single().conversationId==session && existing.single().inputBinding==null && existing.single().refs.isEmpty() &&
+                        existing.single().inputProvenance?.toJson()?.toString()==provenance.toJson().toString())
+                    continue
+                }
+                manager.enqueueUserSuccessorSupervisorExact(bot.id,bot.token,
+                    CrewMessage(input.messageId,session,"chief",bot.id,CrewMessage.Type.MESSAGE,input.content,emptyList(),System.currentTimeMillis())
+                        .withInputProvenance(provenance),commit)
+            }
+        }
+    }
+
     private fun sameOutboxPayload(expected: ConversationInput, actual: ConversationInput): Boolean =
         expected.conversationId == actual.conversationId && expected.content == actual.content
             && expected.origin == actual.origin

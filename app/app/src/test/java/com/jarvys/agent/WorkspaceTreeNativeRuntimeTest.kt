@@ -48,7 +48,16 @@ class WorkspaceTreeNativeRuntimeTest {
                 "Perform this planning task. Children remain ordinary workers, not captains.",emptyList(),caps,CrewProfile.WorkspaceMode.LEGACY_CHAT),caps,emptyList()).id
         }
     }
-    @After fun cleanup() { managers.forEach { it.close() };pool.shutdownNow() }
+    @After fun cleanup() {
+        // Scripted local fixtures only: expose the real native failure before STOP cleanup changes it.
+        managers.forEach { manager -> manager.bots().forEach { bot ->
+            System.err.println("TREE_NATIVE_DIAGNOSTIC bot=${bot.id} status=${bot.status()} error=${bot.error()} result=${bot.result()} " +
+                "coordinationFailures=${manager.coordinationEvidenceDeliveryFailures()} toolResults=" +
+                bot.checkpoint().transcript.filter { it.kind==ConversationTurn.Kind.TOOL_RESULT }
+                    .joinToString { "${it.toolCallId}/${it.toolName}: ${it.content}" })
+        } }
+        managers.forEach { it.close() };pool.shutdownNow()
+    }
     private data class Fixture(val scope:WorkspaceRecord,val manager:CrewManager,val root:String,val bot:CrewManager.Bot)
     private fun start(beforeMessage:((CrewManager,CrewManager.Bot,CrewMessage)->Unit)?=null,
         configureManager:((CrewManager)->Unit)?=null,script:(List<ConversationTurn>,List<ToolSpec>,CancellationToken)->ModelReply):Fixture=storage.onDatabaseWorker {
@@ -486,7 +495,8 @@ class WorkspaceTreeNativeRuntimeTest {
     @Test fun nativeRequesterStopDurablyClosesWakesAndCancelsOnlyNeverStartedChild()=whileNativeRunning { f ->
         val queued=WorkspaceRegistry(app).use { db ->
             val tree=WorkspaceTreeStore(db);val parent=tree.findAssignment(f.scope.workspaceId,f.bot.assignmentId())!!
-            tree.admitChild(TreeNodeFence.of(parent),TreeChildRequest(f.scope.workspaceId,"queued-stop","queued-request","Queued task",profileId,
+            val assignment=requireNotNull(db.getAssignment(f.scope.workspaceId,parent.assignmentId!!))
+            tree.admitChild(TreeNodeFence.of(parent),TreeChildRequest(f.scope.workspaceId,"queued-stop",assignment.requestId,assignment.originalUserRequest,profileId,
                 "NEVER_STARTED",caps,"Planner",TreeMode.WORK,TreeReply.AWAIT,"test_backend_queued_admission_not_invocation"))
         }
         assertTrue(f.manager.stopExact(f.bot.id,f.bot.token))

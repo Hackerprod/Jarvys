@@ -228,7 +228,10 @@ class WorkspaceCoordinatorIntegrationTest {
         assertEquals(first.getLong("revision"), duplicate.getLong("revision"))
         assertEquals(2, modelCalls.get())
         assertEquals(2, keepalives.get())
-        assertEquals(listOf(firstScope.executionSessionId, secondScope.executionSessionId), managerLookups.toList())
+        // Each new admission resolves its manager once for preflight and once for the reserved spawn.
+        // The duplicate must add neither a third lookup nor another worker/provider call.
+        assertEquals(listOf(firstScope.executionSessionId, firstScope.executionSessionId,
+            secondScope.executionSessionId, secondScope.executionSessionId), managerLookups.toList())
         assertNotEquals(firstScope.executionSessionId, secondScope.executionSessionId)
         assertFalse(managerLookups.contains(WorkspaceIdentity.CENTRAL_SESSION))
         assertEquals(1, managers.getValue(firstScope.executionSessionId).bots().size)
@@ -1094,6 +1097,7 @@ class WorkspaceCoordinatorIntegrationTest {
         manager.configureConversationInputPipeline(
             { bot, message -> WorkspaceConversationInputStore.append(context, session, bot, message) },
             { _, ids -> WorkspaceConversationInputStore.acknowledge(context, session, ids) },
+            { bot, message -> WorkspaceConversationInputStore.resolve(context, session, bot, message) },
         )
     }
 

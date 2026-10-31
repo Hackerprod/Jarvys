@@ -125,6 +125,54 @@ class WorkspaceTreeEvidenceStoreTest {
         // Latest certificate remains valid; every predecessor must still be checked.
         denied { producer(n) }
     }
+    private fun stoppedAfterUncertain():Pair<TreeControlClaim,String> {
+        var node=running("uncertain-pause")
+        val correction=java.util.UUID.randomUUID().toString()
+        registry.submitNativeControl(correction,scope.workspaceId,node.assignmentId!!,node.botId!!,node.assignmentRevision,
+            WorkspaceControlType.CORRECT,"fresh correction",Runnable {})
+        val controls=WorkspaceTreeControlStore(core)
+        val first=controls.claim(TreeNodeFence.of(node),correction,"process",true,certificate(),Runnable {})
+        node=controls.bind(first,"successor-cycle",certificate())
+        registry.markControlUncertain(correction,first.control.revision)
+        denied { producer(node) }
+        denied { controls.claim(TreeNodeFence.of(node),correction,"process",true,certificate(),Runnable {}) }
+        val pause=java.util.UUID.randomUUID().toString()
+        registry.submitNativeControl(pause,scope.workspaceId,node.assignmentId!!,node.botId!!,node.assignmentRevision,
+            WorkspaceControlType.PAUSE,"stop only",Runnable {})
+        val claim=controls.claim(TreeNodeFence.of(node),pause,"process",false,certificate(),Runnable {})
+        val stopped=controls.bind(claim,node.cycleId,certificate())
+        denied { producer(stopped) } // Denial-only recognition cannot become execution authority.
+        return claim to correction
+    }
+    private fun validateStopped(claim:TreeControlClaim)=evidence.requirePausedProducer(claim,
+        "native-workspace:${scope.workspaceId}",digest,"generation",certificate())
+    @Test fun exactPauseCanConserveAlreadyBoundUncertainSuccessorWithoutReclaimOrExecutionAuthority() {
+        val (claim,prior)=stoppedAfterUncertain();validateStopped(claim)
+        assertEquals(WorkspaceControlState.UNCERTAIN,registry.getControl(prior)!!.state)
+        assertEquals(WorkspaceControlState.STARTED,registry.getControl(claim.control.requestId)!!.state)
+        denied { producer(core.getNode(claim.node.rootId,claim.node.nodeId)!!) }
+    }
+    @Test fun pauseDenialRejectsMissingHistoricalSuccessorCertificate() {
+        val (claim,prior)=stoppedAfterUncertain()
+        registry.treeTransaction { db -> db.delete("bot_tree_event","root_id=? AND event_key=?",
+            arrayOf(claim.node.rootId,WorkspaceTreeStore.identity("control-successor",prior))) }
+        denied { validateStopped(claim) }
+    }
+    @Test fun pauseDenialRejectsCorruptHistoricalCertificateEvenWithRehashedPayload() {
+        val (claim,prior)=stoppedAfterUncertain()
+        val bad=JSONObject(certificate()).put("profileSha256","b".repeat(64)).toString()
+        registry.treeTransaction { db -> db.execSQL("UPDATE bot_tree_event SET receipt=?,payload_digest=? WHERE root_id=? AND event_key=?",
+            arrayOf(bad,WorkspaceTreeStore.identity(bad),claim.node.rootId,WorkspaceTreeStore.identity("control-successor",prior))) }
+        denied { validateStopped(claim) }
+    }
+    @Test fun pauseDenialRejectsChangedCurrentCycleOrCurrentCheckpoint() {
+        val (claim,_)=stoppedAfterUncertain()
+        denied { evidence.requirePausedProducer(claim,"native-workspace:${scope.workspaceId}",digest,"generation",
+            JSONObject(certificate()).put("originCheckpointSha256","b".repeat(64)).toString()) }
+        registry.treeTransaction { db -> db.execSQL("UPDATE bot_tree_node SET cycle_id=? WHERE root_id=? AND node_id=?",
+            arrayOf("foreign-cycle",claim.node.rootId,claim.node.nodeId)) }
+        denied { validateStopped(claim) }
+    }
     @Test fun childWaitSuccessorChainRequiresExactCountedWaitAndNativeRevision() {
         val parent=running("wait-parent")
         val child=core.admitChild(TreeNodeFence.of(parent),TreeChildRequest(scope.workspaceId,"wait-child","request","Task","analyst","Task child",

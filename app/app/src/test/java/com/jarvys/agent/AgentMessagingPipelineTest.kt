@@ -799,12 +799,19 @@ class AgentMessagingPipelineTest {
         val scope = registry.createWorkspace("message-$key", "Message pipeline test")
         assertTrue(ChatDatabaseBridge.getInstance(context).ensureConversationSync(scope.executionSessionId, "workspace") is ChatDbResult.Success)
         assertTrue(ChatDatabaseBridge.getInstance(context).ensureConversationSync(WorkspaceIdentity.CENTRAL_SESSION, "chat") is ChatDbResult.Success)
+        // Explicit retained (unenrolled) assignment fixture with a real saved native profile.
+        // Runtime profile validation stays enabled; do not manufacture a version on an ephemeral alias.
+        val profiles = com.jarvys.agent.crew.CrewProfileRepository(context)
+        val profileId = com.jarvys.agent.crew.CrewProfileRepository.newCustomId()
+        val profile = profiles.create(CrewProfile(profileId, 1, "Pipeline Worker", "Synthetic message pipeline",
+            "Inspect the current project and report the result.", emptyList(), requestedTools,
+            CrewProfile.WorkspaceMode.LEGACY_CHAT), requestedTools, emptyList())
         val manager = newManager(scope.executionSessionId, onModel)
         managers += manager
         val requestId = "request-$key"
         val mission = "Inspect the current project and report the result."
         val prepared = registry.prepareAssignment(scope.workspaceId, "assignment-$key", requestId,
-            "Owner request", "custom", mission, emptyList(), "Worker", CrewMissionAccess.STANDARD)
+            "Owner request", profile.id, mission, requestedTools, "Worker", CrewMissionAccess.STANDARD)
         val started = registry.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, "process-$key")
         manager.configureConversationInputPipeline(
             { bot, message -> WorkspaceConversationInputStore.append(context, scope.executionSessionId, bot, message) },
@@ -829,9 +836,11 @@ class AgentMessagingPipelineTest {
             })
         }
         configureBeforeStart(manager)
-        val bot = manager.spawnForMissionDeferred(prepared.missionId, "Owner request", "custom", mission,
+        val bot = manager.spawnForMissionDeferred(prepared.missionId, "Owner request", profile.id, mission,
             requestedTools, "Worker", CrewMissionAccess.STANDARD, null, started)
         val bound = registry.bindBot(scope.workspaceId, prepared.assignmentId, started.revision, bot.id)
+        assertNull("Retained message fixture must not acquire tree authority",
+            com.jarvys.agent.workspaces.WorkspaceTreeStore(registry).findAssignment(scope.workspaceId, bound.assignmentId))
         manager.startPreparedForMission(bot)
         registry.close()
         return BoundWorker(manager, bot, scope, bound)

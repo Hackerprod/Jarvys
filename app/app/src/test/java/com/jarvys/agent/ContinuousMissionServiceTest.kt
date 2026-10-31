@@ -114,8 +114,12 @@ class ContinuousMissionServiceTest {
             }, tools, "English test instructions", session, CorePromptBudget.standard(), null,
                 CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
         }, null)
-        service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _ ->
-            CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { nativeContext, nativeSession, skills ->
+            CoreAgentRuntime(nativeContext,nativeSession,skills,CorePromptBudget.standard(),object : ModelProviderClient {
+                override fun complete(systemPrompt: String,userPrompt: String,images: List<com.jarvys.agent.device.ScreenData>,
+                    tools: List<ToolSpec>,sessionId: String,token: CancellationToken): ModelReply =
+                    throw AssertionError("Continuous service fixture must use its injected main-chat runner")
+            })
         }
         AgentRunUiState.beginRun(session, "Continue a long task")
         service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, token, _ ->

@@ -11,6 +11,7 @@ import org.junit.runner.notification.*;
 @SuppressWarnings("removal")
 public final class OfflineJUnit {
   static final AtomicInteger denials = new AtomicInteger();
+  static final java.util.concurrent.atomic.AtomicReference<Throwable> firstDenial = new java.util.concurrent.atomic.AtomicReference<>();
   static final class Row {
     final Description d; final long start=System.nanoTime(); long elapsed;
     final List<Failure> failures=new ArrayList<>(); String skipped;
@@ -25,7 +26,7 @@ public final class OfflineJUnit {
     boolean ok=false; long begin=System.nanoTime();
     try {
       SecurityManager guard=new SecurityManager(){
-        private void deny(){denials.incrementAndGet();throw new SecurityException("Offline test transport denied");}
+        private void deny(){denials.incrementAndGet();SecurityException denied=new SecurityException("Offline test transport denied");firstDenial.compareAndSet(null,denied);throw denied;}
         public void checkConnect(String h,int p){deny();}
         public void checkConnect(String h,int p,Object c){deny();}
         public void checkAccept(String h,int p){deny();}
@@ -54,7 +55,7 @@ public final class OfflineJUnit {
       ok=result.wasSuccessful() && result.getRunCount()>0 && System.getSecurityManager()==guard && denials.get()==0;
       if(rows.size()!=result.getRunCount()+result.getIgnoreCount())throw new AssertionError("JUnit event/count reconciliation failed");
       if(result.getRunCount()==0)throw new AssertionError("No tests executed");
-      if(denials.get()!=0)throw new AssertionError("Unexpected offline transport or subprocess attempt");
+      if(denials.get()!=0)throw new AssertionError("Unexpected offline transport or subprocess attempt",firstDenial.get());
       if(System.getSecurityManager()!=guard)throw new AssertionError("Offline guard replaced");
     } catch(Throwable t) {
       Row r=new Row(Description.createTestDescription(args[0],"launcherFailure"));r.failures.add(new Failure(r.d,t));rows.add(r);ok=false;

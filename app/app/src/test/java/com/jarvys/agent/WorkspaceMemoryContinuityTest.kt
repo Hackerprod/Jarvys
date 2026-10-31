@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit
 
 /** Shared test fixture: genuine native assignments and the production catalog, loop and checkpoint installer. */
 internal class WorkspaceMemoryFixture(storage: ChatTestStore, directBridge: Boolean = true) : AutoCloseable {
-    val files = storage.newFilesDirectory("workspace-memory")
+    val files = storage.newFilesDirectory("workspace-memory-${UUID.randomUUID()}")
     val context: Context = object : ContextWrapper(ApplicationProvider.getApplicationContext<Context>()), ConnectionAccessProvider {
         override fun connectionAccess() = ConnectionAccess.forTests(emptyMap())
         override fun getApplicationContext(): Context = this

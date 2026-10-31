@@ -28,7 +28,7 @@ import org.robolectric.annotation.Config;
 
 /** Scripted runtime contracts, not a claim about live-model title quality. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 34, application = TreeNativeTestApplication.class)
+@Config(sdk = 34, application = TreeNativeTestApplication.class, shadows = ArtifactOsShadow.class)
 public class CrewMissionTitleRuntimeTest {
     private static final CoreToolRegistry EMPTY = new CoreToolRegistry(Collections.emptyList());
     @Rule public ChatTestStore chatTestStore = new ChatTestStore(true, true);

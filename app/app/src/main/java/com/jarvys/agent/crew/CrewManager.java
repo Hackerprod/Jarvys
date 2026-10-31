@@ -1090,6 +1090,20 @@ public final class CrewManager implements AutoCloseable {
         }catch(RuntimeException failure){if(staged.get()!=null){token.cancel();throw new AdmissionUncertainException("Input staged but control confirmation failed",failure,false);}throw failure;}
         finally{if(bot.incomingDispatches.decrementAndGet()==0)synchronized(bot.cycleLock){bot.cycleLock.notifyAll();}}
     }
+    /** No persistence, acknowledgement, scheduling or listener before the containing certified checkpoint. */
+    public CrewMessage enqueueUserSuccessorSupervisorExact(String id,CancellationToken token,CrewMessage message,ResumeCheckpointCommit commit) {
+        Bot bot=bots.get(id);if(bot==null)throw new IllegalArgumentException("Unknown worker");
+        synchronized(bot.cycleLock) {
+            token.throwIfCancelled();
+            if(bot.token!=token || bot.status!=Status.QUEUED || bot.cycleScheduled || bot.requiresExplicitResume
+                || message==null || !conversationId.equals(message.conversationId) || !bot.id.equals(message.to)
+                || !"chief".equals(message.from) || message.type!=CrewMessage.Type.MESSAGE || message.inputProvenance==null
+                || message.inputBinding!=null || !message.refs.isEmpty())
+                throw new IllegalStateException("Supervisor input does not match native USER successor");
+            java.util.Objects.requireNonNull(treeSupport(bot)).requireUserSuccessorStaging(bot,token,commit,message);
+            return bus.enqueueFresh(message);
+        }
+    }
     public CrewMessage enqueueTreeReportExact(String id,CancellationToken token,CrewMessage message){return enqueueTreeInputExact(id,token,message,CrewInputBinding.SourceKind.TREE_REPORT);}
     public CrewMessage enqueueTreeAnswerExact(String id,CancellationToken token,CrewMessage message){return enqueueTreeInputExact(id,token,message,CrewInputBinding.SourceKind.TREE_ANSWER);}
     private CrewMessage enqueueTreeInputExact(String id,CancellationToken token,CrewMessage message,CrewInputBinding.SourceKind kind){

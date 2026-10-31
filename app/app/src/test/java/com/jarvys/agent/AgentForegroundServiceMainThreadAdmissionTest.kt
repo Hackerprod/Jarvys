@@ -152,8 +152,12 @@ class AgentForegroundServiceMainThreadAdmissionTest {
         val controller = Robolectric.buildService(AgentForegroundService::class.java).create()
         val service = controller.get()
         service.beforeGenerationBindForTesting = Runnable { generationBinds.incrementAndGet() }
-        service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _ ->
-            CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { nativeContext, nativeSession, skills ->
+            CoreAgentRuntime(nativeContext,nativeSession,skills,CorePromptBudget.standard(),object : ModelProviderClient {
+                override fun complete(systemPrompt: String,userPrompt: String,images: List<com.jarvys.agent.device.ScreenData>,
+                    tools: List<ToolSpec>,sessionId: String,token: CancellationToken): ModelReply =
+                    throw AssertionError("Admission fixture must stay at the injected main-chat runner boundary")
+            })
         }
         service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, history, _, _, progress ->
             runnerCalls.incrementAndGet()

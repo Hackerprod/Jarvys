@@ -111,9 +111,10 @@ class MainActivityWorkspaceRoutingTest {
         awaitCentralEmpty()
         await { activityState<String?>("proactiveTargetMessageId").value == null }
         assertFalse(context.getSharedPreferences("jarvys_chat", 0).contains("active_session_id"))
-        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, WorkspaceIdentity.serviceSession(stale))
+        assertThrows(IllegalArgumentException::class.java) { WorkspaceIdentity.serviceSession(stale) }
         assertEquals(WorkspaceIdentity.CENTRAL_SESSION, WorkspaceIdentity.serviceSession(null))
-        assertEquals(execution, WorkspaceIdentity.serviceSession(execution))
+        assertThrows(IllegalArgumentException::class.java) { WorkspaceIdentity.serviceSession(execution) }
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, WorkspaceIdentity.serviceSession(WorkspaceIdentity.CENTRAL_SESSION))
         assertEquals(WorkspaceIdentity.CENTRAL_SESSION, selected())
         val picker = MainActivity::class.java.getDeclaredField("attachmentPickerSession").apply { isAccessible = true }
         picker.set(activity, stale)

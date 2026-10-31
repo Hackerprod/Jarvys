@@ -229,6 +229,22 @@ internal class WorkspaceTreeWorkerCoordinator(context: Context, private val sess
         check(owner.bot===bot && owner.token===token)
         WorkspaceRegistry(app).use { if(owner.user==null)requireClaim(it,bot,token,owner.claim) else requireUserWaitClaim(it,bot,token,owner.user) }
     }
+    override fun requireUserSuccessorStaging(bot:CrewManager.Bot,token:CancellationToken,commit:CrewManager.ResumeCheckpointCommit?,message:CrewMessage) {
+        val owner=userCommits[commit] ?: error("Missing live USER successor registration")
+        val claim=owner.claim
+        check(owner.bot===bot && manager.bot(bot.id)===bot && bot.token===token && token!==owner.token &&
+            bot.cycleId()!=claim.node.cycleId && claim.executionEventId!=null)
+        token.throwIfCancelled()
+        val input=WorkspaceConversationInputStore.pendingSupervisorIntents(app,session,bot.assignmentId()).singleOrNull { it.messageId==message.id }
+            ?: error("No exact pending supervisor outbox")
+        check(input.content==message.text && input.provenance?.toJson()?.toString()==message.inputProvenance?.toJson()?.toString())
+        WorkspaceRegistry(app).use { db ->
+            val tree=WorkspaceTreeStore(db)
+            check(tree.getNode(claim.node.rootId,claim.node.nodeId)==claim.node && db.getControl(claim.control.requestId)==claim.control)
+            val root=requireNotNull(tree.getRoot(claim.node.rootId))
+            check(!root.admissionsClosed && !root.wakesClosed && root.origin.storageGeneration==generation())
+        }
+    }
     override fun requireCompletedUserResume(bot:CrewManager.Bot,token:CancellationToken,commit:CrewManager.ResumeCheckpointCommit?) {
         val owner=userCommits[commit] ?: error("DONE requires fresh registered USER control, not child-wait authority")
         check(owner.bot===bot && owner.token===token && owner.claim.executionEventId!=null)
@@ -275,6 +291,7 @@ internal class WorkspaceTreeWorkerCoordinator(context: Context, private val sess
                 val root=requireNotNull(tree.getRoot(claim.node.rootId));check(!root.admissionsClosed && !root.wakesClosed && root.origin.storageGeneration==generation())
             }
             if(stageAnswer!=null) { check(starts) { "Retained answer cannot steer an uncounted same-cycle correction" };stageAnswer.accept(successor) }
+            if(starts) WorkspaceConversationInputStore.stagePendingSupervisorIntentsForUserSuccessor(app,session,manager,successor,commit)
             val saved=if(baseP1Commit!=null) {
                 baseP1Commit.commit(successor,support,manager.messageBus().snapshot(),manager.messageBus().pending(successor.id))
                 requireNotNull(checkpoints.confirmDurable(session,successor.id,successor.scopeIdentity()))

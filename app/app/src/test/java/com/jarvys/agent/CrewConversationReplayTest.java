@@ -35,119 +35,34 @@ public final class CrewConversationReplayTest {
 
     private final Context context = ApplicationProvider.getApplicationContext();
 
-    @Test public void legacyCheckpointMessagesAreBaselinedWithoutCreatingCentralInputs() throws Exception {
-        Fixture fixture = fixture(false, false, Collections.emptyList());
-        CrewManager manager = manager(fixture.sessionId);
-        try {
-            manager.configureCheckpoints(coordinator(fixture));
-            manager.configureConversationMessageListener((bot, message) ->
-                    WorkspaceAgentInputDelivery.deliver(context, bot, message));
-
-            coordinator(fixture).restore(manager, Collections.emptyList());
-
-            CrewManager.Bot restored = manager.bot(fixture.botId);
-            assertNotNull("Legacy worker checkpoint must restore", restored);
-            assertTrue("Legacy source message is durably baselined", restored.conversationMessageProcessed(fixture.message.id));
-            assertFalse("Legacy history must not create a new Central input", hasCentralInput(fixture));
-            JSONObject saved = new CrewCheckpointStore(context.getFilesDir())
-                    .load(fixture.sessionId, fixture.botId).metadata;
-            assertEquals(1, saved.getInt("conversationMessageDeliveryVersion"));
-            assertTrue(arrayContains(saved.getJSONArray("processedConversationMessageIds"), fixture.message.id));
-        } finally {
-            manager.close();
-        }
+    @Test public void uncertifiedLegacyCheckpointCannotBaselineMessagesOrCreateCentralInputs() throws Exception {
+        assertUncertifiedCheckpointDoesNotDispatch(fixture(false,false,Collections.emptyList()),true);
     }
-
-    @Test public void newCheckpointMessageGetsOneCentralStableIdAndReceiptSurvivesRestart() throws Exception {
-        Fixture fixture = fixture(true, true, Collections.emptyList());
-        CrewManager first = manager(fixture.sessionId);
-        try {
-            first.configureCheckpoints(coordinator(fixture));
-            coordinator(fixture).restore(first, Collections.emptyList());
-
-            assertFalse("Checkpoint has an unacknowledged new outbox message",
-                    first.bot(fixture.botId).conversationMessageProcessed(fixture.message.id));
-            assertEquals(0, countCentralInput(fixture));
-
-            // Simulate a crash after Room committed the stable-ID row but before the source
-            // checkpoint could persist its delivery receipt.
-            WorkspaceAgentInputDelivery.deliver(context, first.bot(fixture.botId), fixture.message);
-            assertEquals(1, countCentralInput(fixture));
-            assertNotNull("First delivery starts one central recovery turn",
-                    Shadows.shadowOf((Application) context).getNextStartedService());
-
-            first.configureConversationMessageListener((bot, message) ->
-                    WorkspaceAgentInputDelivery.deliver(context, bot, message));
-            assertTrue(first.bot(fixture.botId).conversationMessageProcessed(fixture.message.id));
-            assertEquals("Replay of an existing Room stable ID only persists the source receipt", 1,
-                    countCentralInput(fixture));
-            assertNull("No second service start was queued",
-                    Shadows.shadowOf((Application) context).getNextStartedService());
-
-            // A repeated callback also leaves the durable input and service queue unchanged.
-            WorkspaceAgentInputDelivery.deliver(context, first.bot(fixture.botId), fixture.message);
-            assertEquals(1, countCentralInput(fixture));
-            assertNull("Duplicate stable ID does not start another central turn",
-                    Shadows.shadowOf((Application) context).getNextStartedService());
-
-            JSONObject saved = new CrewCheckpointStore(context.getFilesDir())
-                    .load(fixture.sessionId, fixture.botId).metadata;
-            assertTrue(arrayContains(saved.getJSONArray("processedConversationMessageIds"), fixture.message.id));
-        } finally {
-            first.close();
-        }
-
-        CrewManager restarted = manager(fixture.sessionId);
-        try {
-            configureProductionDelivery(restarted, fixture);
-            coordinator(fixture).restore(restarted, Collections.emptyList());
-            assertTrue(restarted.bot(fixture.botId).conversationMessageProcessed(fixture.message.id));
-            assertEquals("Restoring a versioned receipt does not append or start another turn", 1, countCentralInput(fixture));
-            assertNull(Shadows.shadowOf((Application) context).getNextStartedService());
-        } finally {
-            restarted.close();
-        }
+    @Test public void boundAssignmentAloneCannotCertifyCheckpointOrReplayItsOutbox() throws Exception {
+        assertUncertifiedCheckpointDoesNotDispatch(fixture(true,true,Collections.emptyList()),false);
     }
-
-    @Test public void versionedNewMessageReplaysAutomaticallyWhenProductionListenerPrecedesRestore() throws Exception {
-        Fixture fixture = fixture(true, true, Collections.emptyList());
-        CrewManager manager = manager(fixture.sessionId);
-        try {
-            configureProductionDelivery(manager, fixture);
-            coordinator(fixture).restore(manager, Collections.emptyList());
-
-            CrewManager.Bot restored = manager.bot(fixture.botId);
-            assertNotNull(restored);
-            assertTrue("Restore replays the new checkpoint message through the configured production listener",
-                    restored.conversationMessageProcessed(fixture.message.id));
-            assertEquals("One source message creates exactly one Central input", 1, countCentralInput(fixture));
-            assertNotNull("The delivered input queues Central recovery", Shadows.shadowOf((Application) context)
-                    .getNextStartedService());
-
-            WorkspaceAgentInputDelivery.deliver(context, restored, fixture.message);
-            assertEquals("A repeated callback reuses the durable stable ID", 1, countCentralInput(fixture));
-        } finally {
-            manager.close();
-        }
+    @Test public void productionListenerBeforeRestoreCannotAuthorizeAnUncertifiedOutbox() throws Exception {
+        assertUncertifiedCheckpointDoesNotDispatch(fixture(true,true,Collections.emptyList()),true);
     }
-
-    @Test public void unresolvedLegacyAssignmentIsRecordedAndDoesNotAbortRestore() throws Exception {
-        Fixture fixture = fixture(false, true, Collections.emptyList());
-        CrewManager manager = manager(fixture.sessionId);
-        try {
-            configureProductionDelivery(manager, fixture);
-            coordinator(fixture).restore(manager, Collections.emptyList());
-
-            CrewManager.Bot restored = manager.bot(fixture.botId);
-            assertNotNull("Missing assignment is terminally classified instead of aborting restore", restored);
-            assertTrue(restored.conversationMessageProcessed(fixture.message.id));
-            assertFalse(hasCentralInput(fixture));
-            JSONObject saved = new CrewCheckpointStore(context.getFilesDir())
-                    .load(fixture.sessionId, fixture.botId).metadata;
-            assertTrue(arrayContains(saved.getJSONArray("processedConversationMessageIds"), fixture.message.id));
-            assertNull(Shadows.shadowOf((Application) context).getNextStartedService());
-        } finally {
-            manager.close();
+    @Test public void unresolvedAssignmentRemainsVisibleWithoutCreatingDeliveryReceipt() throws Exception {
+        assertUncertifiedCheckpointDoesNotDispatch(fixture(false,true,Collections.emptyList()),true);
+    }
+    private void assertUncertifiedCheckpointDoesNotDispatch(Fixture fixture,boolean listenerBeforeRestore) throws Exception {
+        CrewCheckpointStore store=new CrewCheckpointStore(context.getFilesDir());
+        String before=store.confirmDurable(fixture.sessionId,fixture.botId,"saved-scope").payloadSha256;
+        for(int restart=0;restart<2;restart++) try(CrewManager manager=manager(fixture.sessionId)) {
+            if(listenerBeforeRestore)configureProductionDelivery(manager,fixture);
+            else manager.configureCheckpoints(coordinator(fixture));
+            coordinator(fixture).restore(manager,Collections.emptyList());
+            if(!listenerBeforeRestore)manager.configureConversationMessageListener((bot,message)->WorkspaceAgentInputDelivery.deliver(context,bot,message));
+            CrewManager.Bot restored=manager.bot(fixture.botId);
+            assertNotNull("Uncertified evidence remains visible, not silently discarded",restored);
+            assertFalse("A synthetic saved-scope cannot authorize current recovery",restored.canResume());
+            assertFalse("No delivery receipt may be invented",restored.conversationMessageProcessed(fixture.message.id));
+            assertFalse(hasCentralInput(fixture));assertEquals(0,countCentralInput(fixture));
+            assertNull("Restore/scan must not queue a Central turn",Shadows.shadowOf((Application)context).getNextStartedService());
+            assertEquals("Uncertified bytes are preserved without baseline/migration",before,
+                store.confirmDurable(fixture.sessionId,fixture.botId,"saved-scope").payloadSha256);
         }
     }
 

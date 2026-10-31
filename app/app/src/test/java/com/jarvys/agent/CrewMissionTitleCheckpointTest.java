@@ -26,7 +26,7 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34, shadows = ArtifactOsShadow.class)
 public class CrewMissionTitleCheckpointTest {
-    @Rule public final ChatTestStore chatTestStore = new ChatTestStore(false, true);
+    @Rule public final ChatTestStore chatTestStore = new ChatTestStore(true, true);
     private static final CoreToolRegistry EMPTY = new CoreToolRegistry(Collections.emptyList());
 
     @Test public void currentCheckpointOnlyRecoveryPreservesTitleAndBothFullInstructionFields() throws Exception {
@@ -81,12 +81,12 @@ public class CrewMissionTitleCheckpointTest {
             assertEquals(CrewMissionTitle.FALLBACK, snapshot.titleSource);
             assertEquals("", snapshot.originalInstructions);
             assertEquals(worker, snapshot.bots.get(0).mission);
-            assertTrue(manager.bot("legacy-bot").canResume());
+            assertFalse("Uncertified scope cannot become a resumable worker", manager.bot("legacy-bot").canResume());
             assertEquals(0, calls.get());
         }
     }
 
-    @Test public void invalidCheckpointTitleCannotPreventSafeRecoveryOfFullInstructions() throws Exception {
+    @Test public void invalidCheckpointTitleRetainsDisplayInstructionsWithoutGrantingRecovery() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
         String session = "title-invalid-checkpoint-" + System.nanoTime();
         String original = "Entire user request\n" + repeat("Preserve every requirement. ", 10);
@@ -100,7 +100,7 @@ public class CrewMissionTitleCheckpointTest {
             assertEquals(CrewMissionTitle.FALLBACK, snapshot.titleSource);
             assertEquals(original, snapshot.originalInstructions);
             assertEquals("Only the worker's task", snapshot.bots.get(0).mission);
-            assertTrue(manager.bot("saved-bot").canResume());
+            assertFalse("Display metadata is not a valid project checkpoint certificate", manager.bot("saved-bot").canResume());
         }
     }
 
@@ -115,7 +115,7 @@ public class CrewMissionTitleCheckpointTest {
         assertTrue(saved.getJSONObject("missionPresentation").getString("originalInstructions").contains("REDACTED"));
     }
 
-    @Test public void validatedCheckpointUpgradesStaleLedgerFallbackWithoutReplacingUserRequest() throws Exception {
+    @Test public void uncertifiedCheckpointCannotUpgradeLedgerPresentationOrReplaceUserRequest() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
         String session = "title-stale-ledger-" + System.nanoTime();
         JSONObject presentation = new JSONObject().put("schemaVersion", 1).put("title", "Review complete project")
@@ -126,18 +126,18 @@ public class CrewMissionTitleCheckpointTest {
         try (CrewManager manager = manager(session, new AtomicInteger())) {
             new CrewCheckpointCoordinator(context, session, bot -> bot.role).restore(manager, Collections.singletonList(ledger));
             CrewMissionSnapshot restored = manager.missionSnapshots().get(0);
-            assertEquals("Review complete project", restored.title);
-            assertEquals(CrewMissionTitle.AGENT, restored.titleSource);
+            assertEquals(ledger.title, restored.title);
+            assertEquals(ledger.titleSource, restored.titleSource);
             assertEquals(ledger.originalInstructions, restored.originalInstructions);
             assertEquals(ledger.startedAtMillis, restored.startedAtMillis);
             assertEquals(ledger.finishedAtMillis, restored.finishedAtMillis);
             assertEquals(ledger.status, restored.status);
             assertEquals(ledger.synthesis, restored.synthesis);
-            assertTrue(manager.bot("known-bot").canResume());
+            assertFalse(manager.bot("known-bot").canResume());
         }
     }
 
-    @Test public void checkpointCannotReplaceFirstValidLedgerTitleButCanRecoverUnknownRequest() throws Exception {
+    @Test public void uncertifiedCheckpointCannotReplaceLedgerTitleOrSupplyUnknownRequest() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
         String session = "title-stable-ledger-" + System.nanoTime();
         JSONObject presentation = new JSONObject().put("schemaVersion", 1).put("title", "Different checkpoint title")
@@ -148,7 +148,7 @@ public class CrewMissionTitleCheckpointTest {
             new CrewCheckpointCoordinator(context, session, bot -> bot.role).restore(manager, Collections.singletonList(ledger));
             CrewMissionSnapshot restored = manager.missionSnapshots().get(0);
             assertEquals(ledger.title, restored.title);
-            assertEquals(presentation.getString("originalInstructions"), restored.originalInstructions);
+            assertEquals(ledger.originalInstructions, restored.originalInstructions);
         }
     }
 

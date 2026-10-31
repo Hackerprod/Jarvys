@@ -63,6 +63,7 @@ class CentralTreeServiceAcceptanceTest {
         }
         service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->
             try {runtime.runMainChat(goal,history,attachments,token,progress)}
+            catch(cancelled:java.util.concurrent.CancellationException){throw cancelled}
             catch(problem:Throwable){failure.set(problem);throw AssertionError("Actual Central runtime failed",problem)}
         }
     }
@@ -406,7 +407,8 @@ class CentralTreeServiceAcceptanceTest {
         val bot=manager!!.bots().single()
         val (question,node)=storage.onDatabaseWorker {
             val node=WorkspaceRegistry(context).use { WorkspaceTreeStore(it).findAssignment(scope.workspaceId,bot.assignmentId())!! }
-            assertEquals(TreeNodeState.NEEDS_INPUT,node.state);assertNotNull(node.reportReceipt)
+            assertEquals("Native question must suspend, not settle: status=${bot.status()}, error=${bot.error()}, result=${bot.result()}, coordinationFailures=${manager!!.coordinationEvidenceDeliveryFailures()}",
+                TreeNodeState.NEEDS_INPUT,node.state);assertNotNull(node.reportReceipt)
             LocalRunStore(context).listWorkspaceCoordinationReferences(scope.executionSessionId,100,null).single { it.evidenceId==node.terminalRef } to node
         }
         if(controlState=="closed") storage.onDatabaseWorker { WorkspaceRegistry(context).use { db ->
@@ -512,10 +514,11 @@ class CentralTreeServiceAcceptanceTest {
         assertFalse(stopped.token.isCancellationRequested);assertFalse(running.token.isCancellationRequested)
         fun cancelTurn(text:String) {
             val input=user(text);var calls=0
-            reply={ history -> if(calls++==0) ModelReply("",listOf(ModelReply.Call("cancel-detached",CentralWorkspaceTool.NAME,mapOf(
+            val callId="cancel-detached-$input"
+            reply={ history -> if(calls++==0) ModelReply("",listOf(ModelReply.Call(callId,CentralWorkspaceTool.NAME,mapOf(
                 "action" to "cancel","workspace_id" to scope.workspaceId,"assignment_id" to target.assignmentId!!,"bot_id" to target.botId!!,
                 "expected_assignment_revision" to target.assignmentRevision,"key" to "exact-detached-cancel"))))
-                else { assertEquals("workspace_data",JSONObject(history.single { it.toolCallId=="cancel-detached" && it.kind==ConversationTurn.Kind.TOOL_RESULT }.content).getString("kind"))
+                else { assertEquals("workspace_data",JSONObject(history.single { it.toolCallId==callId && it.kind==ConversationTurn.Kind.TOOL_RESULT }.content).getString("kind"))
                     ModelReply("Only that planner was cancelled",emptyList()) } }
             runStored(input)
         }

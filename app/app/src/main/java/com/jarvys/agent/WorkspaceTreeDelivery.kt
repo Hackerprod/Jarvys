@@ -60,8 +60,14 @@ internal object WorkspaceTreeDelivery {
     fun reconcileAfterPause(app:Context,session:String,manager:CrewManager,bot:CrewManager.Bot,claim:TreeControlClaim) {
         check(claim.control.type==WorkspaceControlType.PAUSE && manager.bot(bot.id)===bot && bot.cycleId()==claim.node.cycleId)
         val saved=requireNotNull(CrewCheckpointStore(app.filesDir).confirmDurable(session,bot.id,bot.scopeIdentity()))
-        WorkspaceTreeWorkerCoordinator.requireCertifiedCheckpointIdentity(app,session,saved)
+        check(saved.metadataJson().getString("cycleId")==bot.cycleId() && saved.botId==bot.id &&
+            saved.conversationId==session && saved.metadataJson().getString("assignmentId")==claim.control.assignmentId &&
+            bot.isQuiescent && bot.token.isCancellationRequested)
         WorkspaceRegistry(app).use { db ->
+            val certificate=CrewCheckpointStore.continuationSourceCertificate(saved)
+            WorkspaceTreeEvidenceStore(WorkspaceTreeStore(db)).requirePausedProducer(claim,saved.scopeIdentity,
+                certificate.getString("profileSha256"),
+                com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(app).connectionProjectionEvidenceSync().generation(),certificate.toString())
             check(db.getControl(claim.control.requestId)==claim.control)
             val tree=WorkspaceTreeStore(db);val node=requireNotNull(tree.getNode(claim.node.rootId,claim.node.nodeId))
             check(node.cycleId==claim.node.cycleId && node.assignmentRevision==claim.node.assignmentRevision && node.controlIntent==null && node.wakesClosed)
