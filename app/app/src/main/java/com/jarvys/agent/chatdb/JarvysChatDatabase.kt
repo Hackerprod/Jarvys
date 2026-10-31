@@ -11,6 +11,7 @@ import androidx.room.RoomDatabase.JournalMode
 import androidx.room.useWriterConnection
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import androidx.sqlite.driver.bundled.SQLITE_OPEN_READWRITE
 import androidx.sqlite.driver.bundled.SQLITE_OPEN_READONLY
 import androidx.sqlite.driver.bundled.SQLITE_OPEN_FULLMUTEX
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -298,8 +299,14 @@ internal object JarvysChatDatabaseProvider {
      * Opens an isolated file for schema tests while applying the production future-version gate and
      * connection PRAGMAs. It is internal so production callers use only the process singleton.
      */
-    internal fun openDatabaseFileForTests(context: Context, databaseFile: File): JarvysChatDatabase {
-        val resources = ExplicitFileResources(context, databaseFile, reportFailures = true)
+    internal fun openDatabaseFileForTests(context: Context, databaseFile: File): JarvysChatDatabase =
+        openDatabaseFileForTests(context,databaseFile,RoomTreeProvenanceSchema.UPGRADE_ENABLED)
+
+    /** Explicit permission only for an isolated test-owned file; never changes the process gate. */
+    internal fun openDatabaseFileForTests(context: Context, databaseFile: File,
+        allowCurrentUpgrade: Boolean): JarvysChatDatabase {
+        val resources = ExplicitFileResources(context, databaseFile, reportFailures = true,
+            allowCurrentUpgrade = allowCurrentUpgrade)
         return try { resources.open() } catch (failure: Throwable) {
             runCatching { resources.close(awaitTermination = false) }
             throw failure
@@ -315,7 +322,8 @@ internal object JarvysChatDatabaseProvider {
     }
 
     /** Shared explicit-file implementation, also used by schema tests; no alternate Room engine. */
-    private class ExplicitFileResources(val context: Context, val file: File, val reportFailures: Boolean) {
+    private class ExplicitFileResources(val context: Context, val file: File, val reportFailures: Boolean,
+        val allowCurrentUpgrade: Boolean = RoomTreeProvenanceSchema.UPGRADE_ENABLED) {
         private var executors: List<ExecutorService> = emptyList()
         private var database: JarvysChatDatabase? = null
         private var pool: ReadDatabasePool? = null
@@ -328,7 +336,7 @@ internal object JarvysChatDatabaseProvider {
             projectionAnchor(file).opening()
             file.parentFile?.mkdirs()
             executors = createExecutors()
-            val db = buildDatabase(context.applicationContext, file, executors, reportFailures)
+            val db = buildDatabase(context.applicationContext, file, executors, reportFailures, allowCurrentUpgrade)
             database = db // Retain each partial resource before the next potentially failing step.
             kotlinx.coroutines.runBlocking { db.useWriterConnection { } }
             pool = ReadDatabasePool(file, if (!reportFailures) ({ partialCloseUnconfirmed = true }) else null)
@@ -611,11 +619,19 @@ internal object JarvysChatDatabaseProvider {
         databaseFile: File,
         executors: List<ExecutorService>,
         reportFailures: Boolean = true,
+        allowCurrentUpgrade: Boolean = RoomTreeProvenanceSchema.UPGRADE_ENABLED,
     ): JarvysChatDatabase {
         runVersionPreflightOnQueryExecutor(databaseFile, executors[0])
         // Even closing an initialized Room object may open its lazy Android connection. Reject an
         // incompatible file before constructing that object; this generated delegate has no context or path.
-        runIdentityPreflight(databaseFile, JarvysChatDatabase_Impl().expectedFreshIdentity(), executors[0])
+        check(projectionAnchor(databaseFile).fence.isHeldByCurrentThread) {
+            "Current schema upgrade requires the native destination lifecycle fence"
+        }
+        val registered = synchronized(databaseFiles) { databaseFiles.values.any {
+            it.canonicalPath == databaseFile.canonicalPath
+        } }
+        runOwnedSchemaPreparation(databaseFile, JarvysChatDatabase_Impl().expectedFreshIdentity(), executors[0],
+            allowCurrentUpgrade, registered)
         return Room.databaseBuilder(context, JarvysChatDatabase::class.java, databaseFile.absolutePath)
             // Room and the independent read-only pool use the same bundled SQLite engine/file.
             .setDriver(BundledSQLiteDriver())
@@ -624,8 +640,8 @@ internal object JarvysChatDatabaseProvider {
             // committed reads use the bounded read-only pool and never share a writer lease.
             .setQueryExecutor(executors[1])
             .setTransactionExecutor(executors[1])
-            // Only the reviewed current-v1 additive migration; never imports/destructive fallback.
-            .addMigrations(RoomTreeProvenanceMigration)
+            // Current-v1 upgrade already committed under the native lifecycle fence. No Room
+            // migration/import/destructive fallback may rewrite existing auxiliary definitions.
             .addCallback(connectionPragmasCallback(context.applicationContext, reportFailures))
             .build()
     }
@@ -680,20 +696,44 @@ internal object JarvysChatDatabaseProvider {
         }
     }
 
-    /** Require the current generated Room identity before any writer can adopt an existing file. */
-    private fun runIdentityPreflight(file: File, expected: String, executor: ExecutorService) {
+    /** Lifecycle-owned pre-Room preparation. The existing query worker is the temporary schema
+     * owner only while no Room writer/read pool is registered; afterward normal writer policy applies.
+     * Gate-OFF and already-v2 recognition are strictly read-only. Never called by startup preflight.
+     */
+    private fun runOwnedSchemaPreparation(file: File, expected: String, executor: ExecutorService,
+        allowCurrentUpgrade: Boolean, hasRegisteredHandle: Boolean) {
+        var interrupted=false
         try {
-            executor.submit<Unit> {
-                requireFreshIdentity(file, expected)
-            }.get()
+            val operation=executor.submit<Unit> {
+                if(file.exists() && file.length()>0L) {
+                    val version=openReadOnlyConnection(file).use {
+                        RoomTreeProvenanceSchema.validate(it,expected,allowCurrentUpgrade)
+                    }
+                    if(version==1) {
+                        check(!hasRegisteredHandle) { "Current database upgrade requires all registered readers to close; data preserved" }
+                        // No CREATE flag: an absent/replaced path cannot silently become a new store.
+                        rejectNewerDatabaseWithoutMutation(file)
+                        BundledSQLiteDriver().open(file.absolutePath,SQLITE_OPEN_READWRITE or SQLITE_OPEN_FULLMUTEX).use {
+                            RoomTreeProvenanceUpgrade.upgrade(it,expected)
+                        }
+                    }
+                }
+            }
+            // A caller interruption cannot release the lifecycle fence while a schema write is
+            // still running. Join its physical outcome first; never cancel/replay this transaction.
+            while(true) {
+                try { operation.get();break }
+                catch(error:InterruptedException) { interrupted=true }
+            }
+            if(interrupted)throw IllegalStateException("Interrupted during owned schema preparation; physical outcome joined")
         } catch (error: ExecutionException) {
             throw (error.cause ?: error)
-        } catch (error: InterruptedException) {
-            Thread.currentThread().interrupt()
-            throw IllegalStateException("Interrupted while inspecting database identity", error)
+        } finally {
+            if(interrupted)Thread.currentThread().interrupt()
         }
     }
 
+    /** Startup recognition only. May recognize allowed current-v1, but never opens a writer. */
     private fun requireFreshIdentity(file: File, expected: String) {
         if (!file.exists() || file.length() == 0L) return
         openReadOnlyConnection(file).use { db ->

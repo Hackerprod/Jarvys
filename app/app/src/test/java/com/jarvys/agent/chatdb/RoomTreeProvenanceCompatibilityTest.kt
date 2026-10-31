@@ -1,7 +1,6 @@
 package com.jarvys.agent.chatdb
 
 import android.app.Application
-import androidx.room.Room
 import androidx.room.useWriterConnection
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
@@ -77,14 +76,21 @@ class RoomTreeProvenanceCompatibilityTest {
         }
     }
     private fun upgrade(connection:SQLiteConnection,failAfterDdl:Boolean=false) {
-        connection.execSQL("BEGIN IMMEDIATE")
-        try {
-            RoomTreeProvenanceMigration.migrate(connection)
-            if(failAfterDdl)error("injected interruption after additive DDL")
-            raw(connection).execSQL("UPDATE room_master_table SET identity_hash=? WHERE id=42",arrayOf(v2Identity))
-            connection.execSQL("PRAGMA user_version=2")
-            connection.execSQL("COMMIT")
-        }catch(failure:Throwable){runCatching { connection.execSQL("ROLLBACK") }.exceptionOrNull()?.let(failure::addSuppressed);throw failure}
+        val actual = if(!failAfterDdl)connection else object : SQLiteConnection by connection {
+            override fun prepare(sql:String):androidx.sqlite.SQLiteStatement {
+                val statement=connection.prepare(sql)
+                if(sql!=RoomTreeProvenanceSchema.CREATE_SQL)return statement
+                return object : androidx.sqlite.SQLiteStatement by statement {
+                    override fun step():Boolean {
+                        val value=statement.step()
+                        assertEquals(1L,scalar(connection,"PRAGMA user_version"))
+                        assertEquals(RoomTreeProvenanceSchema.V1_IDENTITY,raw(connection).query("SELECT identity_hash FROM room_master_table WHERE id=42").use { assertTrue(it.moveToFirst());it.getString(0) })
+                        error("injected interruption after additive DDL before identity/version change")
+                    }
+                }
+            }
+        }
+        RoomTreeProvenanceUpgrade.upgrade(actual,v2Identity)
     }
     @Test fun pinnedV1AllRowsConservedAcrossAtomicUpgradeAndRepeatedReopen() {
         val file=file("room-v1-populated");createV1(file)
@@ -93,7 +99,7 @@ class RoomTreeProvenanceCompatibilityTest {
             assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true));rows(db)
         }
         open(file).use { db ->upgrade(db);assertEquals(before,rows(db));assertEquals(0L,scalar(db,"SELECT COUNT(*) FROM crew_message_input_provenance")) }
-        repeat(2) { open(file).use { db ->assertEquals(2,RoomTreeProvenanceSchema.validate(db,v2Identity,false));assertEquals(before,rows(db)) } }
+        repeat(2) { open(file).use { db ->upgrade(db);assertEquals(2,RoomTreeProvenanceSchema.validate(db,v2Identity,false));assertEquals(before,rows(db)) } }
     }
     @Test fun interruptionRollsBackDdlIdentityVersionAndEveryOldRow() {
         val file=file("room-v1-interrupt");createV1(file)
@@ -101,6 +107,43 @@ class RoomTreeProvenanceCompatibilityTest {
         open(file).use { db ->assertThrows(IllegalStateException::class.java){upgrade(db,true)};assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true));assertEquals(before,rows(db)) }
         open(file).use { db ->assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true));upgrade(db);assertEquals(before,rows(db)) }
     }
+    @Test fun prospectiveStructureIsValidatedBeforePublishingAnyV2Identity() {
+        val file=file("room-v1-prospective");createV1(file)
+        open(file).use { db ->
+            val before=rows(db)
+            val altered=object:SQLiteConnection by db {
+                override fun prepare(sql:String):androidx.sqlite.SQLiteStatement {
+                    assertFalse("No identity update may precede prospective structure validation",sql.startsWith("UPDATE room_master_table"))
+                    return db.prepare(if(sql==RoomTreeProvenanceSchema.CREATE_SQL)
+                        sql.replace("`assignment_revision` INTEGER","`assignment_revision` TEXT") else sql)
+                }
+            }
+            assertThrows(RoomCurrentSchemaUnavailable::class.java){RoomTreeProvenanceUpgrade.upgrade(altered,v2Identity)}
+            assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true));assertEquals(before,rows(db))
+        }
+    }
+
+    @Test fun identityAndVersionPublicationFailuresRollbackTheSameNativeTransaction() {
+        for(fault in listOf("UPDATE room_master_table","PRAGMA user_version=2")) {
+            val file=file("room-v1-publication-"+fault.hashCode());createV1(file)
+            open(file).use { db ->
+                val before=rows(db)
+                val interrupted=object:SQLiteConnection by db {
+                    override fun prepare(sql:String):androidx.sqlite.SQLiteStatement {
+                        val statement=db.prepare(sql)
+                        if(!sql.startsWith(fault))return statement
+                        return object:androidx.sqlite.SQLiteStatement by statement {
+                            override fun step():Boolean {statement.step();error("injected publication failure")}
+                        }
+                    }
+                }
+                val failure=assertThrows(IllegalStateException::class.java){RoomTreeProvenanceUpgrade.upgrade(interrupted,v2Identity)}
+                assertEquals("injected publication failure",failure.message)
+                assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true));assertEquals(before,rows(db))
+            }
+        }
+    }
+
     @Test fun nativeSqliteFullCannotPublishPartialSchemaAndCanRetryAfterCapacityRestored() {
         val file=file("room-v1-full");createV1(file)
         val before=open(file).use(::rows)
@@ -147,14 +190,13 @@ class RoomTreeProvenanceCompatibilityTest {
         }
     }
     @Test fun gateOffProviderRejectsV1WithoutChangingAnyFile() {
-        assertFalse(RoomTreeProvenanceSchema.UPGRADE_ENABLED)
         val file=file("room-v1-gated");createV1(file)
         val bytes=file.readBytes();val members=file.parentFile!!.listFiles()!!.map { it.name }.sorted()
-        val failure=assertThrows(RoomCurrentSchemaUnavailable::class.java) { JarvysChatDatabaseProvider.openDatabaseFileForTests(context,file) }
+        val failure=assertThrows(RoomCurrentSchemaUnavailable::class.java) { JarvysChatDatabaseProvider.openDatabaseFileForTests(context,file,false) }
         assertTrue(failure.message!!.contains("data preserved"));assertArrayEquals(bytes,file.readBytes())
         assertEquals(members,file.parentFile!!.listFiles()!!.map { it.name }.sorted())
     }
-    @Test fun realRoomMigrationAndFreshSchemaHaveSameExactV2IdentityAndDdl() {
+    @Test fun realProviderUpgradePreservesValidNativeV1AndMatchesFreshV2IdentityAndDdl() {
         val migrated=file("room-v1-real-room");createV1(migrated,false)
         val owner="00000000-0000-0000-0000-000000000001"
         val session=com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
@@ -169,13 +211,12 @@ class RoomTreeProvenanceCompatibilityTest {
             assertFalse(sql.query("PRAGMA foreign_key_check").use { it.moveToFirst() })
             rows(connection)
         }
-        val room=Room.databaseBuilder(context,JarvysChatDatabase::class.java,migrated.absolutePath)
-            .setDriver(BundledSQLiteDriver()).addMigrations(RoomTreeProvenanceMigration).build()
+        val room=JarvysChatDatabaseProvider.openDatabaseFileForTests(context,migrated,true)
         try {
             runBlocking { room.useWriterConnection { } }
             val retained=runBlocking { room.messageDao().getById(session,owner) }
             assertNotNull(retained);assertEquals("user",retained!!.role);assertEquals(owner,retained.stable_id)
-        } finally { room.close() }
+        } finally { JarvysChatDatabaseProvider.closeDatabaseFileForTests(room) }
         open(migrated).use { connection ->
             assertEquals(before,rows(connection))
             assertFalse(raw(connection).query("PRAGMA foreign_key_check").use { it.moveToFirst() })
@@ -193,6 +234,7 @@ class RoomTreeProvenanceCompatibilityTest {
             {it.execSQL("PRAGMA user_version=3")},
             {it.execSQL("PRAGMA user_version=0")},
             {it.execSQL("UPDATE room_master_table SET identity_hash='wrong' WHERE id=42")},
+            {it.execSQL("UPDATE room_master_table SET identity_hash=CAST(identity_hash AS BLOB) WHERE id=42")},
             {it.execSQL(RoomTreeProvenanceSchema.CREATE_SQL)},
             {it.execSQL("ALTER TABLE crew_messages ADD COLUMN unexpected TEXT")},
             {it.execSQL("DROP INDEX idx_crew_messages_id")},
@@ -227,6 +269,72 @@ class RoomTreeProvenanceCompatibilityTest {
             assertArrayEquals(before,file.readBytes())
         }
     }
+    @Test fun moduleShadowClassificationDoesNotCertifyReplacedTableDdl() {
+        for(parent in listOf("memory_fts","memory_prompts_fts","message_fts")) {
+            val file=file("room-shadow-replaced-$parent");createV1(file,false)
+            val shadow=parent+"_config"
+            open(file).use { db ->
+                JarvysChatDatabaseProvider.DatabaseTriggers.create(db,context,false)
+                assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true))
+                db.execSQL("CREATE TEMP TABLE retained_config AS SELECT * FROM `$shadow`")
+                db.execSQL("DROP TABLE `$shadow`")
+                db.execSQL("CREATE TABLE `$shadow`(k PRIMARY KEY,v,unexpected BLOB) WITHOUT ROWID")
+                db.execSQL("INSERT INTO `$shadow`(k,v) SELECT k,v FROM retained_config")
+                val classified=raw(db).query("PRAGMA table_list").use { c ->
+                    var found=false
+                    while(c.moveToNext())if(c.getString(0)=="main" && c.getString(1)==shadow) {
+                        assertEquals("Module suffix classification alone is not DDL validation","shadow",c.getString(2));found=true
+                    }
+                    found
+                }
+                assertTrue(classified)
+            }
+            val before=file.readBytes()
+            open(file).use { db ->assertThrows(RoomCurrentSchemaUnavailable::class.java){upgrade(db)} }
+            assertArrayEquals(before,file.readBytes())
+        }
+    }
+
+    @Test fun concurrentExplicitProviderUpgradesSerializeOnNativeLifecycleAnchor() {
+        val file=file("room-v1-concurrent");createV1(file,false)
+        val before=open(file).use { db ->JarvysChatDatabaseProvider.DatabaseTriggers.create(db,context,false);scalar(db,"PRAGMA schema_version") }
+        val pool=java.util.concurrent.Executors.newFixedThreadPool(2)
+        val start=java.util.concurrent.CountDownLatch(1)
+        val opened=java.util.Collections.synchronizedList(mutableListOf<JarvysChatDatabase>())
+        try {
+            val calls=(1..2).map { pool.submit<JarvysChatDatabase> {
+                start.await();JarvysChatDatabaseProvider.openDatabaseFileForTests(context,file,true).also { opened.add(it) }
+            } }
+            start.countDown();calls.forEach { it.get(30,java.util.concurrent.TimeUnit.SECONDS) }
+            open(file).use { db ->
+                assertEquals(2,RoomTreeProvenanceSchema.validate(db,v2Identity,false))
+                assertEquals(before+1,scalar(db,"PRAGMA schema_version"))
+            }
+        } finally {
+            opened.forEach { JarvysChatDatabaseProvider.closeDatabaseFileForTests(it) }
+            pool.shutdownNow()
+        }
+    }
+
+    @Test fun retainedNativeReadSnapshotSeesV1UntilReleaseThenReopensExactV2() {
+        val file=file("room-v1-reader");createV1(file,false)
+        open(file).use { db ->JarvysChatDatabaseProvider.DatabaseTriggers.create(db,context,false);raw(db).query("PRAGMA journal_mode=WAL").use { assertTrue(it.moveToFirst());assertEquals("wal",it.getString(0)) } }
+        val reader=BundledSQLiteDriver().open(file.absolutePath,SQLITE_OPEN_READONLY)
+        try {
+            reader.execSQL("BEGIN")
+            assertEquals(1,RoomTreeProvenanceSchema.validate(reader,v2Identity,true))
+            val before=rows(reader)
+            val opened=JarvysChatDatabaseProvider.openDatabaseFileForTests(context,file,true)
+            try {
+                assertEquals(before,rows(reader))
+                assertEquals(1,RoomTreeProvenanceSchema.validate(reader,v2Identity,true))
+                reader.execSQL("COMMIT")
+                assertEquals(2,RoomTreeProvenanceSchema.validate(reader,v2Identity,false))
+                assertEquals(before,rows(reader))
+            } finally { JarvysChatDatabaseProvider.closeDatabaseFileForTests(opened) }
+        } finally { reader.close() }
+    }
+
     @Test fun provenanceForeignKeyRejectsOrphansAndCascadesOnlyWithActualParent() {
         val file=file("room-v1-fk");createV1(file);open(file).use { db ->
             upgrade(db);db.execSQL("PRAGMA foreign_keys=ON")

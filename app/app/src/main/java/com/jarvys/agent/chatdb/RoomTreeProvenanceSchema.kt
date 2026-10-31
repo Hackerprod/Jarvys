@@ -1,6 +1,5 @@
 package com.jarvys.agent.chatdb
 
-import androidx.room.migration.Migration
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
 import java.security.MessageDigest
@@ -274,6 +273,35 @@ internal object RoomTreeProvenanceSchema {
         "trigger:trg_workspace_reply_update_monotonic" to setOf("05b28c93a0d28f0dab79e12bb50040ec81f5c343793e9491fb475b378b73bb33"),
         "view:message_search_content" to setOf("a22323d7b24fedf054efa18b6770b80c2a7a9f82d3c5b7f2597afa236f2631a5"),
     )
+    // Extracted with pinned sqlite-bundled-jvm2.6.1 (SQLite3.50.1 source b77dc5e0...914c95).
+    // Exact per-module shadow set and token-normalized DDL; no runtime probe or user data copied.
+    private val shadowDefinitions = mapOf(
+        "f3b5a0572a79759d65fa8100c64bf65cca3a0228b76d60bd509e0397ae3aa9ee" to mapOf(
+            "memory_fts_config" to "f3da3d9c3788797b7048c4ddee46027d84e70a4cccd958d0294127845a9fa896",
+            "memory_fts_data" to "b68691fc20a6c1bf10c45bef77c81a0cccf473a0177b64c21118fdb5db100f2e",
+            "memory_fts_docsize" to "b559adcba0a9a5ea49cd42878b07c5cfad38b3bb2e7b9409e3173131b027cba5",
+            "memory_fts_idx" to "eaea339feb92800981a02bcbb4a8792a1a89ad84276ace52273cb974eff7906f",
+        ),
+        "940d3cd2a71eba1e0f4c949028add16a8658fc65ea2dd4b4a25d88bf67ef7194" to mapOf(
+            "memory_fts_content" to "f0e5d59a00d93a9d9261d3cb7f876152e1bfe8714b6a967e85ca1d7ad722f0c1",
+            "memory_fts_docsize" to "1edd77a383a0ab67a19ecd4d5fc9d14ba59d4bac333557dadecff501c74dbfc5",
+            "memory_fts_segdir" to "21e6535b52630d8846847a179a84e8725bbbc618819db10cd38bd8c1087d8007",
+            "memory_fts_segments" to "a61e14db811b7d654a208f3db38ca429f1fafaca543b1ab15c3524a88722a4a4",
+            "memory_fts_stat" to "f66c388de35ff258f5debaf28a5743064d978703fde4dee1f900e9fd62a57c14",
+        ),
+        "a6849473209f990c9ddb78b3ccc1513a43f2fe1bbe33253b6ce289b9fbfa6a62" to mapOf(
+            "memory_prompts_fts_config" to "73d9b3be9a9a1845f314b73c081b8e618aee1936feecab9097238e3274d4ead9",
+            "memory_prompts_fts_data" to "4219aedfef6ce85b5ff1f1636a41b242798eddb99ae80a7b86d9831a6e41d7c5",
+            "memory_prompts_fts_docsize" to "c0e1c270ea7de59c5b698a79ced1c370d3f03584fa8dcd7ee6ea59fa54703ca7",
+            "memory_prompts_fts_idx" to "1bf58f4b901807fefea87a59dcae97a744974e9043930f30ac1788afd21b4331",
+        ),
+        "ad56b4583b7fdc7f960c58719a5eeb4d2dc1a1817d7f80932513a282333c06f1" to mapOf(
+            "message_fts_config" to "5a2ae5a2ddf0e14fdee11b4fada95952706e0bcd439cef2f8c068641ea52d844",
+            "message_fts_data" to "27fd0ba467df9f0670b3ca15f2e7be8adce622d181874564bf7ba13ee1246459",
+            "message_fts_docsize" to "4a5cf0d4d2e83660984324deb57186b95692d42e8048fbc440bcae37d2a9909b",
+            "message_fts_idx" to "c3ca8ceb09e488e9d096cfc6d03c3a796c8b3c697e2dff83ef3027617f5e4e22",
+        ),
+    )
     private val tokens = Regex("""'(?:''|[^'])*'|`[^`]*`|"[^"]*"|[A-Za-z_][A-Za-z_0-9]*|[0-9]+|[^\s]""")
     private fun digest(sql: String): String {
         val parts = tokens.findAll(sql).map { match ->
@@ -295,13 +323,24 @@ internal object RoomTreeProvenanceSchema {
         throw RoomCurrentSchemaUnavailable("Current database inspection failed; data preserved",failure)
     }
 
-    private fun validateChecked(connection: SQLiteConnection, expectedV2Identity: String, allowV1: Boolean): Int {
+    /** Structure-only stage check: identity/version MUST still be the original v1 values. */
+    internal fun validateProspectiveV2(connection: SQLiteConnection, expectedV2Identity: String) {
+        check(validateChecked(connection,expectedV2Identity,true,2) == 1) {
+            "Prospective schema validation requires retained v1 identity"
+        }
+    }
+
+    private fun validateChecked(connection: SQLiteConnection, expectedV2Identity: String, allowV1: Boolean,
+        prospectiveVersion: Int? = null): Int {
         val sql = DriverChatSqlDatabase(connection)
         val version = sql.query("PRAGMA user_version").use { check(it.moveToFirst()); it.getInt(0) }
         if (version != 1 && version != 2) throw RoomCurrentSchemaUnavailable("Unsupported current database version; data preserved")
         val expectedIdentity = if (version == 1) V1_IDENTITY else expectedV2Identity
         val identity = try { sql.query("SELECT identity_hash FROM room_master_table WHERE id=42").use {
-            if (!it.moveToFirst()) null else it.getString(0).also { _ -> check(!it.moveToNext()) }
+            if (!it.moveToFirst()) null else {
+                check(it.getType(0)==android.database.Cursor.FIELD_TYPE_STRING) { "Room identity must retain its canonical TEXT type" }
+                it.getString(0).also { _ -> check(!it.moveToNext()) }
+            }
         } } catch (failure: Exception) { throw RoomCurrentSchemaUnavailable("Current database identity unavailable; data preserved", failure) }
         if (identity != expectedIdentity) throw RoomCurrentSchemaUnavailable("Current database identity mismatch; data preserved")
         val actual = sql.query("SELECT type,name,sql FROM sqlite_master WHERE type IN ('table','index','trigger','view') AND name NOT LIKE 'sqlite_%' AND name <> 'android_metadata' ORDER BY type,name").use { c ->
@@ -310,19 +349,28 @@ internal object RoomTreeProvenanceSchema {
                 put(c.getString(0)+":"+c.getString(1),digest(c.getString(2)))
             } }
         }
-        val expected = if(version == 1) v1Objects else v1Objects + ("table:crew_message_input_provenance" to digest(CREATE_SQL))
+        val expected = if((prospectiveVersion ?: version) == 1) v1Objects else v1Objects + ("table:crew_message_input_provenance" to digest(CREATE_SQL))
         if(expected.any { (key,value) -> actual[key] != value })
             throw RoomCurrentSchemaUnavailable("Current database schema mismatch; data preserved")
         val shadows = sql.query("PRAGMA table_list").use { c -> buildSet<String> {
             while(c.moveToNext())if(c.getString(0)=="main" && c.getString(2)=="shadow") add(c.getString(1))
         } }
+        val expectedShadows = buildMap<String,String> {
+            for(parent in virtualTables.keys) {
+                val parentDigest=actual["table:"+parent] ?: continue
+                val definitions=shadowDefinitions[parentDigest]
+                    ?: throw RoomCurrentSchemaUnavailable("Unknown native virtual table; data preserved")
+                putAll(definitions)
+            }
+        }
+        if(shadows != expectedShadows.keys || expectedShadows.any { (name,hash) -> actual["table:"+name] != hash })
+            throw RoomCurrentSchemaUnavailable("Native shadow table schema mismatch; data preserved")
         for((key,value) in actual.filterKeys { it !in expected }) {
             if(auxiliaryIndexes[key] == value) continue
             if(auxiliaryDefinitions[key]?.contains(value)==true) continue
             val name=key.removePrefix("table:")
             if(key.startsWith("table:") && virtualTables[name]?.contains(value)==true) continue
-            if(key.startsWith("table:") && name in shadows && virtualTables.any { (parent,definitions) ->
-                    name.startsWith(parent+"_") && actual["table:"+parent] in definitions }) continue
+            if(key.startsWith("table:") && name in shadows && expectedShadows[name] == value) continue
             throw RoomCurrentSchemaUnavailable("Unexpected current database schema object; data preserved")
         }
         fun requireFamily(name:String, definitions:Map<String,String>) {
@@ -349,10 +397,31 @@ internal object RoomTreeProvenanceSchema {
 
 internal class RoomCurrentSchemaUnavailable(message: String, cause: Throwable? = null) : IllegalStateException(message,cause)
 
-/** Room owns the atomic migration/version/identity transaction. Tests call this same operation. */
-internal object RoomTreeProvenanceMigration : Migration(1,2) {
-    override fun migrate(connection: SQLiteConnection) {
-        check(RoomTreeProvenanceSchema.validate(connection,"unused-v2",true) == 1)
-        connection.execSQL(RoomTreeProvenanceSchema.CREATE_SQL)
+/** Exact current-data additive transaction, completed before any Room object/read pool exists.
+ * Native v98 auxiliary expression indexes are intentionally absent from Room entity metadata;
+ * generated Room migration validation cannot conserve them. Full pinned native validation does.
+ */
+internal object RoomTreeProvenanceUpgrade {
+    fun upgrade(connection: SQLiteConnection, expectedV2Identity: String) {
+        connection.execSQL("BEGIN IMMEDIATE")
+        try {
+            val version=RoomTreeProvenanceSchema.validate(connection,expectedV2Identity,true)
+            if(version == 1) {
+                connection.execSQL(RoomTreeProvenanceSchema.CREATE_SQL)
+                RoomTreeProvenanceSchema.validateProspectiveV2(connection,expectedV2Identity)
+                val sql=DriverChatSqlDatabase(connection)
+                sql.execSQL("UPDATE room_master_table SET identity_hash=? WHERE id=42 AND identity_hash=?",
+                    arrayOf(expectedV2Identity,RoomTreeProvenanceSchema.V1_IDENTITY))
+                check(sql.query("SELECT changes()").use { it.moveToFirst() && it.getLong(0)==1L }) {
+                    "Current database identity changed during upgrade"
+                }
+                connection.execSQL("PRAGMA user_version=2")
+                check(RoomTreeProvenanceSchema.validate(connection,expectedV2Identity,false)==2)
+            }
+            connection.execSQL("COMMIT")
+        } catch(failure:Throwable) {
+            try { connection.execSQL("ROLLBACK") } catch(rollback:Throwable) { failure.addSuppressed(rollback) }
+            throw failure
+        }
     }
 }
