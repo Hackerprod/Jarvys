@@ -264,7 +264,7 @@ public final class CrewCheckpointStore {
                 payload.put("artifactOwnership", sanitizeJson(artifactOwnership));
                 payload.put("savedAtMs", System.currentTimeMillis());
                 new Snapshot(payload).loop.reconciled();
-                String serialized = payload.toString();
+                String serialized = escapeJsonSurrogates(payload.toString());
                 byte[] bytes = serialized.getBytes(StandardCharsets.UTF_8);
                 if (bytes.length > budget) throw new IOException("Crew checkpoint exceeds its storage limit");
                 JSONObject envelope = new JSONObject().put("schemaVersion", SCHEMA_VERSION).put("sha256", digest(bytes)).put("payload", serialized);
@@ -277,7 +277,7 @@ public final class CrewCheckpointStore {
                 File pending = File.createTempFile("checkpoint-pending-", ".json", directory);
                 verify(pending);
                 try (FileOutputStream output = new FileOutputStream(pending);) {
-                    output.write(envelope.toString().getBytes(StandardCharsets.UTF_8));
+                    output.write(escapeJsonSurrogates(envelope.toString()).getBytes(StandardCharsets.UTF_8));
                     output.flush();
                     output.getFD().sync();
                 }
@@ -1099,6 +1099,20 @@ public final class CrewCheckpointStore {
             return Collections.unmodifiableList(result);
         }
         return value;
+    }
+
+    /** JSON escapes preserve every UTF-16 code unit before UTF-8 encoding; schema and redaction stay unchanged. */
+    static String escapeJsonSurrogates(String json) {
+        StringBuilder escaped = new StringBuilder(json.length());
+        final char[] hex = "0123456789abcdef".toCharArray();
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (Character.isSurrogate(c)) {
+                escaped.append('\\').append('u').append(hex[(c >>> 12) & 15]).append(hex[(c >>> 8) & 15])
+                        .append(hex[(c >>> 4) & 15]).append(hex[c & 15]);
+            } else escaped.append(c);
+        }
+        return escaped.toString();
     }
 
     static Object sanitizeJson(Object value) throws Exception {

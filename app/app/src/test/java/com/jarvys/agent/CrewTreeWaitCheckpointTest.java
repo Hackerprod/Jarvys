@@ -32,6 +32,10 @@ public class CrewTreeWaitCheckpointTest {
   old=store.createCentralContinuation(old,CentralContinuationRecord.create(workspace,assignment,"request","mission",bot,cycle));
   JSONObject p1=CrewCheckpointStore.continuation(old).toJson();JSONObject first=ticket("one");
   CrewCheckpointStore.ConfirmedSnapshot saved=wait(store,old,first);
+  assertTrue("Returned receipt must equal actual confirmed disk content",WorkerTreeWaitRecord.equal(
+    saved.metadataJson(),new CrewCheckpointStore(root).confirmDurable(session,bot,scope()).metadataJson()));
+  assertEquals(first.getString("draft"),new CrewCheckpointStore(root).confirmDurable(session,bot,scope()).metadataJson()
+    .getJSONObject(WorkerTreeWaitRecord.FIELD).getJSONObject("current").getString("draft"));
   saved=wait(store,saved,ticket("two"));
   JSONObject wanted=saved.metadataJson().getJSONObject(WorkerTreeWaitRecord.FIELD);
   assertTrue(WorkerTreeWaitRecord.equal(first,wanted.getJSONArray("history").getJSONObject(0)));
@@ -55,6 +59,10 @@ public class CrewTreeWaitCheckpointTest {
   WorkerTreeWaitRecord one=WorkerTreeWaitRecord.create(ticket("one"));
   assertThrows(IllegalArgumentException.class,()->WorkerTreeWaitRecord.fromJson(one.toJson().put("version",2)));
   assertThrows(IllegalArgumentException.class,()->WorkerTreeWaitRecord.create(ticket("one").put("revision",1.0)));
+  assertThrows(IllegalArgumentException.class,()->WorkerTreeWaitRecord.fromJson(one.toJson().put("version",1.0)));
+  JSONObject fractionalHistory=one.withTicket(ticket("two")).toJson();
+  fractionalHistory.getJSONArray("history").getJSONObject(0).put("revision",1.0);
+  assertThrows(IllegalArgumentException.class,()->WorkerTreeWaitRecord.fromJson(fractionalHistory));
   assertThrows(IllegalArgumentException.class,()->WorkerTreeWaitRecord.create(ticket("one").put("extra",true)));
   assertThrows(IllegalArgumentException.class,()->one.withTicket(ticket("two").put("nodeId","other")));
   WorkerTreeWaitRecord two=one.withTicket(ticket("two"));
@@ -180,6 +188,18 @@ public class CrewTreeWaitCheckpointTest {
   assertEquals("corrected",confirmed.metadataJson().getString("result"));
   assertThrows(IllegalStateException.class,()->store.saveTreeUserSameCycleConfirmed(cert,next,scope(),source.loopForEvidence(),new JSONObject()));
   assertEquals(confirmed.payloadSha256,store.confirmDurable(session,bot,scope()).payloadSha256);
+ }
+
+ @Test public void jsonEscapingRoundTripsEverySurrogateWithoutChangingJsonOrRedaction()throws Exception {
+  String exact="NUL\u0000 lone high\ud800 lone low\udfff pair\ud83d\ude00 literal\\ud800";
+  JSONObject original=new JSONObject().put("text",exact);
+  String escaped=CrewCheckpointStore.escapeJsonSurrogates(original.toString());
+  assertEquals(exact,new JSONObject(new String(escaped.getBytes(java.nio.charset.StandardCharsets.UTF_8),java.nio.charset.StandardCharsets.UTF_8)).getString("text"));
+  assertEquals(escaped,CrewCheckpointStore.escapeJsonSurrogates(escaped));
+  JSONObject sanitized=(JSONObject)CrewCheckpointStore.sanitizeJson(new JSONObject().put("draft","password=never-retain").put("text",exact));
+  String durable=CrewCheckpointStore.escapeJsonSurrogates(sanitized.toString());
+  assertFalse(durable.contains("never-retain"));
+  assertEquals(sanitized.getString("text"),new JSONObject(durable).getString("text"));
  }
 
 }

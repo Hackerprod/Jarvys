@@ -13,15 +13,17 @@ public final class WorkerTreeWaitRecord {
     public static final String FIELD = "workerTreeWaitV1";
     private final JSONObject value;
     private WorkerTreeWaitRecord(JSONObject source) {
-        value=copy(source); fields(value,"version","current","history"); integer(value,"version",1);
-        JSONObject current=value.optJSONObject("current"); validateTicket(current);
-        JSONArray history=value.optJSONArray("history"); require(history!=null,"Missing wait history");
+        // Validate the caller's original number types before JSONObject can normalize 1.0 to 1.
+        fields(source,"version","current","history"); integer(source,"version",1);
+        JSONObject current=source.optJSONObject("current"); validateTicket(current);
+        JSONArray history=source.optJSONArray("history"); require(history!=null,"Missing wait history");
         Set<String> ids=new HashSet<>(); ids.add(text(current,"waitId"));
         for(int i=0;i<history.length();i++) {
             JSONObject prior=history.optJSONObject(i);validateTicket(prior);
             require(ids.add(text(prior,"waitId")),"Duplicate wait history");
             require(text(prior,"rootId").equals(text(current,"rootId")) && text(prior,"nodeId").equals(text(current,"nodeId")),"Wait owner changed");
         }
+        value=copy(source);
     }
     public static WorkerTreeWaitRecord fromJson(JSONObject value) {return new WorkerTreeWaitRecord(value);}
     public static WorkerTreeWaitRecord create(JSONObject ticket) {
