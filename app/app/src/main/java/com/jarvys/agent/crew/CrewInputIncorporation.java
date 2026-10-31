@@ -16,7 +16,7 @@ public final class CrewInputIncorporation {
         if ((binding.sourceKind == CrewInputBinding.SourceKind.NATIVE_CORRECT) != (transportKind == TransportKind.USER))
             throw new IllegalArgumentException("Input provenance does not match its transport");
         if ((binding.sourceKind == CrewInputBinding.SourceKind.TREE_REPORT
-                || binding.sourceKind == CrewInputBinding.SourceKind.TREE_ANSWER) && transportKind != TransportKind.INBOX)
+                || binding.sourceKind == CrewInputBinding.SourceKind.TREE_ANSWER || binding.sourceKind == CrewInputBinding.SourceKind.TREE_TASK) && transportKind != TransportKind.INBOX)
             throw new IllegalArgumentException("Tree input requires exact inbox incorporation");
         this.binding = binding;
         this.firstIncorporationCycleId = CrewCoordinationEvidence.requireCycleId(firstIncorporationCycleId);

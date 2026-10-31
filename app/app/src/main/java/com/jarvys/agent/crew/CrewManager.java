@@ -1818,7 +1818,16 @@ public final class CrewManager implements AutoCloseable {
                     initialTaskAssignment.getAssignmentId(), treeParent==null?id:treeParent.id, task.id, ConversationInput.Kind.TASK,
                     treeParent==null?ConversationInput.Provenance.PrincipalRole.SUPERVISOR:ConversationInput.Provenance.PrincipalRole.PEER, "", "", "",
                     initialTaskAssignment.getRevision(), initialTaskAssignment.getRequestId(),
-                    initialTaskAssignment.getMissionId(), "");
+                    initialTaskAssignment.getMissionId(), treeParent==null?"":treeParent.cycleId());
+            if(treeParent!=null) {
+                // Only this native enrolled-parent admission constructs a descendant TASK; the DTO is not a grant.
+                if(bots.get(treeParent.id)!=treeParent || treeSupport(treeParent)==null
+                        || !treeParent.missionId.equals(initialTaskAssignment.getMissionId()))
+                    throw new IllegalStateException("Tree task parent ownership changed");
+                task=task.withInputBinding(CrewInputBinding.treeTask(initialTaskAssignment.getWorkspaceId(),conversationId,
+                        initialTaskAssignment.getAssignmentId(),initialTaskAssignment.getMissionId(),id,task.id,
+                        bot.cycleId(),treeParent.id,mission,provenance));
+            }
             CrewMessage admitted = bus.enqueueFresh(task.withInputProvenance(provenance));
             bus.publishAdmitted(admitted);
         } else {

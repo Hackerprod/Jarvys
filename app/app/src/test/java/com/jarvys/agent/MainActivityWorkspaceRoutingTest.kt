@@ -59,7 +59,25 @@ class MainActivityWorkspaceRoutingTest {
     private lateinit var attachment: ChatAttachment
     private val activity: MainActivity get() = requireNotNull(controller).get()
 
+    private fun seedFreshOfflineCatalogCache() {
+        // Exercise the real cache codec and normal fresh-cache startup branch, not a network bypass.
+        val models = listOf(ModelInfo("offline-fixture", "Offline fixture", 8192, 1024,
+            setOf("text"), setOf("text"), listOf(ModelVariant("medium", "medium", "auto", "medium"))))
+        val routers = listOf(OpenRouterModelInfo("offline/fixture", "Offline fixture", 8192, 1024, setOf("text")))
+        fun encode(method: String, rows: List<*>): String = CodexModelCatalog::class.java
+            .getDeclaredMethod(method, List::class.java).apply { isAccessible = true }
+            .invoke(CodexModelCatalog, rows).toString()
+        val catalog = encode("serializeCatalog", models)
+        val router = encode("serializeOpenRouterCatalog", routers)
+        assertTrue(context.getSharedPreferences("codex_models_dev_cache", Context.MODE_PRIVATE).edit()
+            .putString("catalog_json_r1b", catalog)
+            .putString("openai_api_catalog_json", catalog)
+            .putString("openrouter_catalog_json", router)
+            .putLong("fetched_at", System.currentTimeMillis()).commit())
+    }
+
     @Before fun setUp() {
+        seedFreshOfflineCatalogCache()
         compose.mainClock.autoAdvance = false
         ViewModelProvider.AndroidViewModelFactory::class.java.getDeclaredField("_instance")
             .apply { isAccessible = true }.set(null, null)

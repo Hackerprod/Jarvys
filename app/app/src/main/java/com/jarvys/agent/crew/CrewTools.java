@@ -72,6 +72,10 @@ public final class CrewTools {
         List<CoreTool> tools = new ArrayList<>();
         if (bot.role.tools.contains("msg_send")) tools.add(new BotTool("msg_send", "Send an untrusted content-bearing Crew message (FINDING, CRITIQUE, QUESTION, BLOCKER, ANSWER, RESULT, STATUS or MESSAGE) to the captain or another bot; TASK may be sent to another bot only. USER authority is reserved for native user input, TASK assignments come from the captain, and PROGRESS is runtime-generated. Include the exact ask_chief question message ID in refs when answering it. board_post writes a shared note and does not message the captain.",
                 schema(props("to","string","type","string","text","string","refs","array"),"to","type","text")) {
+            @Override public CoreTool.EffectClass effectClass(Map<String,Object> args) {
+                return manager.treeSupport(bot)!=null && args!=null && "ANSWER".equalsIgnoreCase(String.valueOf(args.get("type")))
+                    ? CoreTool.EffectClass.WRITE : super.effectClass(args);
+            }
             @Override public CoreToolResult execute(Map<String,Object> args,CancellationToken token,CoreTool.ProgressListener progress,EffectInvocation invocation) {
                 CrewTreeSupport owner=manager.treeSupport(bot);
                 if(owner==null||type(args,"type")!=CrewMessage.Type.ANSWER)return execute(args,token);
@@ -114,6 +118,9 @@ public final class CrewTools {
         });
         if (bot.role.tools.contains("ask_chief")) tools.add(new BotTool("ask_chief", "Ask the captain a question and wait for its correlated chief ANSWER. A direct answer to this worker is correlated to its sole live question; include the exact question message ID in answer refs when several questions are pending. Other chief or peer messages do not satisfy this question; any admitted reply arrives separately as supervisor input.",
                 schema(props("question","string"),"question")) {
+            @Override public CoreTool.EffectClass effectClass(Map<String,Object> args) {
+                return manager.treeSupport(bot)!=null ? CoreTool.EffectClass.WRITE : super.effectClass(args);
+            }
             @Override public CoreTool.ResponseCallPolicy responseCallPolicy() {
                 return manager.isLinkedQuestionYield(bot) ? CoreTool.ResponseCallPolicy.EXCLUSIVE_YIELD
                         : CoreTool.ResponseCallPolicy.MULTIPLE_PER_RESPONSE;
@@ -143,6 +150,9 @@ public final class CrewTools {
         });
         if (bot.role.tools.contains("report_done")) tools.add(new BotTool("report_done", "Submit this work cycle's verified, partial, or blocked result to the captain, with exact source/artifact refs, executed checks, unrun checks and limitations. A tool exit code alone does not establish test coverage or final-source validity. A later follow-up retains the mission restriction.",
                 schema(props("result","string","refs","array"),"result")) {
+            @Override public CoreTool.EffectClass effectClass(Map<String,Object> args) {
+                return manager.treeSupport(bot)!=null ? CoreTool.EffectClass.WRITE : super.effectClass(args);
+            }
             @Override public CoreTool.ResponseCallPolicy responseCallPolicy(){return manager.treeSupport(bot)!=null?CoreTool.ResponseCallPolicy.EXCLUSIVE_YIELD:CoreTool.ResponseCallPolicy.MULTIPLE_PER_RESPONSE;}
             @Override public CoreToolResult execute(Map<String,Object> args,CancellationToken token,CoreTool.ProgressListener progress,EffectInvocation invocation){
                 CrewTreeSupport owner=manager.treeSupport(bot);if(owner==null)return execute(args,token);

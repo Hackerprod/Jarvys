@@ -86,7 +86,11 @@ public final class CrewMessage {
                 throw new IllegalArgumentException("Crew causal reference does not match message routing");
         }
         com.jarvys.agent.ConversationInput.Kind expectedInputKind = inputKindForCrewType(type);
-        if (inputProvenance != null && (!"chief".equals(from)
+        boolean treeInput=inputBinding!=null && (inputBinding.sourceKind==CrewInputBinding.SourceKind.TREE_TASK
+                || inputBinding.sourceKind==CrewInputBinding.SourceKind.TREE_REPORT || inputBinding.sourceKind==CrewInputBinding.SourceKind.TREE_ANSWER);
+        if(inputProvenance!=null && treeInput && !validTreeProvenance())
+            throw new IllegalArgumentException("Tree input provenance does not match exact routing");
+        if (inputProvenance != null && !treeInput && (!"chief".equals(from)
                 || !com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(conversationId)
                 || !com.jarvys.agent.workspaces.WorkspaceIdentity.workspaceId(conversationId).equals(inputProvenance.workspaceId)
                 || !inputProvenance.botId.equals(to) || inputProvenance.assignmentId.isEmpty()
@@ -96,6 +100,29 @@ public final class CrewMessage {
                 || inputProvenance.assignmentRevision < 1 || inputProvenance.requestId.isEmpty()
                 || inputProvenance.missionId.isEmpty() || !inputProvenance.messageId.equals(id)))
             throw new IllegalArgumentException("Supervisor input provenance does not match message routing");
+    }
+
+    /** Structural correspondence only. Registry/checkpoint/native token validators remain mandatory. */
+    private boolean validTreeProvenance() {
+        CrewInputBinding b=inputBinding;
+        com.jarvys.agent.ConversationInput.Provenance p=inputProvenance;
+        if(b==null || p==null || !(b.sourceKind==CrewInputBinding.SourceKind.TREE_TASK
+                || b.sourceKind==CrewInputBinding.SourceKind.TREE_REPORT || b.sourceKind==CrewInputBinding.SourceKind.TREE_ANSWER)) return false;
+        if(!b.matchesDelivery(this) || !com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(conversationId)
+                || !com.jarvys.agent.workspaces.WorkspaceIdentity.workspaceId(conversationId).equals(b.workspaceId)
+                || !com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION.equals(b.ownerCentralSessionId)
+                || !p.workspaceId.equals(b.workspaceId) || !p.sessionId.equals(conversationId)
+                || !p.messageId.equals(id) || !p.missionId.equals(b.missionId) || p.requestId.isEmpty()
+                || p.assignmentId.isEmpty() || p.kind!=inputKindForCrewType(type)) return false;
+        CrewCoordinationEvidence.requireCycleId(p.cycleId);
+        if(b.sourceKind==CrewInputBinding.SourceKind.TREE_TASK) return p.principalRole==com.jarvys.agent.ConversationInput.Provenance.PrincipalRole.PEER
+                && p.botId.equals(from) && p.assignmentId.equals(b.assignmentId) && p.assignmentRevision>0
+                && b.sourceId.equals(b.assignmentId) && b.sourcePayloadSha256.equals(CrewInputBinding.hashText("tree-task-provenance-v1",p.toJson().toString()));
+        if(!p.contentSha256.equals(b.sourcePayloadSha256) || p.correlationMessageId.isEmpty())return false;
+        if(b.sourceKind==CrewInputBinding.SourceKind.TREE_ANSWER) return p.principalRole==com.jarvys.agent.ConversationInput.Provenance.PrincipalRole.PEER
+                && p.botId.equals(to) && p.assignmentId.equals(b.assignmentId) && p.assignmentRevision>0;
+        return p.principalRole==com.jarvys.agent.ConversationInput.Provenance.PrincipalRole.SUBORDINATE
+                && p.assignmentRevision==0 && (p.botId.equals(from) || p.botId.isEmpty() && from.startsWith("registry:"));
     }
 
     private static com.jarvys.agent.ConversationInput.Kind inputKindForCrewType(Type type) {

@@ -12,7 +12,7 @@ import org.json.JSONObject;
 
 /** Immutable source description. It never grants permission or establishes source authenticity. */
 public final class CrewInputBinding {
-    public enum SourceKind { WORKSPACE_REPLY, NATIVE_CORRECT, CONTINUATION_ANSWER, TREE_REPORT, TREE_ANSWER }
+    public enum SourceKind { WORKSPACE_REPLY, NATIVE_CORRECT, CONTINUATION_ANSWER, TREE_REPORT, TREE_ANSWER, TREE_TASK }
     public final SourceKind sourceKind;
     public final String sourceId, ownerCentralSessionId, workspaceId, executionSessionId, assignmentId;
     public final String missionId, botId, mailboxMessageId, sourcePayloadSha256, deliverySha256, admissionCycleId;
@@ -37,7 +37,7 @@ public final class CrewInputBinding {
             String workspaceId, String executionSessionId, String assignmentId, String missionId,
             String botId, String mailboxMessageId, String sourcePayloadSha256, String admissionCycleId,
             String exactText) {
-        if (sourceKind == SourceKind.TREE_REPORT) throw new IllegalArgumentException("Tree reports require their exact subordinate sender");
+        if (sourceKind == SourceKind.TREE_REPORT || sourceKind == SourceKind.TREE_TASK) throw new IllegalArgumentException("Tree reports require their exact subordinate sender");
         if (exactText == null || exactText.trim().isEmpty()) throw new IllegalArgumentException("Input text is required");
         String from = sourceKind == SourceKind.NATIVE_CORRECT ? "user" : "chief";
         CrewMessage.Type type = sourceKind == SourceKind.NATIVE_CORRECT ? CrewMessage.Type.USER : CrewMessage.Type.ANSWER;
@@ -59,6 +59,15 @@ public final class CrewInputBinding {
                 deliverySha256(mailboxMessageId,executionSessionId,subordinateSender,botId,type,exactText,Collections.emptyList()),
                 admissionCycleId);
     }
+    /** Package-local native assignment projection; still data, never execution authority. */
+    static CrewInputBinding treeTask(String workspace, String session, String assignment, String mission,
+            String child, String messageId, String childCycle, String parent, String text,
+            com.jarvys.agent.ConversationInput.Provenance provenance) {
+        return new CrewInputBinding(SourceKind.TREE_TASK, assignment,
+                com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION, workspace, session,
+                assignment, mission, child, messageId, hashText("tree-task-provenance-v1", provenance.toJson().toString()),
+                deliverySha256(messageId,session,parent,child,CrewMessage.Type.TASK,text,Collections.emptyList()),childCycle);
+    }
     private static boolean reportRoute(String from, CrewMessage.Type type) {
         return from != null && !from.trim().isEmpty() && !"chief".equals(from) && !"user".equals(from)
                 && (type == CrewMessage.Type.RESULT || type == CrewMessage.Type.QUESTION);
@@ -68,6 +77,7 @@ public final class CrewInputBinding {
                 && executionSessionId.equals(message.conversationId) && botId.equals(message.to)
                 && message.activity == null && (sourceKind == SourceKind.NATIVE_CORRECT
                     ? message.type == CrewMessage.Type.USER && "user".equals(message.from)
+                    : sourceKind == SourceKind.TREE_TASK ? message.type == CrewMessage.Type.TASK && !"chief".equals(message.from) && !"user".equals(message.from) && !message.from.equals(message.to)
                     : sourceKind == SourceKind.TREE_REPORT ? reportRoute(message.from,message.type)
                     : message.type == CrewMessage.Type.ANSWER && "chief".equals(message.from));
     }

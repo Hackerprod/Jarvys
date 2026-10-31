@@ -108,7 +108,8 @@ class CentralRuntimeSourceIntegrationTest {
             val bridge = ChatDatabaseBridge.getInstance(context)
             val semanticBefore = bridge.personalAgentBrowse().filter { it.memoryKind != "episode" }.associateBy { it.id }
             val result = try {
-                runtime.runMainChat("Record a local fixture observation", emptyList(), emptyList(), CancellationToken.cancellable(), null)
+                runtime.runMainChat("Record a local fixture observation",
+                    store.loadConversationContext(WorkspaceIdentity.CENTRAL_SESSION), emptyList(), CancellationToken.cancellable(), null)
             } catch (failure: Throwable) {
                 // Diagnostic identities only; never substitute a payload or relax canonical source validation.
                 val visible = runCatching { store.loadConversationContext(WorkspaceIdentity.CENTRAL_SESSION).map { turn ->

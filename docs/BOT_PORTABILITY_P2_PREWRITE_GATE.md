@@ -1,4 +1,4 @@
-# Fresh reconstruction pre-write gate — integrated PASS, acceptance pending
+# Fresh reconstruction pre-write gate — additive TREE_TASK proof pending
 
 The exact seven classes in `BOT_PORTABILITY_P2_PREWRITE_CLASSES.json` are selected before execution, for both Full and Play on unchanged source. Fresh Full results are recorded below; matching Play is still pending. This is a focused compatibility gate, not the complete implementation acceptance suite or a recovery of prior test counts.
 
@@ -37,3 +37,10 @@ The integrated nine-class cohort executed 95 Full tests: 4 failures, 0 errors/sk
 On source commit `7f1db768f9620ee160f2bdeafdb90fccd8982fae`, the exact nine preregistered classes passed **Full99/0 and Play99/0**, no errors or skipped cases. Source bindings match across 1,978 app/testing files; canonical sorted JSON binding SHA-256: `71faa6e15782a6ef9d6ba18898d4e5d7e62ee49a40499423aedbe8b0772fa0b3`. The three added schema cases prove transaction-connection ownership, nested rollback conservation, and strict schema rejection. A separate two-class OFF diagnostic cohort passed **Full28/0 and Play28/0**; these are not counted as compatibility cases. Earlier failing results remain preserved.
 
 Local admission is now enabled solely for the authorized real native integration/acceptance candidate. This is not an independent implementation PASS or delivery approval. Final changed-source repetition of compatibility tests, all preregistered acceptance classes, and a fresh independent review remain mandatory. New app-open dispatch, uncertain replay, destructive migration and old-binary downgrade remain unsupported/forbidden as documented.
+
+
+## Additive typed TASK delta — admission returned OFF
+
+Focused native execution exposed that the older message DTO accepts only supervisor provenance, while genuine descendant assignments and typed tree report/answer inputs carry actual parent/child provenance. The bounded correction adds descriptive `TREE_TASK` to the existing binding codec and validates exact typed routes without granting execution authority. This is a new persisted codec case; local admission is OFF again until fresh matching Full/Play proof.
+
+The preregistered integrated gate now contains ten classes: the prior nine plus `com.jarvys.agent.crew.CrewTreeMessageRoutingTest` (six cases), expected **105 tests per flavor**. It covers ordinary legacy metadata, exact UTF-16 codec round-trip, route/payload/owner/role/cycle mutation, missing binding and INBOX-only incorporation alongside prior checkpoint/schema conservation. Old records retain their exact types and readers; no backfill, deletion, new database schema or legacy import. Old binaries cannot be claimed to understand the new enum value; downgrade remains unsupported.

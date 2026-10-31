@@ -43,7 +43,7 @@ internal class WorkspaceInputIncorporationDelivery(
                     referenceId = resolved.second
                     input // resolveBindingSource checks exact outbox/checkpoint source payload.
                 }
-                CrewInputBinding.SourceKind.TREE_REPORT, CrewInputBinding.SourceKind.TREE_ANSWER ->
+                CrewInputBinding.SourceKind.TREE_REPORT, CrewInputBinding.SourceKind.TREE_ANSWER, CrewInputBinding.SourceKind.TREE_TASK ->
                     error("Tree inputs require canonical Registry incorporation validation")
                 CrewInputBinding.SourceKind.NATIVE_CORRECT -> {
                     val control = requireNotNull(registry.getControl(input.sourceId))
@@ -104,7 +104,7 @@ internal class WorkspaceInputIncorporationDelivery(
                     WorkspaceTreeDelivery.reconcileCheckpoint(app,saved)
                     for (evidence in saved.loop.incorporations.values) {
                         val input = evidence.binding
-                        if(input.sourceKind in setOf(CrewInputBinding.SourceKind.TREE_REPORT,CrewInputBinding.SourceKind.TREE_ANSWER)) continue
+                        if(input.sourceKind in setOf(CrewInputBinding.SourceKind.TREE_REPORT,CrewInputBinding.SourceKind.TREE_ANSWER,CrewInputBinding.SourceKind.TREE_TASK)) continue
                         if (admittedInput != null && !input.samePayload(admittedInput)) continue
                         if (input.workspaceId != workspaceId || input.assignmentId != assignment.assignmentId) continue
                         check(input.executionSessionId == owner.executionSessionId && input.botId == assignment.botId &&
@@ -186,7 +186,7 @@ internal class WorkspaceInputIncorporationDelivery(
             CrewInputBinding.SourceKind.WORKSPACE_REPLY -> WorkspaceInputIncorporation.SourceKind.REPLY
             CrewInputBinding.SourceKind.NATIVE_CORRECT -> WorkspaceInputIncorporation.SourceKind.NATIVE_CORRECT
             CrewInputBinding.SourceKind.CONTINUATION_ANSWER -> WorkspaceInputIncorporation.SourceKind.CONTINUATION_ANSWER
-            CrewInputBinding.SourceKind.TREE_REPORT, CrewInputBinding.SourceKind.TREE_ANSWER -> error("Tree inputs use canonical Registry receipts")
+            CrewInputBinding.SourceKind.TREE_REPORT, CrewInputBinding.SourceKind.TREE_ANSWER, CrewInputBinding.SourceKind.TREE_TASK -> error("Tree inputs use canonical Registry receipts")
         }
     }
 }

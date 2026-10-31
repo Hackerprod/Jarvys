@@ -102,6 +102,15 @@ class WorkspaceTreeNativeRuntimeTest {
             if(task(history).contains("CHILD_PLAN")) {
                 childCalls.incrementAndGet()
                 if(consult) {
+                    val actual=liveManager.bots().single { it.role.missionAccess==CrewMissionAccess.READ_ONLY }
+                    val permitted=CrewTools.bot(actual,liveManager,null)
+                    assertFalse(actual.role.tools.contains("delegate_subtask"))
+                    assertFalse(CrewMissionAccess.READ_ONLY.permits("board_post"))
+                    for(tool in permitted.filter { it.declaration().name in setOf("ask_chief","report_done") }) {
+                        assertEquals(CoreTool.AccessClassification.READ,tool.accessClassification())
+                        assertEquals(CoreTool.EffectClass.WRITE,tool.effectClass(emptyMap()))
+                    }
+
                     val names=tools.map { it.name };assertFalse(names.contains("delegate_subtask"));assertFalse(names.contains("board_post"))
                     assertFalse(names.contains("crew_spawn"));assertFalse(names.contains("workspaces"))
                 }
@@ -307,6 +316,15 @@ class WorkspaceTreeNativeRuntimeTest {
         }) { _,_,_ -> calls.incrementAndGet();call("formal-question","ask_chief",mapOf("question" to "Which travel dates?")) }
         await(fixture.bot)
         assertEquals(fixture.bot.error(),CrewManager.Status.PARTIAL,fixture.bot.status());assertEquals(1,calls.get())
+        val nativeTools=CrewTools.bot(fixture.bot,fixture.manager,null).associateBy { it.declaration().name }
+        for(name in listOf("ask_chief","report_done")) {
+            assertEquals(CoreTool.EffectClass.WRITE,nativeTools.getValue(name).effectClass(emptyMap()))
+            // Coordination journaling does not grant general write access to consult workers.
+            assertEquals(CoreTool.AccessClassification.READ,nativeTools.getValue(name).accessClassification())
+            assertTrue(CrewMissionAccess.READ_ONLY.permits(name))
+        }
+        assertEquals(CoreTool.EffectClass.READ,nativeTools.getValue("msg_send").effectClass(mapOf("type" to "QUESTION")))
+        assertEquals(CoreTool.EffectClass.WRITE,nativeTools.getValue("msg_send").effectClass(mapOf("type" to "ANSWER")))
         assertNull(fixture.bot.resultEvidence());assertTrue(fixture.bot.requiresExplicitResume());assertEquals(1,prepublication.get())
         storage.onDatabaseWorker {
             WorkspaceRegistry(app).use { db ->

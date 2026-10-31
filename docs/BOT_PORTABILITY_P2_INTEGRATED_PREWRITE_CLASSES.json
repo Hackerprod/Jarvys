@@ -7,5 +7,6 @@
   "com.jarvys.agent.CrewCoordinationCheckpointTest",
   "com.jarvys.agent.ContinuationGenerationReceiptTest",
   "com.jarvys.agent.CrewTreeInputCodecTest",
-  "com.jarvys.agent.CrewTreeWaitCheckpointTest"
+  "com.jarvys.agent.CrewTreeWaitCheckpointTest",
+  "com.jarvys.agent.crew.CrewTreeMessageRoutingTest"
 ]

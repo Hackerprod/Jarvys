@@ -448,7 +448,12 @@ class AgentMessagingPipelineTest {
         })
         val manager = worker.manager
         manager.configureConversationMessageListener { _, message -> centralRoute += message }
-        val sender = manager.spawn("custom", "Inspect the source", emptyList(), "Sender")
+        // The recipient fixture already saved this real general-purpose profile before manager setup.
+        // Reuse its exact canonical identity, still with an empty tool selection for this peer sender.
+        val sender = manager.spawn(worker.bot.role.id, "Inspect the source", emptyList(), "Sender")
+        assertEquals(worker.bot.role.id, sender.role.id)
+        assertTrue(sender.role.profileVersion > 0)
+        assertTrue(sender.role.tools.isEmpty())
         val recipient = worker.bot
         assertTrue(workersEnteredModel.await(10, TimeUnit.SECONDS))
 

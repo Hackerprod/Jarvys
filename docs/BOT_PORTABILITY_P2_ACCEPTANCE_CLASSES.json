@@ -114,5 +114,6 @@
   "com.jarvys.agent.workspaces.WorkspaceResultNoticeComposeTest",
   "com.jarvys.agent.workspaces.WorkspaceTreeEvidenceStoreTest",
   "com.jarvys.agent.workspaces.WorkspaceTreeSchemaCompatibilityTest",
-  "com.jarvys.agent.workspaces.WorkspaceTreeStoreTest"
+  "com.jarvys.agent.workspaces.WorkspaceTreeStoreTest",
+  "com.jarvys.agent.crew.CrewTreeMessageRoutingTest"
 ]

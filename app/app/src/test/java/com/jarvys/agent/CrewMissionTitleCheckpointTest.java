@@ -50,6 +50,7 @@ public class CrewMissionTitleCheckpointTest {
             assertEquals(1, modelCalls.get());
         }
         CrewCheckpointStore.Snapshot checkpoint = new CrewCheckpointStore(context.getFilesDir()).load(session, botId);
+        assertEquals("read_only", checkpoint.metadata.getString("missionAccess"));
         JSONObject presentation = checkpoint.metadata.getJSONObject("missionPresentation");
         assertEquals(original, presentation.getString("originalInstructions"));
         assertEquals("Revisar condiciones del proyecto", presentation.getString("title"));
@@ -62,7 +63,9 @@ public class CrewMissionTitleCheckpointTest {
             assertEquals(CrewMissionTitle.AGENT, snapshot.titleSource);
             assertEquals(original, snapshot.originalInstructions);
             assertEquals(worker, snapshot.bots.get(0).mission);
-            assertEquals(CrewMissionAccess.READ_ONLY, restored.bot(botId).role.missionAccess);
+            assertTrue("Current checkpoint rejected: " + restored.bot(botId).recoveryNote(),
+                    restored.bot(botId).hasDurableCheckpoint());
+            assertEquals(restored.bot(botId).recoveryNote(), CrewMissionAccess.READ_ONLY, restored.bot(botId).role.missionAccess);
             assertTrue(restored.bot(botId).requiresExplicitResume());
             assertEquals(1, modelCalls.get());
         }

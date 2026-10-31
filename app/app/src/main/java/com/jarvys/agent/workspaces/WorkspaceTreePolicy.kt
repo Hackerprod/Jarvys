@@ -7,7 +7,7 @@ internal object WorkspaceTreePolicy {
     const val MAX_REQUESTS=64L
     const val MAX_EXECUTIONS=96L
     const val MAX_WAKES=48L
-    // Local reconstruction candidate: design PASS + matching Full/Play pre-write99 passed.
-    // Delivery still requires full final-source acceptance and independent implementation PASS.
-    @JvmStatic fun admissionEnabled():Boolean=true
+    // Existing pre-write99 passed. Admission OFF again pending additive TREE_TASK codec proof.
+    // Final-source acceptance and independent implementation PASS remain mandatory.
+    @JvmStatic fun admissionEnabled():Boolean=false
 }

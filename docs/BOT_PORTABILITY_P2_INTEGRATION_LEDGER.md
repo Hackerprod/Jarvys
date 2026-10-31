@@ -1,4 +1,4 @@
-# Fresh P2 integration ledger — local candidate enabled, acceptance pending
+# Fresh P2 integration ledger — additive codec gate OFF, acceptance pending
 
 This is newly reconstructed source, not the unavailable former P2 candidate. The verified v98 delivery baseline is unchanged. Baseline pre-write proof passed Full81/Play81 on identical bytes; integrated typed checkpoint extension and complete native acceptance are still pending.
 
@@ -63,3 +63,14 @@ Remaining native question/wait and canonical-source mismatches are still unresol
 
 
 Full export 3 compiled production but failed test compilation on two offline fixture providers missing the abstract conversation overload. Added the throwing offline overload; no production workaround. The remaining main-chat fixture mapping keeps all 51 cases, repairs canonical Central/context-bound setup, and explicitly replaces three unsupported multiple-chat/Central-deletion expectations with current boundary rejection and conservation assertions. Current ledger/effect tests now use real native memory-session/source binding and current-generation paths, not invented USER witnesses; strict SQLite constraint classification and row conservation remain required. These integrations are pending fresh validation.
+
+
+## Actual worker routing/effect defects and pre-write hold
+
+The focused third diagnostic executed 113 cases with 23 failures; a separate changed-fixture cohort executed 141 with four failures. Exact native control integration, denial-only PAUSE evidence, retained P1 recovery/STOP, ledger/effect/memory continuity and current menu checks passed in their respective runs; neither cohort is full acceptance.
+
+Controlled tool outcomes isolated two production defects: enrolled durable question/report/answer coordination invoked effect admission while declared READ, and descendant TASK/report/answer provenance was rejected by a supervisor-only DTO validator. Positively enrolled operations now declare WRITE effect metadata while retaining existing READ access classification and explicit consult coordination allowlist; this does not grant general external mutations. Ordinary unenrolled metadata and generic READ-write denial stay unchanged.
+
+Typed routes retain actual PEER parent/answer and SUBORDINATE report provenance, not Chief or USER authority. New TREE_TASK binding hashes full parent provenance plus exact delivery and child cycle, created only in the native enrolled-parent assignment path. It is descriptive data; current token/Registry reservation, canonical producer/checkpoint validation and bind-before-executor still authorize execution. P1 continuation ACK logic does not reinterpret it. Six new codec/metadata cases and actual question/consult assertions require fresh pre-write proof; policy is OFF pending matching Full/Play105. Full acceptance cohort is now117 classes.
+
+Additional exact diagnostics showed one Central source fixture omitted its persisted USER history, and Activity startup refreshed stale/absent model-catalog caches. Fixtures now supply the real canonical history and seed valid fresh catalog entries with the existing codec; the global offline guard is unchanged. One current title-recovery fallback remains under diagnostic investigation, not declared fixed.
