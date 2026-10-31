@@ -72,6 +72,7 @@ import kotlin.coroutines.ContinuationInterceptor
         CrewMessage::class,
         CrewMessageActivity::class,
         CrewMessageInputBinding::class,
+        CrewMessageInputProvenance::class,
         CrewMessageRef::class,
         CrewResultEvidence::class,
         WorkspaceResultRef::class,
@@ -114,7 +115,7 @@ import kotlin.coroutines.ContinuationInterceptor
         CodingJobSemanticLinkRow::class,
         CodingCancelRequestRow::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 internal abstract class JarvysChatDatabase : RoomDatabase() {
@@ -162,6 +163,7 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
             "crew_messages",
             "crew_message_activities",
             "crew_message_input_bindings",
+            "crew_message_input_provenance",
             "crew_message_refs",
             "crew_result_evidence",
             "workspace_result_refs",
@@ -205,7 +207,7 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
 
 /** One lazy app-process database instance per current-generation agent.db path. */
 internal object JarvysChatDatabaseProvider {
-    private const val DATABASE_VERSION = 1
+    private const val DATABASE_VERSION = 2
     private const val DATABASE_NAME = "agent.db"
     private const val BUSY_TIMEOUT_MILLIS = 5_000
     private const val WAL_AUTOCHECKPOINT_PAGES = 1_000
@@ -622,7 +624,8 @@ internal object JarvysChatDatabaseProvider {
             // committed reads use the bounded read-only pool and never share a writer lease.
             .setQueryExecutor(executors[1])
             .setTransactionExecutor(executors[1])
-            // Fresh-only schema: no imports, historical migration chain or destructive fallback.
+            // Only the reviewed current-v1 additive migration; never imports/destructive fallback.
+            .addMigrations(RoomTreeProvenanceMigration)
             .addCallback(connectionPragmasCallback(context.applicationContext, reportFailures))
             .build()
     }
@@ -672,8 +675,8 @@ internal object JarvysChatDatabaseProvider {
         } catch (error: Throwable) {
             throw IllegalStateException("Could not inspect chat database schema version at ${databaseFile.absolutePath}", error)
         }
-        if (foundVersion != DATABASE_VERSION) {
-            throw com.jarvys.agent.CleanInstallRequiredException()
+        if (foundVersion != 1 && foundVersion != DATABASE_VERSION) {
+            throw RoomCurrentSchemaUnavailable("Unsupported current database version; data preserved")
         }
     }
 
@@ -694,13 +697,7 @@ internal object JarvysChatDatabaseProvider {
     private fun requireFreshIdentity(file: File, expected: String) {
         if (!file.exists() || file.length() == 0L) return
         openReadOnlyConnection(file).use { db ->
-            val hasMaster = DriverChatSqlDatabase(db).query(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='room_master_table'",
-            ).use { it.moveToFirst() }
-            if (!hasMaster) throw com.jarvys.agent.CleanInstallRequiredException()
-            val identity = DriverChatSqlDatabase(db).query("SELECT identity_hash FROM room_master_table WHERE id=42")
-                .use { if (it.moveToFirst()) it.getString(0) else null }
-            if (identity != expected) throw com.jarvys.agent.CleanInstallRequiredException()
+            RoomTreeProvenanceSchema.validate(db, expected, RoomTreeProvenanceSchema.UPGRADE_ENABLED)
         }
     }
 

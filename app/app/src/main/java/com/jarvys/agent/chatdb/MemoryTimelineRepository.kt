@@ -589,6 +589,39 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
                     .put("auditDetail", a.getString(a.getColumnIndexOrThrow("audit_detail"))).put("reflectionSource", a.getString(a.getColumnIndexOrThrow("reflection_source")))
                     .put("timestampMillis", a.getLong(a.getColumnIndexOrThrow("timestamp_millis")))
         }
+        val provenance = mutableMapOf<Pair<String,String>,JSONObject>()
+        sql.query("SELECT * FROM crew_message_input_provenance WHERE conversation_id=?$missionClause", missionArgs).use { c ->
+            while (c.moveToNext()) {
+                fun exactText(column:String):String {
+                    val index=c.getColumnIndexOrThrow(column)
+                    check(c.getType(index)==android.database.Cursor.FIELD_TYPE_BLOB) { "Invalid stored Crew provenance blob: $column" }
+                    return ExactUtf16.decode(c.getBlob(index))
+                }
+                fun scalarText(column:String):String {
+                    val index=c.getColumnIndexOrThrow(column)
+                    check(c.getType(index)==android.database.Cursor.FIELD_TYPE_STRING) { "Invalid stored Crew provenance enum: $column" }
+                    return c.getString(index)
+                }
+                val revision=c.getColumnIndexOrThrow("assignment_revision")
+                check(c.getType(revision)==android.database.Cursor.FIELD_TYPE_INTEGER) { "Invalid stored Crew provenance revision" }
+                val value=JSONObject()
+                    .put("sessionId",exactText("source_session_id"))
+                    .put("workspaceId",exactText("workspace_id"))
+                    .put("assignmentId",exactText("assignment_id"))
+                    .put("botId",exactText("bot_id"))
+                    .put("messageId",exactText("source_message_id"))
+                    .put("correlationMessageId",exactText("correlation_message_id"))
+                    .put("referenceId",exactText("reference_id"))
+                    .put("contentSha256",exactText("content_sha256"))
+                    .put("requestId",exactText("request_id"))
+                    .put("missionId",exactText("input_mission_id"))
+                    .put("cycleId",exactText("cycle_id"))
+                    .put("kind",scalarText("kind")).put("principalRole",scalarText("principal_role"))
+                    .put("assignmentRevision",c.getLong(revision))
+                val key=scalarText("mission_id") to scalarText("message_id")
+                check(provenance.put(key,value)==null) { "Duplicate stored Crew provenance" }
+            }
+        }
         val messages = mutableMapOf<String, MutableList<CrewMessage>>()
         sql.query("SELECT * FROM crew_messages WHERE conversation_id=?$missionClause ORDER BY mission_id,ordinal", missionArgs).use { c ->
             while (c.moveToNext()) {
@@ -601,6 +634,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
                     .put("timestampMillis", c.getLong(c.getColumnIndexOrThrow("timestamp_ms"))).put("refs", refs[missionId to id] ?: JSONArray())
                 coordination[missionId to id]?.let { json.put("coordination", it) }
                 bindings[missionId to id]?.let { json.put("inputBinding", it) }
+                provenance[missionId to id]?.let { json.put("inputProvenance", it) }
                 activities[missionId to id]?.let { json.put("origin", "local_activity").put("activity", it) }
                 messages.getOrPut(missionId) { mutableListOf() }.add(CrewMessage.fromJson(json))
             }
@@ -623,6 +657,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
             }
         }
         snapshot.messages.forEachIndexed { ordinal, message ->
+            message.requireTypedInputProvenance()
             val coordination = message.coordination
             sql.execSQL("INSERT INTO crew_messages(conversation_id,mission_id,ordinal,message_id,from_bot,to_bot,type,text,timestamp_ms,origin,coordination_evidence_id,reference_message_id,evidence_content_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 arrayOf(conversationId, snapshot.missionId, ordinal, message.id, message.from, message.to, message.type.name,
@@ -631,6 +666,13 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
             message.refs.forEachIndexed { refOrdinal, ref ->
                 sql.execSQL("INSERT INTO crew_message_refs(conversation_id,mission_id,message_id,ordinal,ref) VALUES(?,?,?,?,?)",
                     arrayOf(conversationId, snapshot.missionId, message.id, refOrdinal, ref))
+            }
+            message.inputProvenance?.let { p ->
+                sql.execSQL("INSERT INTO crew_message_input_provenance(conversation_id,mission_id,message_id,source_session_id,workspace_id,assignment_id,bot_id,source_message_id,kind,principal_role,correlation_message_id,reference_id,content_sha256,assignment_revision,request_id,input_mission_id,cycle_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    arrayOf(conversationId,snapshot.missionId,message.id,ExactUtf16.encode(p.sessionId),ExactUtf16.encode(p.workspaceId),
+                        ExactUtf16.encode(p.assignmentId),ExactUtf16.encode(p.botId),ExactUtf16.encode(p.messageId),p.kind.name,p.principalRole.name,
+                        ExactUtf16.encode(p.correlationMessageId),ExactUtf16.encode(p.referenceId),ExactUtf16.encode(p.contentSha256),p.assignmentRevision,
+                        ExactUtf16.encode(p.requestId),ExactUtf16.encode(p.missionId),ExactUtf16.encode(p.cycleId)))
             }
             message.inputBinding?.let { binding ->
                 sql.execSQL("INSERT INTO crew_message_input_bindings(conversation_id,mission_id,message_id,schema_version,source_kind,source_id,owner_central_session_id,workspace_id,execution_session_id,assignment_id,input_mission_id,bot_id,mailbox_message_id,source_payload_sha256,delivery_sha256,admission_cycle_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",

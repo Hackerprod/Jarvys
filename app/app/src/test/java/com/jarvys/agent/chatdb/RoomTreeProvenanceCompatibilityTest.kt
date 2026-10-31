@@ -1,0 +1,247 @@
+package com.jarvys.agent.chatdb
+
+import android.app.Application
+import androidx.room.Room
+import androidx.room.useWriterConnection
+import androidx.sqlite.SQLiteConnection
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import androidx.sqlite.driver.bundled.SQLITE_OPEN_READONLY
+import androidx.sqlite.execSQL
+import com.jarvys.agent.ArtifactOsShadow
+import com.jarvys.agent.ChatTestStore
+import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+import java.io.File
+
+/** New current-data migration proof. Does not enroll old data or restore legacy storage. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk=[34],application=Application::class,shadows=[ArtifactOsShadow::class])
+class RoomTreeProvenanceCompatibilityTest {
+    @get:Rule val chat = ChatTestStore(registerApplicationFilesDirectory=true)
+    private val context get()=RuntimeEnvironment.getApplication()
+    private val fixture get()=JSONObject(javaClass.getResourceAsStream("/room_v98_v1.json")!!.bufferedReader().use { it.readText() }).getJSONObject("database")
+    private val v2Identity get()=JarvysChatDatabase_Impl().expectedFreshIdentity()
+    private fun file(name:String)=File(chat.newFilesDirectory(name),"current.db")
+    private fun open(file:File)=BundledSQLiteDriver().open(file.absolutePath)
+    private fun raw(connection:SQLiteConnection)=DriverChatSqlDatabase(connection)
+    private fun scalar(connection:SQLiteConnection,sql:String):Long=raw(connection).query(sql).use { assertTrue(it.moveToFirst());it.getLong(0) }
+    private fun createV1(file:File,populate:Boolean=true) {
+        open(file).use { db ->
+            val f=fixture;val entities=f.getJSONArray("entities")
+            db.execSQL("PRAGMA foreign_keys=OFF")
+            db.execSQL("BEGIN IMMEDIATE")
+            try {
+                for(i in 0 until entities.length()) {
+                    val e=entities.getJSONObject(i);val name=e.getString("tableName")
+                    db.execSQL(e.getString("createSql").replace("\${TABLE_NAME}",name))
+                    val indexes=e.optJSONArray("indices")
+                    if(indexes!=null)for(k in 0 until indexes.length())db.execSQL(indexes.getJSONObject(k).getString("createSql").replace("\${TABLE_NAME}",name))
+                }
+                if(populate)for(i in 0 until entities.length()) {
+                    val e=entities.getJSONObject(i);val fields=e.getJSONArray("fields")
+                    val names=(0 until fields.length()).map { fields.getJSONObject(it).getString("columnName") }
+                    val values=(0 until fields.length()).map { n ->
+                        val field=fields.getJSONObject(n)
+                        // One row in every v98 entity; legal storage classes and opaque retained values.
+                        when(field.getString("affinity")) {
+                            "INTEGER" -> 1L
+                            "REAL" -> 1.25
+                            "BLOB" -> byteArrayOf(0,0,0,(-40).toByte(),65,0)
+                            else -> "row"
+                        }
+                    }.toTypedArray()
+                    raw(db).execSQL("INSERT INTO `"+e.getString("tableName")+"` ("+names.joinToString(",") { "`$it`" }+") VALUES ("+names.joinToString(",") { "?" }+")",values)
+                }
+                val setup=f.getJSONArray("setupQueries")
+                for(i in 0 until setup.length())db.execSQL(setup.getString(i))
+                db.execSQL("PRAGMA user_version=1")
+                db.execSQL("COMMIT")
+            }catch(failure:Throwable){runCatching { db.execSQL("ROLLBACK") }.exceptionOrNull()?.let(failure::addSuppressed);throw failure}
+        }
+    }
+    private fun rows(db:SQLiteConnection):Map<String,List<List<String>>> {
+        val entities=fixture.getJSONArray("entities")
+        return (0 until entities.length()).associate { index ->
+            val e=entities.getJSONObject(index);val table=e.getString("tableName");val fields=e.getJSONArray("fields")
+            val names=(0 until fields.length()).map { fields.getJSONObject(it).getString("columnName") }
+            table to raw(db).query("SELECT "+names.joinToString(",") { "typeof(`$it`),hex(`$it`)" }+" FROM `$table`").use { c ->
+                buildList { while(c.moveToNext())add((0 until c.columnCount).map { c.getString(it) }) }.sortedBy { it.joinToString("|") }
+            }
+        }
+    }
+    private fun upgrade(connection:SQLiteConnection,failAfterDdl:Boolean=false) {
+        connection.execSQL("BEGIN IMMEDIATE")
+        try {
+            RoomTreeProvenanceMigration.migrate(connection)
+            if(failAfterDdl)error("injected interruption after additive DDL")
+            raw(connection).execSQL("UPDATE room_master_table SET identity_hash=? WHERE id=42",arrayOf(v2Identity))
+            connection.execSQL("PRAGMA user_version=2")
+            connection.execSQL("COMMIT")
+        }catch(failure:Throwable){runCatching { connection.execSQL("ROLLBACK") }.exceptionOrNull()?.let(failure::addSuppressed);throw failure}
+    }
+    @Test fun pinnedV1AllRowsConservedAcrossAtomicUpgradeAndRepeatedReopen() {
+        val file=file("room-v1-populated");createV1(file)
+        val before=open(file).use { db ->
+            assertEquals(RoomTreeProvenanceSchema.V1_IDENTITY,fixture.getString("identityHash"))
+            assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true));rows(db)
+        }
+        open(file).use { db ->upgrade(db);assertEquals(before,rows(db));assertEquals(0L,scalar(db,"SELECT COUNT(*) FROM crew_message_input_provenance")) }
+        repeat(2) { open(file).use { db ->assertEquals(2,RoomTreeProvenanceSchema.validate(db,v2Identity,false));assertEquals(before,rows(db)) } }
+    }
+    @Test fun interruptionRollsBackDdlIdentityVersionAndEveryOldRow() {
+        val file=file("room-v1-interrupt");createV1(file)
+        val before=open(file).use(::rows)
+        open(file).use { db ->assertThrows(IllegalStateException::class.java){upgrade(db,true)};assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true));assertEquals(before,rows(db)) }
+        open(file).use { db ->assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true));upgrade(db);assertEquals(before,rows(db)) }
+    }
+    @Test fun nativeSqliteFullCannotPublishPartialSchemaAndCanRetryAfterCapacityRestored() {
+        val file=file("room-v1-full");createV1(file)
+        val before=open(file).use(::rows)
+        open(file).use { db ->
+            val pages=scalar(db,"PRAGMA page_count")
+            assertEquals(pages,scalar(db,"PRAGMA max_page_count=$pages"))
+            val failure=runCatching { upgrade(db) }.exceptionOrNull()
+            val chain=generateSequence(failure) { it.cause }.toList()
+            assertTrue("Expected native SQLITE_FULL, got " + chain.map { it.javaClass.name+":"+it.message },
+                chain.any { it is android.database.SQLException && Regex("Error code: 13(?:, message: [\\s\\S]*)?").matches(it.message.orEmpty()) })
+            assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true))
+            assertEquals(before,rows(db))
+            assertTrue(scalar(db,"PRAGMA max_page_count="+(pages+100))>pages)
+            upgrade(db)
+            assertEquals(before,rows(db))
+        }
+        open(file).use { assertEquals(2,RoomTreeProvenanceSchema.validate(it,v2Identity,false)) }
+    }
+    @Test fun nativeV98AuxiliaryObjectsAndDataAreConservedWithoutRebuild() {
+        val file=file("room-v1-native-auxiliary");createV1(file,false)
+        open(file).use { db ->
+            DatabaseTriggers.create(db,context,false)
+            assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true))
+            fun objects()=raw(db).query("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name<>'room_master_table' ORDER BY type,name").use { c ->
+                buildList { while(c.moveToNext())add(listOf(c.getString(0),c.getString(1),c.getString(2))) }
+            }
+            fun allRows():Map<String,List<List<String>>> {
+                val names=raw(db).query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'room_master_table'").use { c ->
+                    buildList { while(c.moveToNext())add(c.getString(0)) }
+                }
+                return names.associateWith { table ->
+                    val columns=raw(db).query("PRAGMA table_info(`$table`)").use { c ->buildList { while(c.moveToNext())add(c.getString(1)) } }
+                    raw(db).query("SELECT "+columns.joinToString(",") { "typeof(`$it`),hex(`$it`)" }+" FROM `$table`").use { c ->
+                        buildList { while(c.moveToNext())add((0 until c.columnCount).map { c.getString(it) }) }.sortedBy { it.joinToString("|") }
+                    }
+                }
+            }
+            val beforeObjects=objects();val beforeRows=allRows()
+            assertTrue(beforeObjects.any { it[1]=="idx_memory_entries_topic_active" })
+            upgrade(db)
+            assertEquals(2,RoomTreeProvenanceSchema.validate(db,v2Identity,false))
+            assertEquals(beforeObjects,objects().filter { it[1]!="crew_message_input_provenance" })
+            assertEquals(beforeRows,allRows().filterKeys { it!="crew_message_input_provenance" })
+        }
+    }
+    @Test fun gateOffProviderRejectsV1WithoutChangingAnyFile() {
+        assertFalse(RoomTreeProvenanceSchema.UPGRADE_ENABLED)
+        val file=file("room-v1-gated");createV1(file)
+        val bytes=file.readBytes();val members=file.parentFile!!.listFiles()!!.map { it.name }.sorted()
+        val failure=assertThrows(RoomCurrentSchemaUnavailable::class.java) { JarvysChatDatabaseProvider.openDatabaseFileForTests(context,file) }
+        assertTrue(failure.message!!.contains("data preserved"));assertArrayEquals(bytes,file.readBytes())
+        assertEquals(members,file.parentFile!!.listFiles()!!.map { it.name }.sorted())
+    }
+    @Test fun realRoomMigrationAndFreshSchemaHaveSameExactV2IdentityAndDdl() {
+        val migrated=file("room-v1-real-room");createV1(migrated,false)
+        val owner="00000000-0000-0000-0000-000000000001"
+        val session=com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+        val before=open(migrated).use { connection ->
+            DatabaseTriggers.create(connection,context,false)
+            connection.execSQL("PRAGMA foreign_keys=ON")
+            val sql=raw(connection)
+            sql.execSQL("INSERT INTO conversations(id,kind,pinned,archived,created_at,updated_at,last_message_at,message_count,next_seq,history_revision) VALUES(?,'chat',0,0,1000,1000,1000,1,2,1)",arrayOf(session))
+            sql.execSQL("INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,turn_anchor_seq,created_at) VALUES(?,1,'message',?,1,0,1,1.25)",arrayOf(session,owner))
+            sql.execSQL("INSERT INTO messages(conversation_id,message_id,stable_id,seq,message_index,role,ack_required,created_at,updated_at) VALUES(?,?,?,1,1,'user',0,1.25,1.25)",arrayOf(session,owner,owner))
+            sql.execSQL("INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,0,'text',?)",arrayOf(session,owner,"Retained real USER text \u0000 Ω"))
+            assertFalse(sql.query("PRAGMA foreign_key_check").use { it.moveToFirst() })
+            rows(connection)
+        }
+        val room=Room.databaseBuilder(context,JarvysChatDatabase::class.java,migrated.absolutePath)
+            .setDriver(BundledSQLiteDriver()).addMigrations(RoomTreeProvenanceMigration).build()
+        try {
+            runBlocking { room.useWriterConnection { } }
+            val retained=runBlocking { room.messageDao().getById(session,owner) }
+            assertNotNull(retained);assertEquals("user",retained!!.role);assertEquals(owner,retained.stable_id)
+        } finally { room.close() }
+        open(migrated).use { connection ->
+            assertEquals(before,rows(connection))
+            assertFalse(raw(connection).query("PRAGMA foreign_key_check").use { it.moveToFirst() })
+            assertEquals(0L,scalar(connection,"SELECT COUNT(*) FROM crew_message_input_provenance"))
+        }
+        val fresh=file("room-v2-fresh")
+        val db=JarvysChatDatabaseProvider.openDatabaseFileForTests(context,fresh)
+        JarvysChatDatabaseProvider.closeDatabaseFileForTests(db)
+        for(file in listOf(migrated,fresh))open(file).use { assertEquals(2,RoomTreeProvenanceSchema.validate(it,v2Identity,false)) }
+        val reopened=JarvysChatDatabaseProvider.openDatabaseFileForTests(context,migrated)
+        JarvysChatDatabaseProvider.closeDatabaseFileForTests(reopened)
+    }
+    @Test fun newerUnknownPartialAndSpoofedIdentityNeverReceiveMigrationWrites() {
+        val mutations=listOf<(SQLiteConnection)->Unit>(
+            {it.execSQL("PRAGMA user_version=3")},
+            {it.execSQL("PRAGMA user_version=0")},
+            {it.execSQL("UPDATE room_master_table SET identity_hash='wrong' WHERE id=42")},
+            {it.execSQL(RoomTreeProvenanceSchema.CREATE_SQL)},
+            {it.execSQL("ALTER TABLE crew_messages ADD COLUMN unexpected TEXT")},
+            {it.execSQL("DROP INDEX idx_crew_messages_id")},
+            {it.execSQL("CREATE TABLE unknown_side_record(id TEXT)")}
+        )
+        mutations.forEachIndexed { index,mutate ->
+            val file=file("room-v1-invalid-$index");createV1(file,false);open(file).use(mutate)
+            val before=file.readBytes()
+            BundledSQLiteDriver().open(file.absolutePath,SQLITE_OPEN_READONLY).use { db ->
+                assertThrows(RoomCurrentSchemaUnavailable::class.java){RoomTreeProvenanceSchema.validate(db,v2Identity,true)}
+            }
+            assertArrayEquals(before,file.readBytes())
+            open(file).use { db ->assertThrows(RoomCurrentSchemaUnavailable::class.java){upgrade(db)} }
+            assertArrayEquals(before,file.readBytes())
+        }
+    }
+    @Test fun unknownAndChangedNativeTriggersCannotMutateOldRowsDuringMigration() {
+        val mutations=listOf<(SQLiteConnection)->Unit>(
+            { it.execSQL("CREATE TRIGGER rogue_identity_update AFTER UPDATE ON room_master_table BEGIN DELETE FROM storage_meta; END") },
+            { it.execSQL("CREATE VIEW rogue_view AS SELECT * FROM storage_meta") },
+            { it.execSQL("DROP TRIGGER trg_tombstones_no_update");it.execSQL("CREATE TRIGGER trg_tombstones_no_update BEFORE UPDATE ON tombstones BEGIN SELECT 1; END") },
+            { it.execSQL("DROP TRIGGER trg_memory_prompts_fts_insert");it.execSQL("CREATE TRIGGER trg_memory_prompts_fts_insert AFTER INSERT ON memory_prompts BEGIN SELECT 1; END") }
+        )
+        mutations.forEachIndexed { index,mutate ->
+            val file=file("room-v1-trigger-$index");createV1(file,false)
+            open(file).use { db ->DatabaseTriggers.create(db,context,false);raw(db).execSQL("INSERT INTO storage_meta(key,value) VALUES('retained','unchanged')");mutate(db) }
+            val before=file.readBytes()
+            open(file).use { db ->
+                assertThrows(RoomCurrentSchemaUnavailable::class.java){upgrade(db)}
+                assertEquals(1L,scalar(db,"SELECT COUNT(*) FROM storage_meta WHERE key='retained' AND value='unchanged'"))
+            }
+            assertArrayEquals(before,file.readBytes())
+        }
+    }
+    @Test fun provenanceForeignKeyRejectsOrphansAndCascadesOnlyWithActualParent() {
+        val file=file("room-v1-fk");createV1(file);open(file).use { db ->
+            upgrade(db);db.execSQL("PRAGMA foreign_keys=ON")
+            val columns=listOf("conversation_id","mission_id","message_id","source_session_id","workspace_id","assignment_id","bot_id","source_message_id","kind","principal_role","correlation_message_id","reference_id","content_sha256","assignment_revision","request_id","input_mission_id","cycle_id")
+            val bytes=ExactUtf16.encode("retained\u0000\ud800")
+            val values=arrayOf<Any?>("row","row","row",bytes,bytes,bytes,bytes,bytes,"MESSAGE","PEER",bytes,bytes,bytes,1L,bytes,bytes,bytes)
+            val insert="INSERT INTO crew_message_input_provenance("+columns.joinToString(",")+") VALUES("+columns.joinToString(","){"?"}+")"
+            raw(db).execSQL(insert,values)
+            assertEquals(1L,scalar(db,"SELECT COUNT(*) FROM crew_message_input_provenance"))
+            val invalid=values.copyOf();invalid[2]="missing"
+            val failure=runCatching {raw(db).execSQL(insert,invalid)}.exceptionOrNull()
+            assertTrue(failure is android.database.SQLException && isChatSqlConstraint(failure))
+            raw(db).execSQL("DELETE FROM crew_messages WHERE conversation_id=? AND mission_id=? AND message_id=?",arrayOf("row","row","row"))
+            assertEquals(0L,scalar(db,"SELECT COUNT(*) FROM crew_message_input_provenance"))
+            assertEquals(1L,scalar(db,"SELECT COUNT(*) FROM conversations"))
+        }
+    }
+}

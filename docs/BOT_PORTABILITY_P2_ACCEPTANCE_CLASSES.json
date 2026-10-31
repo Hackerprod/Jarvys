@@ -115,5 +115,7 @@
   "com.jarvys.agent.workspaces.WorkspaceTreeEvidenceStoreTest",
   "com.jarvys.agent.workspaces.WorkspaceTreeSchemaCompatibilityTest",
   "com.jarvys.agent.workspaces.WorkspaceTreeStoreTest",
-  "com.jarvys.agent.crew.CrewTreeMessageRoutingTest"
+  "com.jarvys.agent.crew.CrewTreeMessageRoutingTest",
+  "com.jarvys.agent.chatdb.RoomTreeProvenanceCompatibilityTest",
+  "com.jarvys.agent.chatdb.CrewSnapshotProvenanceConservationTest"
 ]
