@@ -84,6 +84,11 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
         CrewCheckpointStore.ConfirmedSnapshot result=persistCheckpoint(bot,messages,pending,certificate.source,null,null,certificate);
         if(result==null)throw new IllegalStateException("Tree USER successor lost its current native owner");return result;
     }
+    public CrewCheckpointStore.ConfirmedSnapshot persistTreeUserSameCycleConfirmed(CrewManager.Bot bot,List<CrewMessage> messages,
+            List<CrewMessage> pending,TreeUserControlCertificate certificate) {
+        CrewCheckpointStore.ConfirmedSnapshot result=persistCheckpoint(bot,messages,pending,certificate.source,null,null,certificate,true);
+        if(result==null)throw new IllegalStateException("Same-cycle USER correction lost its native owner");return result;
+    }
     private CrewCheckpointStore.ConfirmedSnapshot persistCheckpoint(CrewManager.Bot bot,List<CrewMessage> messages,List<CrewMessage> pending,
             CrewCheckpointStore.ConfirmedSnapshot expected,CentralContinuationRecord successor) {
         return persistCheckpoint(bot,messages,pending,expected,successor,null,null);
@@ -92,6 +97,12 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             List<CrewMessage> messages, List<CrewMessage> pending,
             CrewCheckpointStore.ConfirmedSnapshot expected, CentralContinuationRecord successor,
             TreeSuccessorCertificate treeSuccessor,TreeUserControlCertificate treeUserControl) {
+        return persistCheckpoint(bot,messages,pending,expected,successor,treeSuccessor,treeUserControl,false);
+    }
+    private CrewCheckpointStore.ConfirmedSnapshot persistCheckpoint(CrewManager.Bot bot,
+            List<CrewMessage> messages,List<CrewMessage> pending,CrewCheckpointStore.ConfirmedSnapshot expected,
+            CentralContinuationRecord successor,TreeSuccessorCertificate treeSuccessor,TreeUserControlCertificate treeUserControl,
+            boolean sameCycleControl) {
         if (!canPersist(bot)) return null;
         try {
             boolean nativeTask = bot.role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT;
@@ -117,7 +128,9 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                     .put("title", title.title).put("titleSource", title.source)
                     .put("originalInstructions", bot.originalInstructions()));
             if(treeSuccessor!=null)return store.saveTreeSuccessorConfirmed(expected,treeSuccessor,metadata,bot.scopeIdentity(),bot.checkpoint(),bot.artifactOwnership());
-            if(treeUserControl!=null)return store.saveTreeUserSuccessorConfirmed(treeUserControl,metadata,bot.scopeIdentity(),bot.checkpoint(),bot.artifactOwnership());
+            if(treeUserControl!=null)return sameCycleControl
+                ?store.saveTreeUserSameCycleConfirmed(treeUserControl,metadata,bot.scopeIdentity(),bot.checkpoint(),bot.artifactOwnership())
+                :store.saveTreeUserSuccessorConfirmed(treeUserControl,metadata,bot.scopeIdentity(),bot.checkpoint(),bot.artifactOwnership());
             if (successor != null)
                 return this.store.saveCentralContinuationSuccessor(expected, successor, metadata,
                         bot.scopeIdentity(), bot.checkpoint(), bot.artifactOwnership());

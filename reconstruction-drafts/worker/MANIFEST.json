@@ -1,0 +1,26 @@
+{
+  "status": "Private uncompiled WIP; no test or integration PASS claimed",
+  "patchSha256": "c34f512afe62f7b8925d724e1a81bb12bf0f994e942afdbeb518b7c040d716a9",
+  "newFiles": [
+    {
+      "draft": "CrewTreeSupport.java",
+      "destination": "app/app/src/main/java/com/jarvys/agent/crew/CrewTreeSupport.java",
+      "sha256": "980b44e86a0222ba009e1c7fa2b0e391ac2dc05c05465e09b8f8ce37c60697ee"
+    },
+    {
+      "draft": "WorkspaceTreeWorkerTools.kt",
+      "destination": "app/app/src/main/java/com/jarvys/agent/WorkspaceTreeWorkerTools.kt",
+      "sha256": "e9e7e7d3e7fe0a5253d7af33a4e7f1f85f07a4264716b55a501e150eafffd27f"
+    },
+    {
+      "draft": "WorkspaceTreeWorkerCoordinator.kt",
+      "destination": "app/app/src/main/java/com/jarvys/agent/WorkspaceTreeWorkerCoordinator.kt",
+      "sha256": "d5f8f2feb8eaa27dcef452dc6a804e91c5fad5dcb57edbfdc03705e7c8f46574"
+    },
+    {
+      "draft": "WorkspaceTreeNativeRuntimeTest.kt",
+      "destination": "app/app/src/test/java/com/jarvys/agent/WorkspaceTreeNativeRuntimeTest.kt",
+      "sha256": "0b722c44e6d7f697e42ef663684a1a1c9b12a4c96211d8b1a62a2442f1675f05"
+    }
+  ]
+}

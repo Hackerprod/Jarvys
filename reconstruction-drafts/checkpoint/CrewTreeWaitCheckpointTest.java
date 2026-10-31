@@ -133,4 +133,53 @@ public class CrewTreeWaitCheckpointTest {
   assertEquals(confirmed.payloadSha256,store.confirmDurable(session,bot,scope()).payloadSha256);
  }
 
+ @Test public void sameCycleUserCorrectionPreservesP1AndAllWaitHistoryWithoutNewCycle()throws Exception {
+  File root=root();CrewCheckpointStore store=new CrewCheckpointStore(root);CrewCheckpointStore.ConfirmedSnapshot first=save(store);
+  first=store.createCentralContinuation(first,CentralContinuationRecord.create(workspace,assignment,"request","mission",bot,cycle));
+  first=wait(store,first,ticket("one"));first=wait(store,first,ticket("two"));
+  final CrewCheckpointStore.ConfirmedSnapshot source=first;
+  String hash=String.join("",java.util.Collections.nCopies(64,"b"));
+  TreeUserControlCertificate cert=new TreeUserControlCertificate(source,"root","node","control","CORRECT",3,4,hash);
+  JSONObject before=source.metadataJson();JSONObject next=metadata().put("result","same-cycle corrected input retained");
+  CrewCheckpointStore.ConfirmedSnapshot saved=store.saveTreeUserSameCycleConfirmed(cert,next,scope(),source.loopForEvidence(),new JSONObject());
+  assertEquals(cycle,saved.metadataJson().getString("cycleId"));
+  assertTrue(WorkerTreeWaitRecord.equal(before.getJSONObject(WorkerTreeWaitRecord.FIELD),saved.metadataJson().getJSONObject(WorkerTreeWaitRecord.FIELD)));
+  assertTrue(WorkerTreeWaitRecord.equal(before.getJSONObject(CentralContinuationRecord.FIELD),saved.metadataJson().getJSONObject(CentralContinuationRecord.FIELD)));
+  assertThrows(IllegalStateException.class,()->store.saveTreeUserSameCycleConfirmed(cert,next,scope(),source.loopForEvidence(),new JSONObject()));
+ }
+ @Test public void sameCycleTypedControlRejectsIdentityCycleAndProtocolMutation()throws Exception {
+  CrewCheckpointStore store=new CrewCheckpointStore(root());CrewCheckpointStore.ConfirmedSnapshot first=save(store);
+  final CrewCheckpointStore.ConfirmedSnapshot source=wait(store,first,ticket("one"));
+  String hash=String.join("",java.util.Collections.nCopies(64,"b"));
+  TreeUserControlCertificate cert=new TreeUserControlCertificate(source,"root","node","control","CORRECT",3,4,hash);
+  JSONObject newCycle=metadata().put("cycleId",UUID.randomUUID().toString());
+  assertThrows(IllegalArgumentException.class,()->store.saveTreeUserSameCycleConfirmed(cert,newCycle,scope(),source.loopForEvidence(),new JSONObject()));
+  JSONObject owner=metadata().put("assignmentId",UUID.randomUUID().toString());
+  assertThrows(IllegalArgumentException.class,()->store.saveTreeUserSameCycleConfirmed(cert,owner,scope(),source.loopForEvidence(),new JSONObject()));
+  JSONObject injection=metadata().put(WorkerTreeWaitRecord.FIELD,WorkerTreeWaitRecord.create(ticket("forged")).toJson());
+  assertThrows(IllegalStateException.class,()->store.saveTreeUserSameCycleConfirmed(cert,injection,scope(),source.loopForEvidence(),new JSONObject()));
+  TreeUserControlCertificate resume=new TreeUserControlCertificate(source,"root","node","control","RESUME",3,4,hash);
+  assertThrows(IllegalArgumentException.class,()->store.saveTreeUserSameCycleConfirmed(resume,metadata(),scope(),source.loopForEvidence(),new JSONObject()));
+  assertEquals(source.payloadSha256,store.confirmDurable(session,bot,scope()).payloadSha256);
+ }
+ @Test public void sameCyclePostRenameFsyncFailureNeverReturnsConfirmationOrReplaysOldCertificate()throws Exception {
+  File root=root();CrewCheckpointStore store=new CrewCheckpointStore(root);CrewCheckpointStore.ConfirmedSnapshot source=save(store);
+  String hash=String.join("",java.util.Collections.nCopies(64,"b"));
+  TreeUserControlCertificate cert=new TreeUserControlCertificate(source,"root","node","control","CORRECT",3,4,hash);
+  java.util.concurrent.atomic.AtomicBoolean fault=new java.util.concurrent.atomic.AtomicBoolean();
+  CrewCheckpointStore failing=new CrewCheckpointStore(root,directory->{
+   try {
+    JSONObject envelope=new JSONObject(new String(java.nio.file.Files.readAllBytes(target(root).toPath()),java.nio.charset.StandardCharsets.UTF_8));
+    JSONObject metadata=new JSONObject(envelope.getString("payload")).getJSONObject("metadata");
+    if("corrected".equals(metadata.optString("result"))&&!fault.getAndSet(true))throw new java.io.IOException("post-rename control directory sync");
+   }catch(org.json.JSONException e){throw new java.io.IOException(e);}
+  });
+  JSONObject next=metadata().put("result","corrected");
+  assertThrows(IllegalStateException.class,()->failing.saveTreeUserSameCycleConfirmed(cert,next,scope(),source.loopForEvidence(),new JSONObject()));
+  assertTrue(fault.get());CrewCheckpointStore.ConfirmedSnapshot confirmed=store.confirmDurable(session,bot,scope());
+  assertEquals("corrected",confirmed.metadataJson().getString("result"));
+  assertThrows(IllegalStateException.class,()->store.saveTreeUserSameCycleConfirmed(cert,next,scope(),source.loopForEvidence(),new JSONObject()));
+  assertEquals(confirmed.payloadSha256,store.confirmDurable(session,bot,scope()).payloadSha256);
+ }
+
 }

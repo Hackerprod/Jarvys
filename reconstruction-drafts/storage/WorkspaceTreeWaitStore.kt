@@ -121,6 +121,7 @@ internal class WorkspaceTreeWaitStore(private val core:WorkspaceTreeStore) {
         val source=WorkspaceTreeStore.requireSourceCertificate(certificate,"native-workspace:"+requireNotNull(parent.workspaceId))
         val predecessor=WorkspaceTreeStore.requireSourceCertificate(requireNotNull(old.checkpointCertificate),source.getString("originScopeIdentity"))
         integrity(source.getString("profileSha256")==predecessor.getString("profileSha256"),"Successor profile changed")
+        WorkspaceTreeStops.linkChildWait(core.registry.treeStorageIdentity,parent.rootId,parent.nodeId,old.parentCycleId,cycle)
         core.appendEvent(db,parent,identity("successor",old.waitId),"SUCCESSOR",certificate,old.sourceReceipt,identity(certificate),cycle,old.waitId)
         update(db,old,values("owner_process" to process,"owner_generation" to generation,"owner_token" to token))
         core.updateNode(db,parent,values("cycle_id" to cycle,"assignment_revision" to assignmentRevision,"state" to "RUNNING","control_intent" to null))
@@ -137,6 +138,11 @@ internal class WorkspaceTreeWaitStore(private val core:WorkspaceTreeStore) {
     fun list(rootId:String,parentId:String):List<TreeWait> = core.registry.treeRead { db ->
         if(db.version==1) emptyList() else db.query("bot_tree_wait",null,"root_id=? AND parent_node_id=?",arrayOf(rootId,parentId),null,null,"created_at,wait_id").use { c ->
             buildList { while(c.moveToNext()) add(decode(c)) } }
+    }
+    fun readyCauses(expected:TreeWait):List<TreeCause> = core.registry.treeRead { db ->
+        val current=requireWait(db,expected.rootId,expected.waitId)
+        eligible(current==expected && current.state in setOf(TreeWaitState.WAITING,TreeWaitState.READY),"Wait selection changed")
+        eligibleCauses(db,current)
     }
     internal fun eligibleCauses(db:SQLiteDatabase,wait:TreeWait):List<TreeCause> {
         val children=wait.children.map { core.requireNode(db,wait.rootId,it) }
@@ -181,6 +187,21 @@ internal class WorkspaceTreeWaitStore(private val core:WorkspaceTreeStore) {
             c.optional("checkpoint_sha256"),selected,c.optional("successor_intent"),c.optional("owner_process"),c.optional("owner_generation"),c.optional("owner_token"),c.optional("incorporation_receipt"))
     }
     companion object {
+        /** Shared immutable claim binding only; a digest is never execution authority. */
+        fun claimDigest(claim:TreeWaitClaim):String {
+            val w=claim.wait
+            integrity(w.state==TreeWaitState.STARTED && w.selectedCauses==claim.causes &&
+                claim.sourceAssignmentRevision<Long.MAX_VALUE && claim.admittedAssignmentRevision==claim.sourceAssignmentRevision+1,
+                "Malformed exact wait claim")
+            val receipt=JSONObject().put("rootId",w.rootId).put("nodeId",w.parentNodeId).put("waitId",w.waitId)
+                .put("waitRevision",w.revision).put("oldCycle",w.parentCycleId)
+                .put("sourceRevision",claim.sourceAssignmentRevision).put("admittedRevision",claim.admittedAssignmentRevision)
+                .put("intent",requireNotNull(w.successorIntent)).put("executionEventId",claim.executionEventId)
+                .put("process",requireNotNull(w.ownerProcess)).put("generation",requireNotNull(w.ownerGeneration))
+                .put("token",requireNotNull(w.ownerToken)).put("causes",JSONArray(claim.causes.map { encodeCause(it) }))
+            return identity(WorkspaceTreeEvidenceStore.canonical(receipt))
+        }
+
         private fun array(raw:String):List<Any> { val a=JSONArray(raw);return (0 until a.length()).map { a.get(it) } }
         internal fun encodeCause(c:TreeCause)=JSONObject().put("eventKey",c.eventKey).put("nodeId",c.nodeId).put("cycleId",c.cycleId)
             .put("kind",c.kind).put("evidenceRef",c.evidenceRef).put("evidenceHash",c.evidenceHash)

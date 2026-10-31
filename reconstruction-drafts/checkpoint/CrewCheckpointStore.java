@@ -348,6 +348,27 @@ public final class CrewCheckpointStore {
             return saveConfirmedInternal(current.conversationId,current.botId,metadata,scopeIdentity,loop,ownership,false);
         }
     }
+    /** Exact same-cycle USER CORRECT write. No automatic incorporation/Registry ACK is performed here. */
+    public ConfirmedSnapshot saveTreeUserSameCycleConfirmed(TreeUserControlCertificate certificate,
+            JSONObject metadata,String scopeIdentity,CoreAgentLoop.Checkpoint loop,JSONObject ownership) {
+        if(certificate==null||!"CORRECT".equals(certificate.controlType))
+            throw new IllegalArgumentException("Same-cycle correction requires exact USER certificate");
+        synchronized(ConversationMetadataAccess.lockForSession(certificate.source.conversationId)) {
+            ConfirmedSnapshot current=requireCurrentCheckpoint(certificate.source);
+            try {
+                JSONObject old=current.metadataJson();
+                if(!current.scopeIdentity.equals(scopeIdentity)||!Boolean.TRUE.equals(old.opt("nativeWorkspaceCheckpoint"))
+                    ||!Boolean.TRUE.equals(metadata.opt("nativeWorkspaceCheckpoint")))throw new IllegalArgumentException("Same-cycle correction scope changed");
+                for(String field:java.util.Arrays.asList("conversationId","botId","assignmentId","missionId","role","missionAccess","cycleId"))
+                    if(!WorkerTreeWaitRecord.equal(old.opt(field),metadata.opt(field)))throw new IllegalArgumentException("Same-cycle correction identity changed: "+field);
+                if(!java.util.UUID.fromString(metadata.getString("cycleId")).toString().equals(metadata.getString("cycleId")))
+                    throw new IllegalArgumentException("Same-cycle correction has invalid native cycle");
+            }catch(org.json.JSONException invalid){throw new IllegalArgumentException("Malformed same-cycle correction",invalid);}
+            // Generic conservation rejects any attempted P1/wait replacement; omitted fields are retained exactly.
+            return saveConfirmedInternal(current.conversationId,current.botId,metadata,scopeIdentity,loop,ownership,false);
+        }
+    }
+
     private static void requireTreeSuccessorIdentity(ConfirmedSnapshot current,ConfirmedSnapshot source,JSONObject next,String scope) {
         try {
             JSONObject old=source.metadataJson();

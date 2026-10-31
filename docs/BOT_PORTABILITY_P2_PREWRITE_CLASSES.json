@@ -1,0 +1,9 @@
+[
+  "com.jarvys.agent.workspaces.WorkspaceTreeSchemaCompatibilityTest",
+  "com.jarvys.agent.workspaces.WorkspaceRegistryTest",
+  "com.jarvys.agent.CrewCheckpointDurabilityTest",
+  "com.jarvys.agent.CrewCheckpointIncorporationCodecTest",
+  "com.jarvys.agent.CrewContinuationStoreTest",
+  "com.jarvys.agent.CrewCoordinationCheckpointTest",
+  "com.jarvys.agent.ContinuationGenerationReceiptTest"
+]

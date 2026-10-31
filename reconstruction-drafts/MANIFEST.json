@@ -19,13 +19,13 @@
     },
     {
       "path": "reconstruction-drafts/checkpoint/CrewCheckpointCoordinator.java",
-      "sha256": "29430c09a4a7cf7f282f8e83892da25746961a3cb33f2b464db89acd7ffe6b60",
-      "bytes": 41989
+      "sha256": "17052c650be3631eb903f24c37fbf7ab9e46d9976f5917f7959401df0e64dfce",
+      "bytes": 43134
     },
     {
       "path": "reconstruction-drafts/checkpoint/CrewCheckpointStore.java",
-      "sha256": "5dc7c5ff25e7d3d568d1eb0cb3398739045ede4389f773e272aa370030ea456d",
-      "bytes": 63969
+      "sha256": "60145ae90982f88844833484f90deeb7d33148d5744511b894b68c6ece716530",
+      "bytes": 65943
     },
     {
       "path": "reconstruction-drafts/checkpoint/CrewTreeInputCodecTest.java",
@@ -34,8 +34,8 @@
     },
     {
       "path": "reconstruction-drafts/checkpoint/CrewTreeWaitCheckpointTest.java",
-      "sha256": "ae2cc0013700f8b1d365798f2876a714df51aa104ad56d3ccc7bf421c03920aa",
-      "bytes": 12215
+      "sha256": "d1f9fdcbf088613c23ea8cfa16aba0cfa424faf526bdb1cc5f07fda4ca3f17e8",
+      "bytes": 17045
     },
     {
       "path": "reconstruction-drafts/checkpoint/TreeSuccessorCertificate.java",
@@ -93,6 +93,41 @@
       "bytes": 4533
     },
     {
+      "path": "reconstruction-drafts/delivery/WorkspaceTreeDelivery.kt",
+      "sha256": "63543d149c08bada96e998ddee0e1e5793e746845a68556e624b99bc8932384d",
+      "bytes": 9043
+    },
+    {
+      "path": "reconstruction-drafts/delivery/WorkspaceTreeWakeCoordinator.kt",
+      "sha256": "41851a1dddf341c3f8576e7c83426e2b07becfa4222beede8d94f67ff8566d8b",
+      "bytes": 6380
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreeAnswerStore.kt",
+      "sha256": "edb33ffd0b4894e5f1e7ff97f289034dcea4ce1013cab7efa0ec9fa40a304c63",
+      "bytes": 5655
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreeCentralStore.kt",
+      "sha256": "04213af6c44ce13fa23bbc569b8c88575a1ad33d50a5a6e506e78a6adff532b3",
+      "bytes": 5788
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreeControlStore.kt",
+      "sha256": "f787c9d65ced482b32c86794d3fa4806fbafa6cf4772ce67137715ba04ae9906",
+      "bytes": 6993
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreeEvidenceStore.kt",
+      "sha256": "f984743c26fd4befb4ec376780a41c1d860c25cba563f15477c430154a1ab70d",
+      "bytes": 22537
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreeEvidenceStoreTest.kt",
+      "sha256": "4cbcf3e2bea39fdc1c68d48652a685c292e140a18c1be9f48d08b866a6a51754",
+      "bytes": 12187
+    },
+    {
       "path": "reconstruction-drafts/storage/WorkspaceTreePolicy.kt",
       "sha256": "387503d14ad1747314fd56fe1f316b53bd123527f3708a3dc5c0bf971f85a5f9",
       "bytes": 451
@@ -109,13 +144,13 @@
     },
     {
       "path": "reconstruction-drafts/storage/WorkspaceTreeStops.kt",
-      "sha256": "82a8f88e9d307002048ea61bc77803080b89e17bc7ece9075e5227320cfd2908",
-      "bytes": 1606
+      "sha256": "ceeda3fd9ee18928cf2e734dc3e3f81416d0da268e869ae1ee79652a74cdb0f9",
+      "bytes": 2344
     },
     {
       "path": "reconstruction-drafts/storage/WorkspaceTreeStore.kt",
-      "sha256": "2cddfc7873fe1ba0ba042ae7928b247a299ffdeb42a41ebcd317d9c631f76920",
-      "bytes": 30768
+      "sha256": "743c8b765b244f6ed7c56362e0f327ea45abb22c72cce43fc038436377918e8f",
+      "bytes": 32732
     },
     {
       "path": "reconstruction-drafts/storage/WorkspaceTreeStoreTest.kt",
@@ -124,8 +159,38 @@
     },
     {
       "path": "reconstruction-drafts/storage/WorkspaceTreeWaitStore.kt",
-      "sha256": "d34908fb321093045f7954dfd27df9a5c07919961dc19a01dd491a54e536f796",
-      "bytes": 16524
+      "sha256": "2bdae8a72e9f81915866ce0da60159c19237ccd6476d9fe399711927874d7350",
+      "bytes": 18175
+    },
+    {
+      "path": "reconstruction-drafts/worker/CrewTreeSupport.java",
+      "sha256": "980b44e86a0222ba009e1c7fa2b0e391ac2dc05c05465e09b8f8ce37c60697ee",
+      "bytes": 3855
+    },
+    {
+      "path": "reconstruction-drafts/worker/MANIFEST.json",
+      "sha256": "4d4f560e4ac2134b400e15c711d990da8a67bda0d408570e30325cfb24550263",
+      "bytes": 1130
+    },
+    {
+      "path": "reconstruction-drafts/worker/WORKER_RECONSTRUCTION.patch",
+      "sha256": "c34f512afe62f7b8925d724e1a81bb12bf0f994e942afdbeb518b7c040d716a9",
+      "bytes": 59185
+    },
+    {
+      "path": "reconstruction-drafts/worker/WorkspaceTreeNativeRuntimeTest.kt",
+      "sha256": "0b722c44e6d7f697e42ef663684a1a1c9b12a4c96211d8b1a62a2442f1675f05",
+      "bytes": 25171
+    },
+    {
+      "path": "reconstruction-drafts/worker/WorkspaceTreeWorkerCoordinator.kt",
+      "sha256": "d5f8f2feb8eaa27dcef452dc6a804e91c5fad5dcb57edbfdc03705e7c8f46574",
+      "bytes": 30873
+    },
+    {
+      "path": "reconstruction-drafts/worker/WorkspaceTreeWorkerTools.kt",
+      "sha256": "e9e7e7d3e7fe0a5253d7af33a4e7f1f85f07a4264716b55a501e150eafffd27f",
+      "bytes": 5424
     }
   ]
 }

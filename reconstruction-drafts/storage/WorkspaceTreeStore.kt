@@ -152,6 +152,24 @@ internal class WorkspaceTreeStore(internal val registry:WorkspaceRegistry) {
         val uncertain=registry.markUncertain(native.workspaceId,native.assignmentId,native.revision)
         updateNode(db,child,values("state" to "UNCERTAIN","assignment_revision" to uncertain.revision,"admissions_closed" to 1L,"wakes_closed" to 1L))
     }
+    /** Failure after native BOUND but before scheduling conserves the reservation; never mutates/replays the native bot. */
+    fun markDispatchUncertain(reservation:TreeExecutionReservation,fence:TreeNodeFence,botId:String,cycleId:String):TreeNode = registry.treeTransaction { db ->
+        val node=requireNode(db,fence.rootId,fence.nodeId)
+        eligible(TreeNodeFence.of(node)==fence && node.rootId==reservation.rootId && node.nodeId==reservation.nodeId &&
+            node.assignmentId==reservation.assignmentId && node.executionEventId==reservation.eventId &&
+            node.state in setOf(TreeNodeState.STARTED,TreeNodeState.RUNNING),"Dispatch reservation changed")
+        val native=requireNotNull(registry.getAssignment(requireNotNull(node.workspaceId),reservation.assignmentId))
+        integrity(native.state==WorkspaceAssignmentState.BOUND && native.botId==botId && native.processId==reservation.processId &&
+            native.revision==next(reservation.assignmentRevision),"Uncertain native binding changed")
+        val eventProcess=one(db,"bot_tree_event","root_id=? AND event_key=?",arrayOf(node.rootId,reservation.eventId)) { c ->
+            integrity(c.s("kind")=="EXECUTION" && c.s("node_id")==node.nodeId && c.s("payload_digest")==identity(c.s("receipt")),"Execution evidence changed")
+            c.s("receipt") } ?: throw TreeIntegrityException("Missing execution reservation")
+        integrity(eventProcess==reservation.processId,"Execution process changed")
+        if(node.state==TreeNodeState.RUNNING) integrity(node.botId==botId && node.cycleId==cycleId && node.assignmentRevision==native.revision,"Bound cycle changed")
+        else integrity(node.botId==null && node.revision==reservation.revision && node.assignmentRevision==reservation.assignmentRevision,"Prebind reservation changed")
+        nonempty(cycleId)
+        updateNode(db,node,values("state" to "UNCERTAIN","admissions_closed" to 1L,"wakes_closed" to 1L))
+    }
     fun requireDispatch(fence:TreeNodeFence):TreeNode=registry.treeRead { db ->
         val child=current(db,fence); val root=requireRoot(db,child.rootId)
         WorkspaceTreeStops.requireAllowed(registry.treeStorageIdentity,child.rootId,child.nodeId,child.cycleId)
