@@ -71,7 +71,7 @@ class WorkspaceTreeSchemaCompatibilityTest {
         val prepared = original.prepareAssignment(workspace.workspaceId,"assignment","request","original task","generalist","mission",null,null,com.jarvys.agent.crew.CrewMissionAccess.STANDARD)
         val started = original.markStarted(workspace.workspaceId,prepared.assignmentId,prepared.revision,"fixture-process")
         val bound = original.bindBot(workspace.workspaceId,started.assignmentId,started.revision,"fixture-bot")
-        original.nativeControls().submit("fixture-control",workspace.workspaceId,bound.assignmentId,"fixture-bot",bound.revision,WorkspaceControlType.CORRECT,"retained text")
+        original.nativeControls().submit("1a111111-1111-4111-8111-111111111111",workspace.workspaceId,bound.assignmentId,"fixture-bot",bound.revision,WorkspaceControlType.CORRECT,"retained text")
         original.markRead(workspace.workspaceId,bound.assignmentId,"a".repeat(64))
         // Conservation includes undecodable historical reference bytes, never authority/adoption.
         // SQL hex comparison avoids Java UTF decoding normalizing lone-surrogate UTF8 bytes.
@@ -126,7 +126,7 @@ class WorkspaceTreeSchemaCompatibilityTest {
         }
         val error=runCatching { registry.upgradeTreeSchema() }.exceptionOrNull()
         assertNotNull("Native SQLite must fail, not synthetic rollback",error)
-        assertTrue(generateSequence(error) { it.cause }.any { it is android.database.sqlite.SQLiteFullException })
+        if(!generateSequence(error) { it.cause }.any { it is android.database.sqlite.SQLiteFullException }) throw AssertionError("Expected actual SQLiteFullException; captured ${error?.javaClass?.name}: ${error?.message}",error)
         assertEquals(1,registry.schemaVersion())
         raw().use { assertEquals(original,rows(it,"workspace")) }
         assertEquals(1,WorkspaceRegistry.preflightFreshStorage(context))

@@ -822,11 +822,22 @@ class WorkspaceRegistry(context: Context) : Closeable {
         return synchronized(TRANSACTION_LOCK) {
             val db = helper.writableDatabase
             db.beginTransaction()
+            var primary: Throwable? = null
             try {
                 val result = block(db)
                 db.setTransactionSuccessful()
                 result
-            } finally { db.endTransaction() }
+            } catch (failure: Throwable) {
+                primary = failure
+                throw failure
+            } finally {
+                try { db.endTransaction() }
+                catch (cleanup: Throwable) {
+                    val original = primary
+                    if (original == null) throw cleanup
+                    if (original !== cleanup) original.addSuppressed(cleanup)
+                }
+            }
         }
     }
 
