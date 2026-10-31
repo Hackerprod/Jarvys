@@ -7,6 +7,7 @@ internal object WorkspaceTreePolicy {
     const val MAX_REQUESTS=64L
     const val MAX_EXECUTIONS=96L
     const val MAX_WAKES=48L
-    // Fresh reconstruction: remains OFF until independent design + exact prewrite D3 proof.
-    @JvmStatic fun admissionEnabled():Boolean=false
+    // Local reconstruction candidate: design PASS + matching Full/Play pre-write99 passed.
+    // Delivery still requires full final-source acceptance and independent implementation PASS.
+    @JvmStatic fun admissionEnabled():Boolean=true
 }

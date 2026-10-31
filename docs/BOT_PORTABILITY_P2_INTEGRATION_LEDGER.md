@@ -1,4 +1,4 @@
-# Fresh P2 integration ledger — OFF, validation pending
+# Fresh P2 integration ledger — local candidate enabled, acceptance pending
 
 This is newly reconstructed source, not the unavailable former P2 candidate. The verified v98 delivery baseline is unchanged. Baseline pre-write proof passed Full81/Play81 on identical bytes; integrated typed checkpoint extension and complete native acceptance are still pending.
 
@@ -35,3 +35,6 @@ Fresh exact USER cancellation is permitted after the target root has normally co
 Checkpoint JSON encoding now escapes only isolated surrogate code units; valid Unicode pairs retain their previous JSON and UTF-8 bytes/materialization cost. The existing exact UTF-16 checkpoint test additionally asserts ordinary Unicode/emoji byte identity. Final compatibility evidence remains required before enabling new writes.
 
 The nested Registry correction borrows only the same-thread, same-canonical-database connection of an already validated active native transaction. Every borrowed access checks its active state and exact current version/DDL on that connection; outer opens retain the original filesystem/schema preflight and version handling. Nested SQLite transactions retain rollback-only semantics; only the outer owner clears the binding in `finally`, including cleanup failure. Three native SQLite regressions cover same/distinct helpers and close ownership, propagated/caught-inner rollback conservation and subsequent reopen/write, and schema mutation rejection without repair. The preregistered integrated pre-write cohort is now 99 cases (same nine classes), pending fresh Full/Play execution. No write gate was enabled.
+
+
+Matching integrated pre-write Full99/Play99 and separate native store/evidence Full28/Play28 passed on identical source bindings. Local admission is enabled for the next real service/tool/worker acceptance candidate; historical OFF entries above describe their checkpoint state. No implementation or delivery PASS is claimed. Exact final-source repetition and independent review remain required.
