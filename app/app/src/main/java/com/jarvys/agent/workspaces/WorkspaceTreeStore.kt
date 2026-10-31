@@ -341,6 +341,7 @@ internal class WorkspaceTreeStore(internal val registry:WorkspaceRegistry) {
     fun attachCentralExecution(fence:TreeNodeFence,cycle:String,source:String,claim:String,childDue:Boolean,childId:String)=
         WorkspaceTreeCentralStore(this).attach(fence,cycle,source,claim,childDue,childId)
     fun finishCentral(fence:TreeNodeFence,receipt:String,stopped:Boolean)=WorkspaceTreeCentralStore(this).finish(fence,receipt,stopped)
+    fun failCentral(fence:TreeNodeFence,reason:String,receipt:String)=WorkspaceTreeCentralStore(this).fail(fence,reason,receipt)
     fun recordCentralIncorporated(root:String,child:String,claim:String,receipt:String)=WorkspaceTreeCentralStore(this).incorporated(root,child,claim,receipt)
 
 

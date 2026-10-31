@@ -102,6 +102,39 @@ public final class CrewMessage {
             throw new IllegalArgumentException("Supervisor input provenance does not match message routing");
     }
 
+    private static boolean isTreeBinding(CrewInputBinding binding) {
+        return binding != null && (binding.sourceKind == CrewInputBinding.SourceKind.TREE_TASK
+                || binding.sourceKind == CrewInputBinding.SourceKind.TREE_REPORT
+                || binding.sourceKind == CrewInputBinding.SourceKind.TREE_ANSWER);
+    }
+
+    /** Staged internal construction is allowed; persisted/admitted tree input must be complete. */
+    public void requireTypedInputProvenance() {
+        if (isTreeBinding(inputBinding) && !validTreeProvenance())
+            throw new IllegalArgumentException("Typed tree input provenance is required and must match delivery");
+    }
+
+    private static com.jarvys.agent.ConversationInput.Provenance decodeProvenance(
+            org.json.JSONObject row, CrewInputBinding binding) {
+        if (!isTreeBinding(binding)) return row.has("inputProvenance")
+                ? com.jarvys.agent.ConversationInput.Provenance.fromJson(row.optJSONObject("inputProvenance")) : null;
+        org.json.JSONObject p = row.optJSONObject("inputProvenance");
+        if (p == null) throw new IllegalArgumentException("Typed tree input provenance is required");
+        java.util.Set<String> strings = new java.util.HashSet<>(java.util.Arrays.asList(
+                "sessionId", "workspaceId", "assignmentId", "botId", "messageId", "kind", "principalRole",
+                "correlationMessageId", "referenceId", "contentSha256", "requestId", "missionId", "cycleId"));
+        if (p.length() != strings.size() + 1) throw new IllegalArgumentException("Invalid typed provenance fields");
+        for (String key : strings) if (!(p.opt(key) instanceof String))
+            throw new IllegalArgumentException("Invalid typed provenance text " + key);
+        Object revision = p.opt("assignmentRevision");
+        if (!(revision instanceof Integer) && !(revision instanceof Long))
+            throw new IllegalArgumentException("Invalid typed provenance revision");
+        // The legacy parser intentionally has enum fallbacks. They cannot authorize typed tree transport.
+        com.jarvys.agent.ConversationInput.Kind.valueOf(p.optString("kind"));
+        com.jarvys.agent.ConversationInput.Provenance.PrincipalRole.valueOf(p.optString("principalRole"));
+        return com.jarvys.agent.ConversationInput.Provenance.fromJson(p);
+    }
+
     /** Structural correspondence only. Registry/checkpoint/native token validators remain mandatory. */
     private boolean validTreeProvenance() {
         CrewInputBinding b=inputBinding;
@@ -130,6 +163,7 @@ public final class CrewMessage {
         catch (IllegalArgumentException unsupported) { return null; }
     }
     public org.json.JSONObject toJson() {
+        requireTypedInputProvenance();
         try { org.json.JSONObject row = new org.json.JSONObject().put("id",id).put("conversationId",conversationId)
                 .put("from",from).put("to",to).put("type",type.name()).put("text",text)
                 .put("refs",new org.json.JSONArray(refs)).put("timestampMillis",timestampMillis);
@@ -152,12 +186,13 @@ public final class CrewMessage {
             activity=new com.jarvys.agent.ToolActivity(id,"unreadable:"+id,"","",row.optString("text"),"","",
                 "tool_interrupted",row.optJSONObject("activity")==null ? "" : row.optJSONObject("activity").toString(),"","","",row.optLong("timestampMillis"));
         }
-        return new CrewMessage(row.optString("id"),row.optString("conversationId"),row.optString("from"),
+        CrewInputBinding binding = row.has("inputBinding") ? CrewInputBinding.fromJsonStrict(row.optJSONObject("inputBinding")) : null;
+        CrewMessage decoded = new CrewMessage(row.optString("id"),row.optString("conversationId"),row.optString("from"),
                 row.optString("to"),Type.valueOf(row.optString("type")),row.optString("text"),refs,row.optLong("timestampMillis"),activity,
                 row.has("coordination") ? CrewCoordinationEvidence.Reference.fromJsonStrict(row.optJSONObject("coordination")) : null,
-                row.has("inputBinding") ? CrewInputBinding.fromJsonStrict(row.optJSONObject("inputBinding")) : null,
-                row.has("inputProvenance") ? com.jarvys.agent.ConversationInput.Provenance.fromJson(row.optJSONObject("inputProvenance")) : null,
-                row.optString("resultCycleId", ""));
+                binding, decodeProvenance(row, binding), row.optString("resultCycleId", ""));
+        decoded.requireTypedInputProvenance();
+        return decoded;
     }
     /** New causal copies are strict structurally, but copied text/refs are never rehashed as source. */
     private static void validateCausalCopy(org.json.JSONObject row) {

@@ -192,7 +192,7 @@ class CentralTreeServiceAcceptanceTest {
     }
     @Test fun actualGeneralistResultReturnsThroughP1SerialContinuationOnSameRoot()=generalistResult(false)
     @Test fun resultCannotClaimCentralUntilExactTreeSettlementAndReportCommit()=generalistResult(true)
-    private fun generalistResult(barrier:Boolean) {
+    private fun generalistResult(barrier:Boolean,failContinuation:Boolean=false) {
         val treeEntered=CountDownLatch(1);val releaseTree=CountDownLatch(1)
         val entered=CountDownLatch(1);val childCalls=AtomicInteger()
         val (scope,profile)=storage.onDatabaseWorker {
@@ -218,6 +218,8 @@ class CentralTreeServiceAcceptanceTest {
         reply={history -> if(step++==0)ModelReply("",listOf(ModelReply.Call("native-delegate",CentralWorkspaceTool.NAME,mapOf("action" to "delegate","workspace_id" to scope.workspaceId,"key" to "native-generalist","role" to profile.id,"mission" to "Plan itinerary","tools" to emptyList<String>(),"continue_result" to true))))
             else {assertEquals("workspace_data",JSONObject(history.single {it.toolCallId=="native-delegate" && it.kind==ConversationTurn.Kind.TOOL_RESULT}.content).getString("kind"));ModelReply("Awaiting generalist",emptyList())}}
         runStored(original);assertTrue(entered.await(10,TimeUnit.SECONDS));val before=root(original)
+        assertFalse("Successful suspension keeps the original root open",before.admissionsClosed)
+        assertFalse(before.wakesClosed);assertNull(before.closeReason)
         storage.onDatabaseWorker {WorkspaceRegistry(context).use {assertEquals(TreeNodeState.WAITING,WorkspaceTreeStore(it).getNode(before.rootId,before.rootId)!!.state)}}
         val bot=manager!!.bots().single();assertEquals(CrewProfile.WorkspaceMode.LEGACY_CHAT,bot.role.workspaceMode)
         fun record()=storage.onDatabaseWorker {requireNotNull(CrewCheckpointStore(context.filesDir).load(scope.executionSessionId,bot.id)).metadata.getJSONObject(CentralContinuationRecord.FIELD)}
@@ -240,6 +242,25 @@ class CentralTreeServiceAcceptanceTest {
         waitUntil("Durable selected P1 result"){record().optString("dispatchState")=="PREPARED"}
         val selected=record().getJSONObject("selectedResult");val stable=record().getString("inputStableId")
         val input=storage.onDatabaseWorker {LocalRunStore(context).readConversationMessageByStableId(central,stable)!!.getString("messageId")}
+        if(failContinuation) {
+            val captured=AtomicReference<TreeRoot>()
+            service.mainChatRunner=AgentForegroundService.MainChatRunner { _,_,_,_,_,_ ->
+                captured.set(root(original))
+                CoreAgentLoop.Result("failed-p1-continuation","Injected claimed result failure",1,"FAILED")
+            }
+            val count=calls.get()
+            service.onStartCommand(nextWake(input),0,2)
+            waitUntil("Original claimed root closes on failure"){root(original).closeReason=="FAILED"}
+            service.awaitSessionIdleForTesting(central).get(10,TimeUnit.SECONDS)
+            val closed=assertClosedFailure(original,requireNotNull(captured.get()),"FAILED")
+            assertEquals(before.origin,closed.origin);assertEquals(count,calls.get());assertEquals(1,childCalls.get())
+            assertEquals("STARTED",record().getString("dispatchState"))
+            val immutable=record().toString()
+            runStored(input)
+            storage.onDatabaseWorker {WorkspaceResultDelivery(context).reconcile(scope.workspaceId,CancellationToken.uncancellable())}
+            assertEquals(immutable,record().toString());assertEquals(closed,root(original));assertEquals(count,calls.get())
+            return
+        }
         var synthesis=0
         reply={history -> if(synthesis++==0)ModelReply("",listOf(ModelReply.Call("exact-read",CentralWorkspaceTool.NAME,mapOf("action" to "read_result","workspace_id" to scope.workspaceId,"result_id" to selected.getString("resultReferenceId"),"expected_sha256" to selected.getString("contentSha256")))))
             else {assertTrue(history.single {it.toolCallId=="exact-read" && it.kind==ConversationTurn.Kind.TOOL_RESULT}.content.contains("Native itinerary evidence"));ModelReply("Exact synthesis",emptyList())}}
@@ -541,5 +562,131 @@ class CentralTreeServiceAcceptanceTest {
             }
         } } }
     }
+
+    @Test fun returnedFailedServiceExitClosesOwnedRootAndPreservesNewUserAndRegeneration()=failedServiceExit("FAILED",true)
+    @Test fun thrownServiceFailureClosesOwnedRoot()=failedServiceExit("THROWN")
+    @Test fun returnedPartialClosesOwnedRootWithoutDeadline()=failedServiceExit("PARTIAL")
+    @Test fun deadlineFailureExpiresOwnedRoot()=failedServiceExit("DEADLINE")
+    @Test fun returnedStoppedClosesOwnedRootWithoutInventingUserStop()=failedServiceExit("STOPPED")
+    private fun assertClosedFailure(origin:String,before:TreeRoot,reason:String):TreeRoot {
+        val after=root(origin)
+        assertEquals(before.origin,after.origin);assertEquals(reason,after.closeReason)
+        assertTrue(after.admissionsClosed);assertTrue(after.wakesClosed)
+        assertEquals(listOf(before.windowEpoch,before.requests,before.executions,before.wakes),
+            listOf(after.windowEpoch,after.requests,after.executions,after.wakes))
+        storage.onDatabaseWorker { WorkspaceRegistry(context).use { db ->
+            val tree=WorkspaceTreeStore(db);val node=requireNotNull(tree.getNode(after.rootId,after.rootId))
+            assertEquals(TreeNodeState.TERMINAL,node.state)
+            assertEquals(if(reason=="PARTIAL")"FAILED" else reason,node.terminalOutcome)
+            assertTrue(node.admissionsClosed);assertTrue(node.wakesClosed)
+            val failureEvents=db.treeRead { sql -> sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind='CENTRAL_FAILURE'",arrayOf(after.rootId)).use { rows -> rows.moveToFirst();rows.getLong(0) } }
+            assertEquals("Return/catch/finally do not duplicate the terminal disposition",1L,failureEvents)
+            assertThrows(TreeIneligibleException::class.java) { tree.requireDispatch(TreeNodeFence.of(node)) }
+        } }
+        // Fresh Registry open reads exactly the retained closure; reads cannot renew counters.
+        assertEquals(after,root(origin));return after
+    }
+    private fun failedServiceExit(mode:String,checkFreshAuthority:Boolean=false) {
+        val original=user("Exact native service failure $mode")
+        val captured=AtomicReference<TreeRoot>()
+        service.mainChatRunner=AgentForegroundService.MainChatRunner { _,_,_,_,token,_ ->
+            captured.set(root(original))
+            when(mode) {
+                "THROWN" -> throw IllegalStateException("Injected terminal service boundary failure")
+                "DEADLINE" -> { assertTrue(token.cancelForTimeout());token.throwIfCancelled();error("Deadline must throw") }
+                else -> CoreAgentLoop.Result("injected-$mode","Native terminal $mode",1,mode)
+            }
+        }
+        runStored(original)
+        val reason=when(mode){"THROWN"->"FAILED";"DEADLINE"->"EXPIRED";else->mode}
+        val closed=assertClosedFailure(original,requireNotNull(captured.get()),reason)
+        assertEquals(0,calls.get())
+        // Even a direct retained-source attempt cannot replace the first failure disposition.
+        runStored(original);assertEquals(closed,root(original));assertEquals(0,calls.get())
+        if(checkFreshAuthority) {
+            service.mainChatRunner=AgentForegroundService.MainChatRunner { runtime,goal,history,attachments,token,progress ->
+                runtime.runMainChat(goal,history,attachments,token,progress)
+            }
+            reply={ModelReply("New genuine request completed",emptyList())}
+            val fresh=user("Separate genuinely new native USER")
+            runStored(fresh);assertEquals("COMPLETED",root(fresh).closeReason)
+            assertNotEquals(closed.rootId,root(fresh).rootId);assertEquals(closed,root(original))
+            val prompt=storage.onDatabaseWorker {
+                val ledger=LocalRunStore(context)
+                val event=ledger.readConversationTimeline(central).last {it.kind=="assistant" && it.messageId.isNotBlank()}
+                requireNotNull(ledger.regenerateAssistantIfLatest(central,event.messageId))
+            }
+            assertEquals(fresh,prompt.userMessageId)
+            reply={ModelReply("Plain exact regenerated response",emptyList())}
+            AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),central,prompt.userMessageId,prompt.resumeReceipt)
+            service.onStartCommand(nextWake(fresh),0,3)
+            waitUntil("Plain regeneration remains independently usable") { storage.onDatabaseWorker {
+                LocalRunStore(context).readConversationMessages(central).any {it.optString("content")=="Plain exact regenerated response" && it.optString("status")=="COMPLETED"}
+            } }
+            assertEquals(closed,root(original));assertEquals(2,calls.get())
+        }
+    }
+
+    @Test fun failedCentralRetainsStartedChildLateResultWithoutWakeOrProgressRenewalAfterReopen() {
+        val entered=CountDownLatch(1);val childCalls=AtomicInteger()
+        val (scope,profile)=storage.onDatabaseWorker {
+            val scope=WorkspaceRegistry(context).use {it.createWorkspace(UUID.randomUUID().toString(),"Failure retained child")}
+            ChatDatabaseBridge.getInstance(context).ensureConversationSync(scope.executionSessionId,"workspace")
+            val profile=CrewProfileRepository(context).create(CrewProfile(CrewProfileRepository.newCustomId(),1,"Generalist","Retain result",
+                "Plan using exact evidence",emptyList(),emptyList(),CrewProfile.WorkspaceMode.LEGACY_CHAT),emptyList(),emptyList())
+            val runtime=CoreAgentRuntime(context,scope.executionSessionId,emptyList(),CorePromptBudget.standard())
+            manager=runtime.configureCrewManager(runtime.createTools(),CoreAgentModel(context,provider {
+                childCalls.incrementAndGet();entered.countDown();check(releaseChild.await(20,TimeUnit.SECONDS))
+                ModelReply("Retained late native evidence",emptyList())
+            },scope.executionSessionId),null)
+            scope to profile
+        }
+        val original=user("Start exact worker then retain failure evidence")
+        val captured=AtomicReference<TreeRoot>();var step=0
+        reply={history -> if(step++==0)ModelReply("",listOf(ModelReply.Call("failure-child",CentralWorkspaceTool.NAME,mapOf(
+            "action" to "delegate","workspace_id" to scope.workspaceId,"key" to "failure-child","role" to profile.id,
+            "mission" to "Retain original result","tools" to emptyList<String>(),"continue_result" to true))))
+            else {assertTrue(entered.await(10,TimeUnit.SECONDS));assertTrue(history.any {it.toolCallId=="failure-child" && it.kind==ConversationTurn.Kind.TOOL_RESULT})
+                captured.set(root(original));ModelReply("Original worker remains outstanding",emptyList())}}
+        service.mainChatRunner=AgentForegroundService.MainChatRunner { runtime,goal,history,attachments,token,progress ->
+            runtime.runMainChat(goal,history,attachments,token,progress)
+            throw IllegalStateException("Failure after actual durable child admission")
+        }
+        runStored(original)
+        val closed=assertClosedFailure(original,requireNotNull(captured.get()),"FAILED")
+        val bot=manager!!.bots().single();val cycle=bot.cycleId();val originalToken=bot.token
+        assertFalse("Failure does not pretend to cancel already-started effects",originalToken.isCancellationRequested)
+        assertEquals(1,childCalls.get());val centralCalls=calls.get()
+        releaseChild.countDown();waitUntil("Original child finishes without replay"){bot.isQuiescent}
+        val result=requireNotNull(bot.resultEvidence())
+        assertEquals("Retained late native evidence",result.resultText)
+        storage.onDatabaseWorker {
+            val retained=requireNotNull(LocalRunStore(context).readCrewResultEvidence(scope.executionSessionId,result.evidenceId))
+            assertEquals(result.toJson().toString(),retained.toJson().toString())
+            WorkspaceRegistry(context).use { db ->
+                val node=requireNotNull(WorkspaceTreeStore(db).findAssignment(scope.workspaceId,bot.assignmentId()))
+                assertEquals(TreeNodeState.TERMINAL,node.state);assertEquals(result.evidenceId,node.terminalRef)
+                assertEquals(result.contentSha256,node.terminalHash);assertNotNull(node.reportReceipt)
+            }
+            WorkspaceResultDelivery(context).reconcile(scope.workspaceId,CancellationToken.uncancellable())
+        }
+        assertEquals(cycle,bot.cycleId());assertSame(originalToken,bot.token)
+        assertEquals(closed,root(original));assertEquals(centralCalls,calls.get());assertEquals(1,childCalls.get())
+        val saved=storage.onDatabaseWorker {requireNotNull(CrewCheckpointStore(context.filesDir).load(scope.executionSessionId,bot.id))}
+        val continuation=saved.metadata.getJSONObject(CentralContinuationRecord.FIELD)
+        assertTrue(continuation.getString("dispatchState") !in setOf("STARTED","ACKNOWLEDGED"))
+        controller!!.destroy();controller=Robolectric.buildService(AgentForegroundService::class.java).create();service=controller!!.get()
+        service.runtimeFactory=AgentForegroundService.RuntimeFactory { c,id,skills ->
+            CoreAgentRuntime(c,id,skills,CorePromptBudget.standard(),provider {calls.incrementAndGet();error("Failed root cannot resume")})
+        }
+        storage.onDatabaseWorker {WorkspaceResultDelivery(context).reconcile(scope.workspaceId,CancellationToken.uncancellable())}
+        continuation.optString("inputStableId").takeIf {it.isNotEmpty()}?.let { stable ->
+            val input=storage.onDatabaseWorker {LocalRunStore(context).readConversationMessageByStableId(central,stable)?.optString("messageId")}
+            if(!input.isNullOrEmpty())runStored(input)
+        }
+        assertEquals(closed,root(original));assertEquals(centralCalls,calls.get());assertEquals(1,childCalls.get())
+    }
+
+    @Test fun claimedP1ContinuationFailureClosesOriginalRootWithoutResetOrReplay()=generalistResult(false,true)
 
 }

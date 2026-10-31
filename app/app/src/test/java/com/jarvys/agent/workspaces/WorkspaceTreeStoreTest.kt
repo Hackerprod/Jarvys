@@ -385,4 +385,57 @@ class WorkspaceTreeStoreTest {
         assertEquals(closed,tree.getRoot(parent.rootId))
     }
 
+    @Test fun failedCentralConservesCountersStartedChildAndFirstClosureAcrossLateReportAndReopen() {
+        val parent=root();val scope=workspace();val child=running(queued(parent,scope,"running-failure"))
+        val waiting=queued(tree.getNode(parent.rootId,parent.nodeId)!!,scope,"queued-failure")
+        val before=tree.getRoot(parent.rootId)!!
+        val failed=tree.failCentral(TreeNodeFence.of(tree.getNode(parent.rootId,parent.nodeId)!!),"FAILED","native-failure")
+        val closed=tree.getRoot(parent.rootId)!!
+        assertTrue(closed.admissionsClosed);assertTrue(closed.wakesClosed);assertEquals("FAILED",closed.closeReason)
+        assertEquals(listOf(before.requests,before.executions,before.wakes,before.windowEpoch),
+            listOf(closed.requests,closed.executions,closed.wakes,closed.windowEpoch))
+        assertEquals(TreeNodeState.TERMINAL,failed.state);assertEquals("FAILED",failed.terminalOutcome)
+        assertEquals(child,tree.getNode(child.rootId,child.nodeId))
+        val cancelled=tree.getNode(waiting.rootId,waiting.nodeId)!!
+        assertEquals("CANCELLED",cancelled.terminalOutcome);assertNotNull(cancelled.reportReceipt);assertNull(cancelled.executionEventId)
+        val events=count("bot_tree_event")
+        assertEquals(failed,tree.failCentral(TreeNodeFence.of(failed),"EXPIRED","later-failure"))
+        assertEquals(events,count("bot_tree_event"));assertEquals(closed,tree.getRoot(parent.rootId))
+        val late=settle(child)
+        WorkspaceTreeEvidenceStore(tree).markReported(late.rootId,late.nodeId,late.terminalRef!!,late.terminalHash!!,"late-report")
+        assertEquals(closed,tree.getRoot(parent.rootId));assertNotNull(tree.getNode(child.rootId,child.nodeId)!!.reportReceipt)
+        denied {queued(failed,scope,"after-failure")}
+        registry.close();registry=WorkspaceRegistry(context)
+        assertEquals(closed,tree.beginRoot(origin,"reopen","new-cycle"));assertEquals(failed,tree.getNode(parent.rootId,parent.nodeId))
+        denied {tree.attachCentralExecution(TreeNodeFence.of(failed),"replay","replay-source","claim",true,child.nodeId)}
+    }
+    @Test fun failedCentralRejectsStaleOwnerWithoutClosingOrRebudgetingCurrentRoot() {
+        val parent=root();val before=tree.getRoot(parent.rootId)!!
+        denied {tree.failCentral(TreeNodeFence.of(parent).copy(cycleId="wrong-cycle"),"FAILED","wrong-owner")}
+        assertEquals(before,tree.getRoot(parent.rootId));assertEquals(parent,tree.getNode(parent.rootId,parent.nodeId))
+        val done=tree.finishCentral(TreeNodeFence.of(parent),"confirmed-success",false)
+        val completed=tree.getRoot(parent.rootId)!!
+        assertEquals(done,tree.failCentral(TreeNodeFence.of(done),"FAILED","late-error"))
+        assertEquals(completed,tree.getRoot(parent.rootId));assertEquals("COMPLETED",completed.closeReason)
+    }
+    @Test fun failedClosureTransactionRollbackConservesRowsAndKeepsPureDenialWithoutReplay() {
+        val parent=root();val scope=workspace();queued(parent,scope,"never-started")
+        val before=tree.getRoot(parent.rootId)!!;val events=count("bot_tree_event")
+        assertThrows(IllegalStateException::class.java) {
+            registry.treeTransaction {
+                tree.failCentral(TreeNodeFence.of(parent),"FAILED","native-failure")
+                throw IllegalStateException("Injected transaction failure after exact denial")
+            }
+        }
+        assertEquals(before,tree.getRoot(parent.rootId));assertEquals(parent,tree.getNode(parent.rootId,parent.nodeId))
+        assertEquals(events,count("bot_tree_event"))
+        denied {queued(parent,scope,"denied-after-rollback")}
+        registry.close();registry=WorkspaceRegistry(context)
+        assertEquals(before,tree.getRoot(parent.rootId));assertEquals(parent,tree.getNode(parent.rootId,parent.nodeId))
+        // Reopen preserves uncertain RUNNING, not a confirmed WAIT or replayable Central claim.
+        denied {tree.attachCentralExecution(TreeNodeFence.of(parent),"new-cycle","new-source","claim",true,"missing-child")}
+        val closed=tree.failCentral(TreeNodeFence.of(parent),"FAILED","native-failure")
+        assertEquals("FAILED",closed.terminalOutcome);assertEquals(before.executions,tree.getRoot(parent.rootId)!!.executions)
+    }
+
 }

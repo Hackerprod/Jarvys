@@ -120,6 +120,35 @@ internal class WorkspaceTreeCentralStore(private val core:WorkspaceTreeStore) {
         val terminal=core.updateNode(db,parent,values("state" to "TERMINAL","terminal_ref" to exitKey,"terminal_hash" to identity(exit),"terminal_outcome" to "SUCCESS"))
         core.closeRoot(db,rootId,"COMPLETED");terminal
     }
+    /** Exact owned terminal exit, not successful completion and not a replay/claim acknowledgement. */
+    fun fail(fence:TreeNodeFence,reason:String,receipt:String):TreeNode=core.registry.treeTransaction { db ->
+        require(reason in setOf("FAILED","PARTIAL","EXPIRED","STOPPED"));nonempty(receipt)
+        val parent=core.requireNode(db,fence.rootId,fence.nodeId)
+        eligible(parent.mode==TreeMode.CENTRAL && parent.nodeId==parent.rootId && TreeNodeFence.of(parent)==fence,
+            "Failed Central owner changed")
+        val root=core.requireRoot(db,parent.rootId)
+        // Preserve any earlier completed/stopped/cancelled disposition, including its counters and reason.
+        if(root.admissionsClosed || root.wakesClosed)return@treeTransaction parent
+        eligible(parent.state==TreeNodeState.RUNNING,"Failed Central execution is no longer running")
+        val queued=core.childrenDb(db,parent.rootId,parent.nodeId).filter {it.state==TreeNodeState.QUEUED}
+        queued.forEach {
+            core.requireNativeAssignment(it,WorkspaceAssignmentState.PREPARED)
+            integrity(it.executionEventId==null && it.botId==null,"Failed request queued ownership changed")
+        }
+        // Denial only; no native owner lookup/callbacks under the Registry transaction.
+        (listOf(parent)+queued).forEach {WorkspaceTreeStops.latchExact(core.registry.treeStorageIdentity,it.rootId,it.nodeId,it.cycleId)}
+        val key=identity("central-failure",parent.cycleId)
+        val disposition=JSONObject().put("reason",reason).put("receipt",receipt).toString()
+        core.appendEvent(db,parent,key,"CENTRAL_FAILURE",disposition,parent.sourceReceipt,identity(disposition),parent.cycleId)
+        core.closeRoot(db,parent.rootId,reason) // Before queued reports: late settlement cannot renew a failed window.
+        core.cancelWaits(db,parent)
+        val terminal=core.updateNode(db,parent,values("state" to "TERMINAL","terminal_ref" to key,
+            "terminal_hash" to identity(disposition),"terminal_outcome" to if(reason=="PARTIAL")"FAILED" else reason,
+            "admissions_closed" to 1L,"wakes_closed" to 1L,"stop_epoch" to next(parent.stopEpoch)))
+        // Retain STARTED children and any outstanding claim evidence. Only never-executed work is cancelled.
+        queued.forEach {core.cancelQueued(db,it,terminal,reason)}
+        terminal
+    }
     fun finish(fence:TreeNodeFence,receipt:String,stopped:Boolean):TreeNode=core.registry.treeTransaction { db ->
         nonempty(receipt)
         val parent=core.requireNode(db,fence.rootId,fence.nodeId)

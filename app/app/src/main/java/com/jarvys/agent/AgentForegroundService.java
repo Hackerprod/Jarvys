@@ -1681,6 +1681,8 @@ public final class AgentForegroundService extends Service {
     final AtomicBoolean assistantOwnerInternal = new AtomicBoolean(internalInput);
     MainChatTurnContextProvider steeringProvider = null;
     CentralTreeAdmission treeAdmission=null;
+    boolean treeExitDisposed=false;
+    String treeFailureReason="FAILED";
     final boolean exactUserOrigin=!userMessageAlreadyRecorded || (existingUserMessageId!=null && !existingUserMessageId.isEmpty());
     try {
       token.throwIfCancelled();
@@ -1929,6 +1931,12 @@ public final class AgentForegroundService extends Service {
         }
       }
       boolean timedOut = token.isTimedOut() && !token.isStoppedByUser();
+      String responseOutcome = timedOut ? "PARTIAL" : result.outcome;
+      if(treeAdmission!=null && !"COMPLETED".equals(responseOutcome) && !token.wasStoppedByUser()) {
+        treeFailureReason=timedOut ? "EXPIRED" : isTerminalFailure(responseOutcome) ? responseOutcome : "FAILED";
+        treeAdmission.failOwnedRoot(this,treeFailureReason);
+        treeExitDisposed=true;
+      }
       if (timedOut) chatMessage = AgentResultPresentation.timeout(this);
       else {
         chatMessage = AgentResultPresentation.localize(this, result).text;
@@ -1949,8 +1957,10 @@ public final class AgentForegroundService extends Service {
               assistantOwnerMessageId.get(),
               timedOut ? "PARTIAL" : result.outcome,
               proactiveThreadKey);
-      String responseOutcome = timedOut ? "PARTIAL" : result.outcome;
-      if(treeAdmission!=null && "COMPLETED".equals(responseOutcome))treeAdmission.finishSuccessful(this,assistantMessageId);
+      if(treeAdmission!=null && "COMPLETED".equals(responseOutcome)) {
+        treeAdmission.finishSuccessful(this,assistantMessageId);
+        treeExitDisposed=true;
+      }
       if (isTerminalFailure(responseOutcome) && !assistantOwnerInternal.get()) {
         conversationStore.markConversationMessagesResolved(sessionId,
             java.util.Collections.singletonList(assistantOwnerMessageId.get()));
@@ -1976,6 +1986,11 @@ public final class AgentForegroundService extends Service {
       }
       boolean stopped = token.isStoppedByUser();
       boolean timedOut = token.isTimedOut() && !stopped;
+      if(treeAdmission!=null && !treeExitDisposed && !token.wasStoppedByUser()) {
+        if(timedOut)treeFailureReason="EXPIRED";
+        try {treeAdmission.failOwnedRoot(this,treeFailureReason);treeExitDisposed=true;}
+        catch(RuntimeException persistenceFailure){reportStopPersistenceFailure(persistenceFailure);}
+      }
       chatMessage =
           stopped
               ? AppLanguageRuntime.localizedContext(this).getString(R.string.agent_run_stopped)
@@ -2024,7 +2039,10 @@ public final class AgentForegroundService extends Service {
       }
     } finally {
       if(treeAdmission!=null) {
-        try {treeAdmission.stopOwnedRoot(this);} catch(RuntimeException failure){reportStopPersistenceFailure(failure);}
+        try {
+          if(token.wasStoppedByUser())treeAdmission.stopOwnedRoot(this);
+          else if(!treeExitDisposed)treeAdmission.failOwnedRoot(this,token.isTimedOut()?"EXPIRED":treeFailureReason);
+        } catch(RuntimeException failure){reportStopPersistenceFailure(failure);}
         finally {treeAdmission.close();}
       }
       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {

@@ -94,4 +94,75 @@ public class CrewTreeMessageRoutingTest {
         }
     }
 
+    @Test public void treeTaskMissingProvenanceIsRejected() { missingProvenance(task()); }
+    @Test public void treeReportMissingProvenanceIsRejected() { missingProvenance(report()); }
+    @Test public void treeAnswerMissingProvenanceIsRejected() { missingProvenance(answer()); }
+    private void missingProvenance(CrewMessage message) {
+        JSONObject row=message.toJson();row.remove("inputProvenance");
+        assertThrows(IllegalArgumentException.class,()->CrewMessage.fromJson(row));
+    }
+    @Test public void typedProvenanceRejectsNullScalarUnknownAndCoercibleFields() throws Exception {
+        for(CrewMessage message:new CrewMessage[]{task(),report(),answer()}) {
+            for(Object malformed:new Object[]{JSONObject.NULL,"provenance",true,3}) {
+                JSONObject row=message.toJson().put("inputProvenance",malformed);
+                assertThrows(IllegalArgumentException.class,()->CrewMessage.fromJson(row));
+            }
+            for(String field:new String[]{"sessionId","botId","requestId","kind","principalRole","assignmentRevision"}) {
+                for(Object malformed:(field.equals("kind") || field.equals("principalRole") || field.equals("assignmentRevision"))
+                        ? new Object[]{JSONObject.NULL,true,1.5,"unknown"} : new Object[]{JSONObject.NULL,true,1.5}) {
+                    JSONObject row=message.toJson();row.getJSONObject("inputProvenance").put(field,malformed);
+                    assertThrows(field,IllegalArgumentException.class,()->CrewMessage.fromJson(row));
+                }
+                JSONObject row=message.toJson();row.getJSONObject("inputProvenance").remove(field);
+                assertThrows(field,IllegalArgumentException.class,()->CrewMessage.fromJson(row));
+            }
+            JSONObject extra=message.toJson();extra.getJSONObject("inputProvenance").put("unknown",true);
+            assertThrows(IllegalArgumentException.class,()->CrewMessage.fromJson(extra));
+            for(Object source:new Object[]{"UNKNOWN",JSONObject.NULL,3}) {
+                JSONObject row=message.toJson();row.getJSONObject("inputBinding").put("sourceKind",source);
+                assertThrows(IllegalArgumentException.class,()->CrewMessage.fromJson(row));
+            }
+        }
+    }
+    @Test public void stagedTreeBindingsCannotSerializeOrEnterEitherInputConversion() throws Exception {
+        for(CrewMessage complete:new CrewMessage[]{task(),report(),answer()}) {
+            CrewMessage staged=new CrewMessage(complete.id,complete.conversationId,complete.from,complete.to,
+                    complete.type,complete.text,complete.refs,complete.timestampMillis).withInputBinding(complete.inputBinding);
+            assertThrows(IllegalArgumentException.class,staged::toJson);
+            assertThrows(IllegalArgumentException.class,()->com.jarvys.agent.CoreAgentLoop.IncomingMessage.fromCrewMessage(staged));
+            assertThrows(IllegalArgumentException.class,()->storedInput(staged));
+            CrewMessage restored=CrewMessage.fromJson(complete.toJson());
+            assertEquals(complete.inputProvenance.principalRole,
+                    com.jarvys.agent.CoreAgentLoop.IncomingMessage.fromCrewMessage(restored).provenance.principalRole);
+            assertEquals(complete.inputProvenance.principalRole,storedInput(restored).provenance.principalRole);
+        }
+    }
+    private ConversationInput storedInput(CrewMessage message) throws Exception {
+        java.lang.reflect.Method method=com.jarvys.agent.WorkspaceConversationInputStore.class.getDeclaredMethod(
+                "toConversationInput",android.content.Context.class,String.class,CrewManager.Bot.class,CrewMessage.class);
+        method.setAccessible(true);
+        com.jarvys.agent.CoreToolRegistry empty=new com.jarvys.agent.CoreToolRegistry(Collections.emptyList());
+        try(CrewManager manager=new CrewManager("codec-conversion",empty,(bot,crew)->empty,
+                (bot,tools,incoming)->new com.jarvys.agent.CoreAgentLoop((history,prompt,specs,token)->
+                    new com.jarvys.agent.ModelReply("done",Collections.emptyList()),tools,"Instructions","codec-conversion"),null)) {
+            CrewManager.Bot bot=manager.spawn("custom","Codec conversion only",Collections.emptyList(),"Worker");
+            bot.awaitTermination();
+            return (ConversationInput)method.invoke(com.jarvys.agent.WorkspaceConversationInputStore.INSTANCE,
+                    org.robolectric.RuntimeEnvironment.getApplication(),session,bot,message);
+        }
+        catch(java.lang.reflect.InvocationTargetException wrapped) {
+            Throwable cause=wrapped.getCause();if(cause instanceof RuntimeException)throw (RuntimeException)cause;
+            throw new AssertionError(cause);
+        }
+    }
+    @Test public void ordinaryLegacyMessagesWithoutTypedBindingKeepCompatibility() {
+        for(String sender:new String[]{"chief","worker"}) {
+            CrewMessage message=new CrewMessage("legacy-"+sender,session,sender,"recipient",CrewMessage.Type.MESSAGE,
+                    "Legacy coordination",Collections.emptyList(),1);
+            CrewMessage restored=CrewMessage.fromJson(message.toJson());
+            assertNull(restored.inputProvenance);assertNull(restored.inputBinding);
+            assertNull(com.jarvys.agent.CoreAgentLoop.IncomingMessage.fromCrewMessage(restored).provenance);
+        }
+    }
+
 }

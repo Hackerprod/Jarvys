@@ -159,6 +159,29 @@ public final class CentralTreeAdmission implements AutoCloseable {
             withCurrentWorkspaceTransaction(token,()->{trees.recordCentralIncorporated(rootId(),source.assignmentId,claim,saved.payloadSha256);return null;});
         }
     }
+    /** Denial-only exit remains valid after deadline cancellation; never revives the token or acknowledges effects. */
+    void failOwnedRoot(Context context,String reason) {
+        if(rootId==null || closed.get())return;
+        if(Thread.currentThread()!=ownerThread || !processId.equals(CrewProcessIdentity.ID))
+            throw new IllegalStateException("Failed Central execution owner changed");
+        ReentrantLock fence=origin.getLifecycle().fenceIdentity();fence.lock();
+        try {
+            if(!origin.getLifecycle().isCurrentPure())throw new IllegalStateException("Failed root lifecycle changed");
+            try(WorkspaceRegistry registry=new WorkspaceRegistry(context)) {
+                WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);
+                TreeRoot root=Objects.requireNonNull(trees.getRoot(rootId()));
+                TreeNode node=Objects.requireNonNull(trees.getNode(rootId(),rootId()));
+                if(!cycleId().equals(node.getCycleId()) || !storageGeneration().equals(root.getOrigin().getStorageGeneration())
+                        || !originDigest().equals(root.getOrigin().getOriginDigest())
+                        || !ownerCentralSessionId().equals(root.getOrigin().getOwnerCentralSessionId())
+                        || !originUserMessageId().equals(root.getOrigin().getOriginUserMessageId()))
+                    throw new IllegalStateException("Failed root canonical owner changed");
+                // Exact owner first; close enqueue before durable mutation, including a failed transaction.
+                WorkspaceTreeStops.latchRoot(context,rootId(),cycleId());
+                trees.failCentral(TreeNodeFence.Companion.of(node),reason,"terminal:"+reason+":"+sourceReceipt());
+            }
+        } finally {fence.unlock();}
+    }
     void stopOwnedRoot(Context context) {
         if(!token.wasStoppedByUser() || rootId==null || closed.get())return;
         ReentrantLock fence=origin.getLifecycle().fenceIdentity();fence.lock();

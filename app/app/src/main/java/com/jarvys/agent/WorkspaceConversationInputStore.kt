@@ -280,6 +280,7 @@ internal object WorkspaceConversationInputStore {
 
     private fun toConversationInput(context: Context, executionSessionId: String, bot: CrewManager.Bot,
                                     message: CrewMessage): ConversationInput {
+        message.requireTypedInputProvenance()
         require(message.activity == null && "user" != message.from)
         message.inputProvenance?.let { return ConversationInput(
             executionSessionId, message.id, message.conversationContent(), ConversationInput.Origin.AGENT, it)

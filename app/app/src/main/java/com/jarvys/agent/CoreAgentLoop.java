@@ -355,6 +355,7 @@ public final class CoreAgentLoop {
         }
 
         public static IncomingMessage fromCrewMessage(CrewMessage message) {
+            message.requireTypedInputProvenance();
             boolean user = "user".equals(message.from) && message.type == CrewMessage.Type.USER;
             CrewInputBinding binding = message.inputBinding != null && message.inputBinding.matchesDelivery(message)
                     ? message.inputBinding : null;
