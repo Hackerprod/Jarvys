@@ -1,4 +1,4 @@
-# Fresh reconstruction pre-write gate — additive TREE_TASK proof pending
+# Fresh reconstruction pre-write gate — additive proof PASS, acceptance pending
 
 The exact seven classes in `BOT_PORTABILITY_P2_PREWRITE_CLASSES.json` are selected before execution, for both Full and Play on unchanged source. Fresh Full results are recorded below; matching Play is still pending. This is a focused compatibility gate, not the complete implementation acceptance suite or a recovery of prior test counts.
 
@@ -44,3 +44,8 @@ Local admission is now enabled solely for the authorized real native integration
 Focused native execution exposed that the older message DTO accepts only supervisor provenance, while genuine descendant assignments and typed tree report/answer inputs carry actual parent/child provenance. The bounded correction adds descriptive `TREE_TASK` to the existing binding codec and validates exact typed routes without granting execution authority. This is a new persisted codec case; local admission is OFF again until fresh matching Full/Play proof.
 
 The preregistered integrated gate now contains ten classes: the prior nine plus `com.jarvys.agent.crew.CrewTreeMessageRoutingTest` (six cases), expected **105 tests per flavor**. It covers ordinary legacy metadata, exact UTF-16 codec round-trip, route/payload/owner/role/cycle mutation, missing binding and INBOX-only incorporation alongside prior checkpoint/schema conservation. Old records retain their exact types and readers; no backfill, deletion, new database schema or legacy import. Old binaries cannot be claimed to understand the new enum value; downgrade remains unsupported.
+
+
+## Additive gate PASS and local validation re-enable
+
+The exact ten classes passed **Full105/0 and Play105/0**, no errors/skips, with identical bindings across 1,980 app/testing files at source commit `30f9e54c`. Canonical sorted JSON binding SHA-256: `956933a3cbe5430aa57605cec464ad4d42be95c4059af5a8b6f82732d83b6926`. No source changed during either export/test preparation. Local admission is re-enabled solely for actual native acceptance. Full final-source repetition and independent implementation review remain required; this is not P2 PASS or delivery.

@@ -862,67 +862,51 @@ class MainAgentInteractionTest {
         }
     }
 
-    @Test fun serviceRestartRecoversOnlyCentralInputsInSequenceAndLeavesForeignPendingUntouched() {
+    @Test fun serviceRestartRecoversCentralInputsTogetherInOrderAndLeavesForeignPendingUntouched() {
         StopController.getInstance().stopRun()
         val context = ApplicationProvider.getApplicationContext<Context>()
         val store = LocalRunStore(context)
-        val sessionA = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
-        val sessionB = "recover-b-${System.nanoTime()}"
-        chatTestStore.onDatabaseWorker { store.appendConversationMessage(sessionA, "user", "initial A") }
-        chatTestStore.onDatabaseWorker { store.appendConversationMessage(sessionB, "user", "initial B") }
-        val service = startManagedService(context)
-        val observed = java.util.Collections.synchronizedList(mutableListOf<String>())
-        val bothStarted = CountDownLatch(2)
-        service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills ->
-            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard())
+        val central = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+        val foreign = "recover-foreign-${System.nanoTime()}"
+        chatTestStore.onDatabaseWorker {
+            store.appendConversationMessage(central,"user","initial Central")
+            store.appendConversationMessage(foreign,"user","initial foreign")
+        }
+        val service=startManagedService(context)
+        val recovered=CountDownLatch(1)
+        val calls=AtomicInteger()
+        val expected=listOf("pending A","pending B")
+        val observed=java.util.Collections.synchronizedList(mutableListOf<String>())
+        installRealTreeRuntime(context,service) { history,_ ->
+            calls.incrementAndGet()
+            observed.addAll(history.filter { it.role=="user" && it.content in expected }.map { it.content })
+            assertEquals("Recovery keeps both durable inputs in original sequence",expected,observed.toList())
+            recovered.countDown()
+            ModelReply("Both inputs recovered once",emptyList())
         }
         try {
-            chatTestStore.onDatabaseWorker { store.appendInterruptRequest(sessionA, "pending A", emptyList()) }
-            chatTestStore.onDatabaseWorker { store.appendInterruptRequest(sessionA, "pending B", emptyList()) }
-            val foreignPending = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(sessionB, "foreign pending", emptyList()) }
-            val expected = chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests() }.filter {
-                it.optString("sessionId") == sessionA
-            }.map { it.optString("content") }
-            assertEquals(2, expected.size)
-            val dispatchTurns = expected.mapIndexed { index, _ -> CountDownLatch(if (index == 0) 0 else 1) }
-            service.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, _, _, _, progress ->
-                val dispatchIndex = expected.indexOf(goal)
-                assertTrue("Recovery runner receives an input from the durable dispatch list", dispatchIndex >= 0)
-                try {
-                    dispatchTurns[dispatchIndex].await()
-                } catch (interrupted: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    throw AssertionError("Interrupted while serializing fake recovery runs", interrupted)
-                }
-                observed.add(goal)
-                bothStarted.countDown()
-                progress.onInitialUserMessageIncorporated()
-                try {
-                    CoreAgentLoop.Result("recovered", "visible recovery", 1, "PARTIAL")
-                } finally {
-                    if (dispatchIndex + 1 < dispatchTurns.size) dispatchTurns[dispatchIndex + 1].countDown()
-                }
-            }
-            AgentRunUiState.resetSession(sessionA)
-            startServiceIntent(context, android.content.Intent(context, AgentForegroundService::class.java)
+            val pending=chatTestStore.onDatabaseWorker { expected.map { store.appendInterruptRequest(central,it,emptyList()) } }
+            val foreignPending=chatTestStore.onDatabaseWorker { store.appendInterruptRequest(foreign,"foreign pending",emptyList()) }
+            AgentRunUiState.resetSession(central)
+            startServiceIntent(context,android.content.Intent(context,AgentForegroundService::class.java)
                 .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
-            while (bothStarted.count > 0 && System.nanoTime() < deadline) {
-                org.robolectric.shadows.ShadowLooper.idleMainLooper()
-                deliverStartedServices(context)
-                Thread.sleep(10)
+            assertTrue("One native recovery turn sees both inputs",awaitServiceCallback(recovered,15))
+            assertTrue("Recovery leaves the native lane",awaitRunFinished(service,context))
+            assertEquals(1,calls.get())
+            chatTestStore.onDatabaseWorker {
+                assertTrue(store.readPendingInterruptRequests(central).isEmpty())
+                assertTrue(store.handledConversationMessageIds(central,pending).containsAll(pending))
+                assertEquals(listOf(foreignPending),store.readPendingInterruptRequests(foreign).map { it.optString("requestId") })
+                assertFalse(store.readConversationMessages(foreign).any { it.optString("role")=="assistant" })
+                assertEquals("COMPLETED",store.readConversationMessages(central).last().optString("status"))
             }
-            assertEquals(0, bothStarted.count)
-            assertTrue("Both recovery runs drain", awaitRunFinished(service, context))
-            assertEquals(expected, observed)
-            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(sessionA) }.isEmpty())
-            assertEquals(listOf(foreignPending), chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(sessionB) }.map { it.optString("requestId") })
-            assertEquals("PARTIAL", chatTestStore.onDatabaseWorker { store.readConversationMessages(sessionA) }.last().optString("status"))
-            assertFalse("Foreign chat remains metadata only", chatTestStore.onDatabaseWorker { store.readConversationMessages(sessionB) }.any { it.optString("role") == "assistant" })
-        } finally {
-            StopController.getInstance().stopRun()
-            stopManagedService(context)
-        }
+            startServiceIntent(context,android.content.Intent(context,AgentForegroundService::class.java)
+                .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
+            worker(service).submit {}.get(5,TimeUnit.SECONDS)
+            deliverStartedServices(context)
+            assertTrue(awaitRunFinished(service,context))
+            assertEquals("Consumed inputs never cause a second recovery",1,calls.get())
+        } finally { StopController.getInstance().stopRun();stopManagedService(context) }
     }
 
     @Test fun dispatchedUnincorporatedSteeringRecoversOnceAfterServiceRestart() {
@@ -1205,22 +1189,78 @@ class MainAgentInteractionTest {
         }
     }
 
-    @Test fun messagesForOneSessionRunInArrivalOrder() {
+    @Test fun queuedStoredUserAlreadyHotIncorporatedMustNotStartAnotherNativeGeneration() {
+        StopController.getInstance().stopRun()
+        val context=ApplicationProvider.getApplicationContext<Context>()
+        val session=com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+        val store=LocalRunStore(context)
+        val firstId=chatTestStore.onDatabaseWorker { store.appendConversationMessage(session,"user","first live request") }
+        val service=startManagedService(context)
+        val firstEntered=CountDownLatch(1)
+        val releaseFirst=CountDownLatch(1)
+        val hotSeen=CountDownLatch(1)
+        val calls=AtomicInteger()
+        val generations=java.util.Collections.synchronizedList(mutableListOf<Long>())
+        val boundGenerations=AtomicInteger()
+        service.beforeGenerationBindForTesting=Runnable { boundGenerations.incrementAndGet() }
+        installRealTreeRuntime(context,service) { history,_ ->
+            when(calls.incrementAndGet()) {
+                1 -> {
+                    firstEntered.countDown()
+                    while(releaseFirst.count>0) try { releaseFirst.await() } catch(_:InterruptedException) { }
+                    ModelReply("First response before hot input",emptyList())
+                }
+                2 -> {
+                    assertTrue(history.any { it.role=="user" && it.content=="exact hot USER" })
+                    hotSeen.countDown()
+                    ModelReply("Hot input consumed in owning generation",emptyList())
+                }
+                else -> throw AssertionError("An already incorporated queued USER must not invoke another model generation")
+            }
+        }
+        service.mainChatRunner=AgentForegroundService.MainChatRunner { runtime,goal,history,attachments,token,progress ->
+            generations.add(token.generation())
+            runtime.runMainChat(goal,history,attachments,token,progress)
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,firstId))
+            assertTrue(awaitServiceCallback(firstEntered,5))
+            val secondId=chatTestStore.onDatabaseWorker { store.appendConversationMessage(session,"user","exact hot USER") }
+            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,secondId))
+            assertEquals("Second direct intent waits behind physical owner",1,generations.size)
+            releaseFirst.countDown()
+            assertTrue(awaitServiceCallback(hotSeen,5))
+            assertTrue(awaitRunFinished(service,context))
+            assertEquals("One provider response before and one after hot input",2,calls.get())
+            assertEquals("A queued duplicate must not start a second native runner",1,generations.size)
+            assertEquals("Consumed duplicate cannot publish another UI generation",1,boundGenerations.get())
+            assertTrue(chatTestStore.onDatabaseWorker { store.handledConversationMessageIds(session,listOf(secondId)).contains(secondId) })
+            startServiceIntent(context,AgentForegroundService.storedChatMessageIntent(context,session,secondId))
+            assertTrue(awaitRunFinished(service,context))
+            assertEquals("Repeated non-regeneration intent remains observation only",1,generations.size)
+            assertEquals(2,calls.get())
+            assertEquals(1,boundGenerations.get())
+        } finally { releaseFirst.countDown();StopController.stopAllRuns();stopManagedService(context) }
+    }
+
+    @Test fun messagesQueuedAfterSteeringProviderClosureRunInArrivalOrder() {
         StopController.getInstance().stopRun()
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
         val store = LocalRunStore(context)
         val firstId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "first message") }
-        val secondId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "second message") }
         val service = startManagedService(context)
         val firstStarted = CountDownLatch(1)
         val releaseFirst = CountDownLatch(1)
         val secondStarted = CountDownLatch(1)
         val observed = java.util.Collections.synchronizedList(mutableListOf<String>())
-        installRealTreeRuntime(context,service) { history,_ ->
+        installRealTreeRuntime(context,service) { history,runtime ->
             val goal=history.last { it.role=="user" }.content
             observed.add(goal)
             if (goal == "first message") {
+                // Isolate the session lane from hot-input intake: this owner has closed its ingress.
+                requireNotNull(runtime.mainChatSteeringProvider()).closeForRunExit()
                 firstStarted.countDown()
                 while (releaseFirst.count > 0) {
                     try { releaseFirst.await() } catch (_: InterruptedException) { }
@@ -1232,6 +1272,7 @@ class MainAgentInteractionTest {
             AgentRunUiState.resetSession(session)
             service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, firstId), 0, 1)
             assertTrue(firstStarted.await(5, TimeUnit.SECONDS))
+            val secondId=chatTestStore.onDatabaseWorker { store.appendConversationMessage(session,"user","second message") }
             service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, secondId), 0, 2)
             assertFalse(secondStarted.await(100, TimeUnit.MILLISECONDS))
             releaseFirst.countDown()
@@ -1524,10 +1565,13 @@ class MainAgentInteractionTest {
         }
     }
 
-    @Test fun hiddenStartRetainsApprovalUntilOwnerChatIsOpened() {
+    @Test fun hiddenStartRetainsGenerationBoundApprovalUntilOwnerChatIsOpened() {
         AgentRunUiState.resetSession("visible-before-start")
         AgentRunUiState.beginServiceRun("hidden-start-owner", "inspect then write", emptyList(), false, 82)
-        AgentRunUiState.showApproval("hidden-start-approval", "Write file", listOf("target"), null)
+        // Native presenters route by the requesting generation; legacy unscoped approvals are
+        // intentionally refused when unrelated active UI owners make their destination ambiguous.
+        AgentRunUiState.showApprovalForGeneration(82,"hidden-start-approval",
+            com.jarvys.agent.connectors.ApprovalSummary("Write file",listOf("target")))
         assertEquals("visible-before-start", AgentRunUiState.state.value.sessionId)
         assertTrue(AgentRunUiState.state.value.events.isEmpty())
         val user = AgentRunUiEvent.messageEvent(1, "user", "inspect then write", 1).copyMetadata("actual-user-id", 0)

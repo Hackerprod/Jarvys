@@ -53,3 +53,6 @@ All 51 cases are retained. This inventory describes the prior run-2 failures and
 - `synchronousCancellationIdleCheckCannotDestroyReplacementService`: Prior failure: noncanonical interactive session prevents intended assertion; canonical fixture repair
 - `steeringRemainsDurableWhenTheServiceExecutorIsShuttingDown`: Prior failure: noncanonical interactive session prevents intended assertion; canonical fixture repair
 - `selectedAppLocaleSurvivesApplicationContextNormalization`: Previously passed; preserved unchanged except shared fixture where applicable
+
+
+Run3's prior 51-case mapping produced 48 PASS and three remaining fixture failures. Their corrected scenarios now use one actual recovery turn with ordered pending inputs, append the serial follow-up only after closing first-provider ingress, and bind approval to the exact active generation. A new 52nd real-service regression tests hot-incorporated USER duplicate intents. It is unrun at this checkpoint; no production duplicate guard has been applied.

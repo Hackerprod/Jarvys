@@ -1,4 +1,4 @@
-# Fresh P2 integration ledger — additive codec gate OFF, acceptance pending
+# Fresh P2 integration ledger — local validation enabled, acceptance pending
 
 This is newly reconstructed source, not the unavailable former P2 candidate. The verified v98 delivery baseline is unchanged. Baseline pre-write proof passed Full81/Play81 on identical bytes; integrated typed checkpoint extension and complete native acceptance are still pending.
 
@@ -74,3 +74,6 @@ Controlled tool outcomes isolated two production defects: enrolled durable quest
 Typed routes retain actual PEER parent/answer and SUBORDINATE report provenance, not Chief or USER authority. New TREE_TASK binding hashes full parent provenance plus exact delivery and child cycle, created only in the native enrolled-parent assignment path. It is descriptive data; current token/Registry reservation, canonical producer/checkpoint validation and bind-before-executor still authorize execution. P1 continuation ACK logic does not reinterpret it. Six new codec/metadata cases and actual question/consult assertions require fresh pre-write proof; policy is OFF pending matching Full/Play105. Full acceptance cohort is now117 classes.
 
 Additional exact diagnostics showed one Central source fixture omitted its persisted USER history, and Activity startup refreshed stale/absent model-catalog caches. Fixtures now supply the real canonical history and seed valid fresh catalog entries with the existing codec; the global offline guard is unchanged. One current title-recovery fallback remains under diagnostic investigation, not declared fixed.
+
+
+The additive pre-write gate now passes matching Full105/Play105 and local acceptance is re-enabled. Main-chat fixture corrections now represent one real ordered recovery turn, a deliberately closed-ingress serial lane and generation-bound hidden approval. A separate actual-service hot-input/queued-duplicate regression is added (52 main-chat cases); the proposed production duplicate guard remains unapplied until the regression demonstrates the risk. Explicit regeneration is not reclassified as a duplicate.

@@ -7,7 +7,7 @@ internal object WorkspaceTreePolicy {
     const val MAX_REQUESTS=64L
     const val MAX_EXECUTIONS=96L
     const val MAX_WAKES=48L
-    // Existing pre-write99 passed. Admission OFF again pending additive TREE_TASK codec proof.
+    // Matching Full/Play pre-write105 passed for the additive TREE_TASK codec.
     // Final-source acceptance and independent implementation PASS remain mandatory.
-    @JvmStatic fun admissionEnabled():Boolean=false
+    @JvmStatic fun admissionEnabled():Boolean=true
 }
