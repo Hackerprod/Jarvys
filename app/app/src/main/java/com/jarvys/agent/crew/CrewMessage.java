@@ -75,10 +75,7 @@ public final class CrewMessage {
         this.text = text == null ? "" : text;
         this.refs = Collections.unmodifiableList(new ArrayList<>(refs == null ? Collections.emptyList() : refs));
         this.timestampMillis = timestampMillis;
-        if (inputBinding != null && (activity != null || !inputBinding.executionSessionId.equals(conversationId)
-                || !inputBinding.botId.equals(to) || !inputBinding.mailboxMessageId.equals(id)
-                || (inputBinding.sourceKind == CrewInputBinding.SourceKind.NATIVE_CORRECT
-                    ? type != Type.USER || !"user".equals(from) : type != Type.ANSWER || !"chief".equals(from))))
+        if (inputBinding != null && !inputBinding.matchesRouting(this))
             throw new IllegalArgumentException("Input binding does not match mailbox routing");
         if (coordination != null) {
             boolean source = coordination.botId.equals(from) && "chief".equals(to)

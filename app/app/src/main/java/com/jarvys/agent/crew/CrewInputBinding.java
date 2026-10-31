@@ -12,7 +12,7 @@ import org.json.JSONObject;
 
 /** Immutable source description. It never grants permission or establishes source authenticity. */
 public final class CrewInputBinding {
-    public enum SourceKind { WORKSPACE_REPLY, NATIVE_CORRECT, CONTINUATION_ANSWER }
+    public enum SourceKind { WORKSPACE_REPLY, NATIVE_CORRECT, CONTINUATION_ANSWER, TREE_REPORT, TREE_ANSWER }
     public final SourceKind sourceKind;
     public final String sourceId, ownerCentralSessionId, workspaceId, executionSessionId, assignmentId;
     public final String missionId, botId, mailboxMessageId, sourcePayloadSha256, deliverySha256, admissionCycleId;
@@ -37,6 +37,7 @@ public final class CrewInputBinding {
             String workspaceId, String executionSessionId, String assignmentId, String missionId,
             String botId, String mailboxMessageId, String sourcePayloadSha256, String admissionCycleId,
             String exactText) {
+        if (sourceKind == SourceKind.TREE_REPORT) throw new IllegalArgumentException("Tree reports require their exact subordinate sender");
         if (exactText == null || exactText.trim().isEmpty()) throw new IllegalArgumentException("Input text is required");
         String from = sourceKind == SourceKind.NATIVE_CORRECT ? "user" : "chief";
         CrewMessage.Type type = sourceKind == SourceKind.NATIVE_CORRECT ? CrewMessage.Type.USER : CrewMessage.Type.ANSWER;
@@ -46,14 +47,33 @@ public final class CrewInputBinding {
                 admissionCycleId);
     }
 
-    /** Sanitized copies may retain the binding, but can no longer mint original-input proof. */
-    public boolean matchesDelivery(CrewMessage message) {
+    /** Exact subordinate report; structural description only, never a Chief grant. */
+    public static CrewInputBinding treeReport(String sourceId, String ownerCentralSessionId,
+            String workspaceId, String executionSessionId, String assignmentId, String missionId,
+            String botId, String mailboxMessageId, String sourcePayloadSha256, String admissionCycleId,
+            String subordinateSender, CrewMessage.Type type, String exactText) {
+        if (!reportRoute(subordinateSender, type) || exactText == null || exactText.trim().isEmpty())
+            throw new IllegalArgumentException("Invalid exact tree report transport");
+        return new CrewInputBinding(SourceKind.TREE_REPORT, sourceId, ownerCentralSessionId, workspaceId,
+                executionSessionId, assignmentId, missionId, botId, mailboxMessageId, sourcePayloadSha256,
+                deliverySha256(mailboxMessageId,executionSessionId,subordinateSender,botId,type,exactText,Collections.emptyList()),
+                admissionCycleId);
+    }
+    private static boolean reportRoute(String from, CrewMessage.Type type) {
+        return from != null && !from.trim().isEmpty() && !"chief".equals(from) && !"user".equals(from)
+                && (type == CrewMessage.Type.RESULT || type == CrewMessage.Type.QUESTION);
+    }
+    boolean matchesRouting(CrewMessage message) {
         return message != null && mailboxMessageId.equals(message.id)
                 && executionSessionId.equals(message.conversationId) && botId.equals(message.to)
                 && message.activity == null && (sourceKind == SourceKind.NATIVE_CORRECT
                     ? message.type == CrewMessage.Type.USER && "user".equals(message.from)
-                    : message.type == CrewMessage.Type.ANSWER && "chief".equals(message.from))
-                && deliverySha256.equals(deliverySha256(message));
+                    : sourceKind == SourceKind.TREE_REPORT ? reportRoute(message.from,message.type)
+                    : message.type == CrewMessage.Type.ANSWER && "chief".equals(message.from));
+    }
+    /** Sanitized copies may retain the binding, but cannot mint original-input proof. */
+    public boolean matchesDelivery(CrewMessage message) {
+        return matchesRouting(message) && deliverySha256.equals(deliverySha256(message));
     }
 
     public boolean samePayload(CrewInputBinding other) {

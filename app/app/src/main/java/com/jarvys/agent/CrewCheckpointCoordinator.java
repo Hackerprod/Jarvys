@@ -57,7 +57,9 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
 
     @Override
     public CrewCheckpointStore.ConfirmedSnapshot persistConfirmed(CrewManager.Bot bot, List<CrewMessage> messages, List<CrewMessage> pending) {
-        return persistCheckpoint(bot, messages, pending, null, null);
+        CrewCheckpointStore.ConfirmedSnapshot saved=persistCheckpoint(bot,messages,pending,null,null);
+        if(saved!=null)WorkspaceTreeWorkerCoordinator.reconcileCheckpoint(context,saved);
+        return saved;
     }
 
     @Override public CrewCheckpointStore.ConfirmedSnapshot persistSuccessorConfirmed(CrewManager.Bot bot,
@@ -69,9 +71,38 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
         return committed;
     }
 
+    public CrewCheckpointStore.ConfirmedSnapshot prepareTreeSuccessorConfirmed(TreeSuccessorCertificate certificate) {
+        return store.prepareTreeSuccessorConfirmed(certificate);
+    }
+    public CrewCheckpointStore.ConfirmedSnapshot persistTreeSuccessorConfirmed(CrewManager.Bot bot,List<CrewMessage> messages,
+            List<CrewMessage> pending,CrewCheckpointStore.ConfirmedSnapshot expected,TreeSuccessorCertificate certificate) {
+        CrewCheckpointStore.ConfirmedSnapshot result=persistCheckpoint(bot,messages,pending,expected,null,certificate,null);
+        if(result==null)throw new IllegalStateException("Tree successor lost its current native owner");return result;
+    }
+    public CrewCheckpointStore.ConfirmedSnapshot persistTreeUserSuccessorConfirmed(CrewManager.Bot bot,List<CrewMessage> messages,
+            List<CrewMessage> pending,TreeUserControlCertificate certificate) {
+        CrewCheckpointStore.ConfirmedSnapshot result=persistCheckpoint(bot,messages,pending,certificate.source,null,null,certificate);
+        if(result==null)throw new IllegalStateException("Tree USER successor lost its current native owner");return result;
+    }
+    public CrewCheckpointStore.ConfirmedSnapshot persistTreeUserSameCycleConfirmed(CrewManager.Bot bot,List<CrewMessage> messages,
+            List<CrewMessage> pending,TreeUserControlCertificate certificate) {
+        CrewCheckpointStore.ConfirmedSnapshot result=persistCheckpoint(bot,messages,pending,certificate.source,null,null,certificate,true);
+        if(result==null)throw new IllegalStateException("Same-cycle USER correction lost its native owner");return result;
+    }
+    private CrewCheckpointStore.ConfirmedSnapshot persistCheckpoint(CrewManager.Bot bot,List<CrewMessage> messages,List<CrewMessage> pending,
+            CrewCheckpointStore.ConfirmedSnapshot expected,CentralContinuationRecord successor) {
+        return persistCheckpoint(bot,messages,pending,expected,successor,null,null);
+    }
     private CrewCheckpointStore.ConfirmedSnapshot persistCheckpoint(CrewManager.Bot bot,
             List<CrewMessage> messages, List<CrewMessage> pending,
-            CrewCheckpointStore.ConfirmedSnapshot expected, CentralContinuationRecord successor) {
+            CrewCheckpointStore.ConfirmedSnapshot expected, CentralContinuationRecord successor,
+            TreeSuccessorCertificate treeSuccessor,TreeUserControlCertificate treeUserControl) {
+        return persistCheckpoint(bot,messages,pending,expected,successor,treeSuccessor,treeUserControl,false);
+    }
+    private CrewCheckpointStore.ConfirmedSnapshot persistCheckpoint(CrewManager.Bot bot,
+            List<CrewMessage> messages,List<CrewMessage> pending,CrewCheckpointStore.ConfirmedSnapshot expected,
+            CentralContinuationRecord successor,TreeSuccessorCertificate treeSuccessor,TreeUserControlCertificate treeUserControl,
+            boolean sameCycleControl) {
         if (!canPersist(bot)) return null;
         try {
             boolean nativeTask = bot.role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT;
@@ -96,9 +127,19 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             metadata.put("missionPresentation", new JSONObject().put("schemaVersion", 1)
                     .put("title", title.title).put("titleSource", title.source)
                     .put("originalInstructions", bot.originalInstructions()));
+            if(treeSuccessor!=null)return store.saveTreeSuccessorConfirmed(expected,treeSuccessor,metadata,bot.scopeIdentity(),bot.checkpoint(),bot.artifactOwnership());
+            if(treeUserControl!=null)return sameCycleControl
+                ?store.saveTreeUserSameCycleConfirmed(treeUserControl,metadata,bot.scopeIdentity(),bot.checkpoint(),bot.artifactOwnership())
+                :store.saveTreeUserSuccessorConfirmed(treeUserControl,metadata,bot.scopeIdentity(),bot.checkpoint(),bot.artifactOwnership());
             if (successor != null)
                 return this.store.saveCentralContinuationSuccessor(expected, successor, metadata,
                         bot.scopeIdentity(), bot.checkpoint(), bot.artifactOwnership());
+            com.jarvys.agent.crew.CrewTreeSupport.WaitTicket ticket=bot.treeWaitTicket();
+            if(ticket!=null) {
+                CrewCheckpointStore.ConfirmedSnapshot source=this.store.confirmDurable(this.conversation,bot.id,bot.scopeIdentity());
+                if(source==null)throw new IllegalStateException("Tree wait has no confirmed native source");
+                return this.store.saveWorkerTreeWaitConfirmed(source,metadata,bot.scopeIdentity(),bot.checkpoint(),bot.artifactOwnership(),ticket.toJson());
+            }
             return this.store.saveConfirmed(this.conversation, bot.id, metadata, bot.scopeIdentity(), bot.checkpoint(), bot.artifactOwnership());
         } catch (CancellationException cancelled) {
             throw cancelled;
@@ -156,6 +197,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         if (nativeTask) {
                             requireNativeIdentity(context, conversation, saved);
                             requireNativeSafePoint(saved);
+                            WorkspaceTreeWorkerCoordinator.reconcileCheckpoint(context,saved);
                             role = nativeRole(data);
                             manager.validateCheckpointRole(role);
                             if (!owners.isEmpty()) throw new IllegalStateException("Native checkpoint has uninspectable job ownership");
@@ -282,6 +324,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                 if (saved == null) throw new IllegalStateException("Native checkpoint is missing");
                 requireNativeIdentity(context, conversation, saved);
                 requireNativeSafePoint(saved);
+                            WorkspaceTreeWorkerCoordinator.reconcileCheckpoint(context,saved);
                 return;
             }
             ProjectScope scope = new ProjectScopeStore(this.context.getFilesDir()).openExisting(this.conversation);
@@ -304,6 +347,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             if (saved.scopeIdentity.startsWith("native-workspace:")) {
                 requireNativeIdentity(context, conversation, saved);
                 requireNativeSafePoint(saved);
+                            WorkspaceTreeWorkerCoordinator.reconcileCheckpoint(context,saved);
                 if (role.workspaceMode != CrewProfile.WorkspaceMode.LEGACY_CHAT
                         || role.missionAccess != bot.role.missionAccess
                         || !role.tools.containsAll(bot.role.tools))
@@ -369,9 +413,14 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
     static void requireNativeIdentity(Context context, String conversation, CrewCheckpointStore.ConfirmedSnapshot saved) {
         try {
             JSONObject data = saved.metadataJson();
-            CentralContinuationRecord record = CentralContinuationRecord.fromJson(data.optJSONObject(CentralContinuationRecord.FIELD));
-            record.requireCheckpoint(conversation, saved.botId, saved.scopeIdentity, data);
-            JSONObject continuation = record.toJson();
+            JSONObject continuation=null;
+            if(data.has(CentralContinuationRecord.FIELD)) {
+                CentralContinuationRecord record=CentralContinuationRecord.fromJson(data.optJSONObject(CentralContinuationRecord.FIELD));
+                record.requireCheckpoint(conversation,saved.botId,saved.scopeIdentity,data);
+                continuation=record.toJson();
+            } else {
+                WorkspaceTreeWorkerCoordinator.requireCertifiedCheckpointIdentity(context,conversation,saved);
+            }
             com.jarvys.agent.workspaces.WorkspaceRegistry registry = new com.jarvys.agent.workspaces.WorkspaceRegistry(context);
             try {
                 String workspaceId = com.jarvys.agent.workspaces.WorkspaceIdentity.workspaceId(conversation);
@@ -383,7 +432,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         || assignment.getState() != com.jarvys.agent.workspaces.WorkspaceAssignmentState.BOUND
                         || !saved.botId.equals(assignment.getBotId())
                         || !data.getString("missionId").equals(assignment.getMissionId())
-                        || !continuation.getString("requestId").equals(assignment.getRequestId())
+                        || (continuation != null && !continuation.getString("requestId").equals(assignment.getRequestId()))
                         || !data.getJSONObject("role").getString("id").equals(assignment.getRole())
                         || !assignment.getMissionAccess().value.equals(data.getString("missionAccess")))
                     throw new IllegalStateException("Native checkpoint assignment ownership changed");
@@ -411,6 +460,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             if (saved.metadataJson().getJSONArray("jobOwners").length() != 0)
                 throw new IllegalStateException("Native checkpoint has uninspectable job ownership");
         } catch (JSONException invalid) { throw new IllegalStateException("Native job ownership is unavailable", invalid); }
+        Set<String> verifiedTreeCalls=WorkspaceTreeWorkerCoordinator.verifiedTreeCalls(context,saved);
         Set<String> retainedCalls = new HashSet<>();
         Set<String> usedQuestionReceipts = new HashSet<>();
         for (ConversationTurn turn : raw.transcript) for (ModelReply.Call call : turn.toolCalls) retainedCalls.add(call.id);
@@ -423,6 +473,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             String state = raw.toolLifecycle.get(call.id);
             if ("NEVER_LAUNCHED".equals(state)) continue;
             if (!"RESULT".equals(state)) throw new IllegalStateException("Native checkpoint tool has no terminal receipt");
+            if (verifiedTreeCalls.contains(call.id)) continue;
             if ("board_read".equals(call.name) || "memory_search".equals(call.name) || "memory_get".equals(call.name)) continue;
             if ("ask_chief".equals(call.name)) {
                 String text = String.valueOf(call.arguments.get("question"));

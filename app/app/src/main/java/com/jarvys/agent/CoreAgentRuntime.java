@@ -108,6 +108,12 @@ public final class CoreAgentRuntime {
   private volatile String mainChatSteeringCursor = "";
   private volatile String currentUserMessageId = "";
   private volatile String currentTurnOwnerMessageId = "";
+  private CentralTreeAdmission centralTreeAdmission;
+  synchronized void bindCentralTreeAdmission(CentralTreeAdmission authority,CancellationToken token) {
+    if(centralTreeAdmission!=null || context==null || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId))
+      throw new IllegalStateException("Invalid Central tree capability binding");
+    authority.requireCurrent(token);centralTreeAdmission=authority;
+  }
   private ConversationInput claimedContinuationInput;
   private CancellationToken claimedContinuationToken;
   private boolean claimedContinuationUsed;
@@ -356,6 +362,7 @@ public final class CoreAgentRuntime {
       final CancellationToken token,
       CoreAgentLoop.ProgressListener listener) {
     final String runId = nextRuntimeRunId(mainChat, token);
+    if(centralTreeAdmission!=null)centralTreeAdmission.revalidateSource(token);
     CoreToolRegistry toolRegistry = createTools();
     if (!mainChat) {
       List<String> available = new ArrayList<>(toolRegistry.names());
@@ -376,11 +383,16 @@ public final class CoreAgentRuntime {
       CoreTool workspace = new com.jarvys.agent.workspaces.CentralWorkspaceTool(context, sessionId,
           com.jarvys.agent.crew.CrewProcessIdentity.ID + ":" + UUID.randomUUID(),
           request,
-          new com.jarvys.agent.workspaces.WorkspaceCoordinator(context));
+          new com.jarvys.agent.workspaces.WorkspaceCoordinator(context), centralTreeAdmission);
       if (allowed(workspace)) toolRegistry = toolRegistry.with(Collections.singletonList(workspace));
       List<String> centralTools = new ArrayList<>(toolRegistry.names());
       centralTools.remove("delegate_subtask");
       toolRegistry = toolRegistry.subset(centralTools);
+    }
+    if(centralTreeAdmission!=null) {
+      List<String> rootedTools=new ArrayList<>(toolRegistry.names());
+      rootedTools.remove("delegate_subtask");rootedTools.remove("crew_spawn");
+      toolRegistry=toolRegistry.subset(rootedTools);
     }
     final MainChatTranscriptStore transcriptStore = mainChat && context != null
         ? new MainChatTranscriptStore(context.getFilesDir(), sessionId, new LocalRunStore(context)) : null;
@@ -491,8 +503,12 @@ public final class CoreAgentRuntime {
           new CoreAgentLoop(
               scopedModel, observedToolRegistry, runInstructions, sessionId, budget, compactor,
               CoreAgentLoop.ToolResultBudget.BOUNDED, turnContextProvider, new ProviderRetryWaiter());
-      if (transcriptStore != null) transcriptStore.attach(loop, history, currentTurnOwnerMessageId, runId);
+      if (transcriptStore != null) {
+        if(centralTreeAdmission!=null)transcriptStore.enableTreeExitReceipt();
+        transcriptStore.attach(loop, history, currentTurnOwnerMessageId, runId);
+      }
       CoreAgentLoop.Result completed = loop.run(request, history, attachments, token, listener, currentUserMessageId, runId);
+      if(centralTreeAdmission!=null)centralTreeAdmission.confirmExit(transcriptStore.confirmTreeExit(loop.checkpointSnapshot(),runId),token);
       if (runKind() == RunKind.PRINCIPAL && mainChat && depth == 0 && context != null
           && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
           && memorySessionBinding != null && memorySessionTicket != null && "COMPLETED".equals(completed.outcome)) {
@@ -828,8 +844,11 @@ public final class CoreAgentRuntime {
         if (!CoreAgentRuntime.this.sessionId.equals(evidence.conversationId))
           throw new IllegalArgumentException("Result evidence owner changed");
         crewStore.appendCrewResultEvidence(evidence, () -> {});
-        WorkspaceContinuationDelivery.recordLiveResult(CoreAgentRuntime.this.context, manager, evidence);
         com.jarvys.agent.workspaces.WorkspaceChanges.resultEvidenceSaved(evidence.conversationId, evidence.missionId, evidence.evidenceId);
+      }
+      @Override public void afterResult(com.jarvys.agent.crew.CrewResultEvidence evidence) {
+        // Manager calls this only after exact enrolled tree settle/report succeeds. Scans never mint this permit.
+        WorkspaceContinuationDelivery.recordLiveResult(CoreAgentRuntime.this.context, manager, evidence);
         WorkspaceResultDelivery.schedule(CoreAgentRuntime.this.context, evidence.conversationId);
       }
       @Override public void onDeliveryFailure(com.jarvys.agent.crew.CrewResultEvidence evidence, RuntimeException failure) {
@@ -892,6 +911,8 @@ public final class CoreAgentRuntime {
               }
             });
     manager.configureCheckpoints(checkpoints);
+    // Retained enrolled fences stay installed even when new admissions are disabled.
+    if(workspaceExecution)new WorkspaceTreeWorkerCoordinator(this.context,this.sessionId,manager).install();
     if (WorkspaceCoordinationDelivery.isCanonicalWorkspace(this.context, this.sessionId)) {
       manager.setCheckpointCommittedListener(() ->
           WorkspaceCoordinationDelivery.schedule(CoreAgentRuntime.this.context, CoreAgentRuntime.this.sessionId));
@@ -1313,7 +1334,7 @@ public final class CoreAgentRuntime {
                       profileSkills, this.budget.loadedSkillChars,
                       id -> skillCurrentlyAvailable(id, skillProfileId), skillProfileId)));
     }
-    if (bot.role.tools.contains("delegate_subtask")) {
+    if (manager.treeSupport(bot)==null && bot.role.tools.contains("delegate_subtask")) {
       scoped =
           scoped.with(Collections.singletonList(delegationTool(scoped, profileSkills, 2, false)));
     }
@@ -1335,6 +1356,12 @@ public final class CoreAgentRuntime {
     }
     CrewBoard board = new CrewBoard(WorkspaceStore.forCrewBoard(context, sessionId));
     CoreToolRegistry effective = scoped.with(CrewTools.bot(bot, manager, board));
+    if(manager.treeSupport(bot)!=null){
+      List<String> treeSkills=new ArrayList<>();
+      for(SkillEntry skill:profileSkills)treeSkills.add(skill.getMetadata().getId());
+      // Use the actual native worker catalog, including scoped Crew handlers, never captain authority.
+      effective=effective.with(WorkspaceTreeWorkerTools.create(manager,bot,effective,treeSkills));
+    }
     if (!effective.names().containsAll(bot.role.tools)) {
       throw new IllegalArgumentException(
           "Profile capability is no longer available in this bot scope");

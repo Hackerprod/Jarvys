@@ -32,7 +32,9 @@ internal data class TreeWait(val rootId:String,val waitId:String,val parentNodeI
     val state:TreeWaitState,val sourceReceipt:String,val checkpointCertificate:String?,val checkpointSha256:String?,
     val selectedCauses:List<TreeCause>?,val successorIntent:String?,val ownerProcess:String?,val ownerGeneration:String?,
     val ownerToken:String?,val incorporationReceipt:String?)
-internal data class TreeWaitClaim(val wait:TreeWait,val causes:List<TreeCause>,val executionEventId:String)
+internal data class TreeWaitClaim(val wait:TreeWait,val causes:List<TreeCause>,val executionEventId:String,
+    val sourceAssignmentRevision:Long,val admittedAssignmentRevision:Long)
+internal data class TreeUserWaitClaim(val waitClaim:TreeWaitClaim,val control:WorkspaceUserControl)
 internal data class TreeControlClaim(val node:TreeNode,val control:WorkspaceUserControl,val executionEventId:String?)
 internal class TreeIntegrityException(message:String):IllegalStateException(message)
 internal class TreeIneligibleException(message:String):IllegalStateException(message)

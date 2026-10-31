@@ -246,6 +246,23 @@ class MainAgentInteractionTest {
         }
     }
 
+    /** Offline provider only; retain native runtime checkpoint/source/exit receipt path. */
+    private fun installRealTreeRuntime(context:Context,service:AgentForegroundService,
+        reply:(List<ConversationTurn>,CoreAgentRuntime)->ModelReply) {
+        ProviderSettings(context).apply {setProvider(ProviderSettings.Provider.OPENROUTER);setOpenRouterModel("offline/interaction-tree")}
+        check(context.getSharedPreferences("provider_context_metadata",0).edit().putInt("model_offline/interaction-tree",32768)
+            .putLong("fetched_offline/interaction-tree",System.currentTimeMillis()).commit())
+        service.runtimeFactory=AgentForegroundService.RuntimeFactory {c,id,skills ->
+            val runtime=AtomicReference<CoreAgentRuntime>()
+            val provider=object:ModelProviderClient {
+                override fun complete(systemPrompt:String,userPrompt:String,images:List<com.jarvys.agent.device.ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=error("Conversation expected")
+                override fun completeConversation(systemPrompt:String,history:List<ConversationTurn>,userPrompt:String,images:List<com.jarvys.agent.device.ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=reply(history,runtime.get())
+            }
+            CoreAgentRuntime(c,id,skills,CorePromptBudget.standard(),provider).also {runtime.set(it)}
+        }
+        service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->runtime.runMainChat(goal,history,attachments,token,progress)}
+    }
+
     @Test fun steeringAdmittedAfterRunExitIsPickedUpExactlyOnce() {
         StopController.getInstance().stopRun()
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -264,20 +281,12 @@ class MainAgentInteractionTest {
         val calls = AtomicInteger()
         val accepted = AtomicReference<Boolean>()
         val senderFailure = AtomicReference<Throwable?>()
-        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, progress ->
-            if (calls.incrementAndGet() == 1) {
+        installRealTreeRuntime(context,service) {_,_ ->
+            if(calls.incrementAndGet()==1){
                 initialEntered.countDown()
-                while (releaseInitial.count > 0) {
-                    try { releaseInitial.await() } catch (_: InterruptedException) { }
-                }
-                initialResultReady.set(true)
-                progress.onInitialUserMessageIncorporated()
-                CoreAgentLoop.Result("initial-race-run", "initial done", 1, "COMPLETED")
-            } else {
-                followUpEntered.countDown()
-                progress.onInitialUserMessageIncorporated()
-                CoreAgentLoop.Result("follow-up-race-run", "follow-up done", 1, "COMPLETED")
-            }
+                while(releaseInitial.count>0){try{releaseInitial.await()}catch(_:InterruptedException){}}
+                initialResultReady.set(true);ModelReply("initial done",emptyList())
+            }else{followUpEntered.countDown();ModelReply("follow-up done",emptyList())}
         }
         service.beforeInterruptAdmissionForTesting = Runnable {
             admissionReached.countDown()
@@ -708,30 +717,15 @@ class MainAgentInteractionTest {
         val modelCalls = AtomicInteger()
         val finalAnswer = CountDownLatch(1)
         val secondModelMessages = AtomicReference<List<String>>(emptyList())
-        service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills ->
-            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard())
-        }
-        service.mainChatRunner = AgentForegroundService.MainChatRunner { runtime, goal, history, attachments, token, progress ->
-            val provider = runtime.mainChatSteeringProvider()!!
-            val loop = CoreAgentLoop(object : CoreAgentLoop.Model {
-                override fun complete(transcript: List<ConversationTurn>, prompt: String,
-                    declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
-                    if (modelCalls.incrementAndGet() == 1) {
-                        val requestId = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(
-                            session, "steering request", emptyList()) }
-                        assertTrue(provider.dispatchPendingRequest(requestId))
-                        return ModelReply("A1", emptyList())
-                    }
-                    val messages = transcript.filter { it.kind == ConversationTurn.Kind.MESSAGE }
-                        .map { "${it.role}:${it.content}" }
-                    secondModelMessages.set(messages)
-                    finalAnswer.countDown()
-                    return ModelReply("A2", emptyList())
-                }
-            }, CoreToolRegistry(emptyList()), "", session, CorePromptBudget.standard(), null,
-                CoreAgentLoop.ToolResultBudget.BOUNDED, provider, null)
-            MainChatTranscriptStore(context.filesDir, session, store).attach(loop, history)
-            loop.run(goal, history, attachments, token, progress, initialId)
+        installRealTreeRuntime(context,service) {transcript,runtime ->
+            val provider=runtime.mainChatSteeringProvider()!!
+            if(modelCalls.incrementAndGet()==1){
+                val requestId=chatTestStore.onDatabaseWorker {store.appendInterruptRequest(session,"steering request",emptyList())}
+                assertTrue(provider.dispatchPendingRequest(requestId));ModelReply("A1",emptyList())
+            }else{
+                secondModelMessages.set(transcript.filter {it.kind==ConversationTurn.Kind.MESSAGE}.map {"${it.role}:${it.content}"})
+                finalAnswer.countDown();ModelReply("A2",emptyList())
+            }
         }
         try {
             AgentRunUiState.resetSession(session)

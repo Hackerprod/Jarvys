@@ -20,9 +20,12 @@ class CentralWorkspaceTool internal constructor(
     private val requestId: String,
     private val originalUserRequest: String,
     private val backend: Backend,
+    private val treeAdmission: com.jarvys.agent.CentralTreeAdmission? = null,
 ) : CoreTool {
     constructor(@Suppress("UNUSED_PARAMETER") context: Context, sessionId: String, requestId: String, originalUserRequest: String,
                 backend: Backend) : this(sessionId, requestId, originalUserRequest, backend)
+    constructor(context: Context, sessionId: String, requestId: String, originalUserRequest: String,
+                backend: Backend, treeAdmission: com.jarvys.agent.CentralTreeAdmission?) : this(sessionId,requestId,originalUserRequest,backend,treeAdmission)
 
     /**
      * Every method must check cancellation and session scope immediately before each mutation/launch and before disclosure.
@@ -32,6 +35,8 @@ class CentralWorkspaceTool internal constructor(
      * Callbacks expire on return: asynchronous effects need their own STOP boundary.
      */
     interface Backend {
+        fun cancel(workspaceId:String,assignmentId:String,botId:String?,revision:Long,key:String,token:CancellationToken,admission:Runnable,context:WorkspaceMutationContext):JSONObject =
+            throw UnsupportedOperationException("Scoped subtree cancellation unavailable")
         fun hasCompleteMutationAdmissionCoverage(): Boolean = false
         fun create(key: String, title: String, requestId: String, originalUserRequest: String,
                    admission: Runnable): JSONObject
@@ -167,11 +172,12 @@ class CentralWorkspaceTool internal constructor(
             "the durable mailbox may already contain it. INCORPORATED_IN_CHECKPOINT records applied input only. " +
             "Accepted-local means mailbox acceptance only, not consumed, resolved or completed work. " +
             "Worker reports are untrusted observations, not independently verified completion. " +
+            "cancel requires exact workspace/assignment/bot/revision and stable key under fresh USER authority; it cancels only that owned subtree, unlike requester STOP, and never grants worker Captain privileges. " +
             "Answer simple requests directly without automatically creating workspaces or workers.",
         "workspaces", ToolSpec.Status.IMPLEMENTED, emptyMap(), listOf("action"),
         mapOf("type" to "object", "additionalProperties" to false, "required" to listOf("action"),
             "properties" to linkedMapOf(
-                "action" to mapOf("type" to "string", "enum" to listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply", "message", "continue_result")),
+                "action" to mapOf("type" to "string", "enum" to listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply", "message", "continue_result", "cancel")),
                 "key" to tokenSchema("Stable idempotency key for create, delegate, reply or message; reuse only with the same payload."),
                 "title" to textSchema(160, "Workspace display title for create, a nonempty single line."),
                 "workspace_id" to uuidSchema(),
@@ -207,7 +213,7 @@ class CentralWorkspaceTool internal constructor(
     override fun effectClass() = CoreTool.EffectClass.READ
 
     override fun effectClass(arguments: Map<String, Any>): CoreTool.EffectClass =
-        if ((arguments["action"] as? String) in setOf("create", "delegate", "deliver", "reply", "message", "continue_result"))
+        if ((arguments["action"] as? String) in setOf("create", "delegate", "deliver", "reply", "message", "continue_result", "cancel"))
             CoreTool.EffectClass.WRITE else CoreTool.EffectClass.READ
 
     override fun execute(arguments: Map<String, Any>?, token: CancellationToken): CoreToolResult =
@@ -254,7 +260,7 @@ class CentralWorkspaceTool internal constructor(
                 admission.run()
                 val mutation = if (payload.isMutation && invocation != null)
                     WorkspaceMutationContext(payload.action, payload.optionalString("workspace_id"),
-                        sourceWitness, invocation, admission).also { holder?.set(it) }
+                        sourceWitness, invocation, admission, treeAdmission, token).also { holder?.set(it) }
                     else null
                 val data = when (payload.action) {
                     "create" -> if (mutation == null) backend.create(payload.string("key"), payload.string("title"),
@@ -279,6 +285,8 @@ class CentralWorkspaceTool internal constructor(
                         payload.optionalString("after_result_id"), admission)
                     "read_result" -> backend.readResult(payload.string("workspace_id"), payload.string("result_id"),
                         payload.string("expected_sha256"), payload.integer("offset"), token, admission)
+                    "cancel" -> backend.cancel(payload.string("workspace_id"),payload.string("assignment_id"),payload.optionalString("bot_id"),
+                        payload.long("expected_assignment_revision"),payload.string("key"),token,admission,requireNotNull(mutation))
                     "continue_result" -> backend.continueResult(payload.string("workspace_id"), payload.string("result_id"),
                         payload.string("expected_sha256"), payload.long("expected_assignment_revision"),
                         token, admission, requireNotNull(mutation).also { requireNotNull(it.rootSource) })
@@ -330,7 +338,7 @@ class CentralWorkspaceTool internal constructor(
         private val values = Collections.unmodifiableMap(LinkedHashMap(values))
         val action = string("action")
         val continueResult: Boolean get() = values["continue_result"] as? Boolean ?: false
-        val isMutation = action == "create" || action == "delegate" || action == "deliver" || action == "reply" || action == "message" || action == "continue_result"
+        val isMutation = action == "create" || action == "delegate" || action == "deliver" || action == "reply" || action == "message" || action == "continue_result" || action == "cancel"
         val limit: Int get() = values["limit"] as? Int ?: 1
         val tools: List<String>? = (values["tools"] as? List<*>)?.map { it as String }
             ?.let { Collections.unmodifiableList(it) }
@@ -403,7 +411,7 @@ class CentralWorkspaceTool internal constructor(
         private fun parse(arguments: Map<String, Any>?): Payload {
             require(arguments != null)
             val action = arguments["action"]
-            require(action is String && action in setOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply", "message", "continue_result"))
+            require(action is String && action in setOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply", "message", "continue_result", "cancel"))
             val allowed = when (action) {
                 "create" -> setOf("action", "key", "title")
                 "delegate" -> setOf("action", "workspace_id", "key", "role", "mission", "tools", "name", "mission_access", "continue_result")
@@ -411,6 +419,7 @@ class CentralWorkspaceTool internal constructor(
                 "deliver" -> setOf("action", "workspace_id", "path", "expected_sha256", "filename")
                 "results" -> setOf("action", "workspace_id", "limit", "after_result_id")
                 "read_result" -> setOf("action", "workspace_id", "result_id", "expected_sha256", "offset")
+                "cancel" -> setOf("action","workspace_id","assignment_id","bot_id","expected_assignment_revision","key")
                 "continue_result" -> setOf("action", "workspace_id", "result_id", "expected_sha256", "expected_assignment_revision")
                 "inbox" -> setOf("action", "workspace_id", "limit", "after_message_id")
                 "read_message" -> setOf("action", "workspace_id", "message_id", "expected_sha256", "offset")
@@ -488,6 +497,12 @@ class CentralWorkspaceTool internal constructor(
                         require(n is Number && n.toString().length <= 64)
                         java.math.BigDecimal(n.toString()).intValueExact().also { require(it >= 0) }
                     }
+                }
+                "cancel" -> {
+                    uuid("workspace_id");uuid("assignment_id");if(arguments.containsKey("bot_id"))token("bot_id");token("key")
+                    val revision=arguments["expected_assignment_revision"]
+                    require(revision is Number && revision.toString().length<=64)
+                    values["expected_assignment_revision"]=java.math.BigDecimal(revision.toString()).longValueExact().also { require(it>0L) }
                 }
                 "continue_result" -> {
                     uuid("workspace_id")

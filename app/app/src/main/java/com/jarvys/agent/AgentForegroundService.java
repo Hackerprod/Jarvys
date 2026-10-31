@@ -1674,6 +1674,8 @@ public final class AgentForegroundService extends Service {
         new AtomicReference<>(existingUserMessageId == null ? "" : existingUserMessageId);
     final AtomicBoolean assistantOwnerInternal = new AtomicBoolean(internalInput);
     MainChatTurnContextProvider steeringProvider = null;
+    CentralTreeAdmission treeAdmission=null;
+    final boolean exactUserOrigin=!userMessageAlreadyRecorded || (existingUserMessageId!=null && !existingUserMessageId.isEmpty());
     try {
       token.throwIfCancelled();
       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
@@ -1732,7 +1734,13 @@ public final class AgentForegroundService extends Service {
               : skills.selectedForRun(selectedSkillIds);
       List<String> usedSkillIds = new ArrayList<>();
       for (SkillEntry skill : enabledSkills) usedSkillIds.add(skill.getMetadata().getId());
+      if(com.jarvys.agent.workspaces.WorkspaceTreePolicy.admissionEnabled()
+          && WorkspaceIdentity.isCentral(sessionId) && !internalInput && !regeneration && exactUserOrigin)
+        treeAdmission=CentralTreeAdmission.beginUser(this,conversationStore,sessionId,userMessageId,token);
+      if(storedInput!=null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance))
+        treeAdmission=CentralTreeAdmission.captureClaimed(this,conversationStore,storedInput,token);
       CoreAgentRuntime runtime = runtimeFactory.create(this, sessionId, enabledSkills);
+      if(treeAdmission!=null)runtime.bindCentralTreeAdmission(treeAdmission,token);
       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance))
         runtime.bindClaimedContinuation(storedInput, token);
       runtime.withMemorySessionRegeneration(regeneration, memoryResumeAdmission);
@@ -1744,6 +1752,7 @@ public final class AgentForegroundService extends Service {
       skills.markUsed(usedSkillIds);
       final String reflectionUserMessageId = userMessageId == null ? "" : userMessageId;
       assistantOwnerMessageId.set(reflectionUserMessageId);
+      final CentralTreeAdmission runTreeAdmission=treeAdmission;
       CoreAgentLoop.ProgressListener progress =
           new CoreAgentLoop.ProgressListener() {
             @Override
@@ -1765,6 +1774,8 @@ public final class AgentForegroundService extends Service {
               if (incorporatedIds.isEmpty()) return;
               CentralAgentInputCatalog.acknowledge(conversationStore, sessionId, incorporatedIds, agentIds);
               WorkspaceContinuationDelivery.acknowledge(AgentForegroundService.this, storedInput);
+              if(runTreeAdmission!=null && storedInput!=null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance))
+                runTreeAdmission.acknowledgeClaimed(AgentForegroundService.this,storedInput);
               if (internalInput) {
                 assistantOwnerInternal.set(true);
                 AgentRunUiState.markInternalConversationInput(sessionId, token.generation());
@@ -1797,6 +1808,7 @@ public final class AgentForegroundService extends Service {
               }
               if (incorporatedIds.isEmpty()) return;
               CentralAgentInputCatalog.acknowledge(conversationStore, sessionId, incorporatedIds, agentIds);
+              if(runTreeAdmission!=null)runTreeAdmission.bindIncomingOwner(AgentForegroundService.this,messages,token);
               assistantOwnerMessageId.set(latestId);
               assistantOwnerInternal.set(latestInternal);
               if (latestInternal) AgentRunUiState.markInternalConversationInput(sessionId, token.generation());
@@ -1932,6 +1944,7 @@ public final class AgentForegroundService extends Service {
               timedOut ? "PARTIAL" : result.outcome,
               proactiveThreadKey);
       String responseOutcome = timedOut ? "PARTIAL" : result.outcome;
+      if(treeAdmission!=null && "COMPLETED".equals(responseOutcome))treeAdmission.finishSuccessful(this,assistantMessageId);
       if (isTerminalFailure(responseOutcome) && !assistantOwnerInternal.get()) {
         conversationStore.markConversationMessagesResolved(sessionId,
             java.util.Collections.singletonList(assistantOwnerMessageId.get()));
@@ -2004,6 +2017,10 @@ public final class AgentForegroundService extends Service {
           enqueueStoredMessageFollowUp(sessionId, steeringProvider.latestUnincorporatedSteeringMessageId());
       }
     } finally {
+      if(treeAdmission!=null) {
+        try {treeAdmission.stopOwnedRoot(this);} catch(RuntimeException failure){reportStopPersistenceFailure(failure);}
+        finally {treeAdmission.close();}
+      }
       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
         try {
           if (token.wasStoppedByUser()) WorkspaceContinuationDelivery.cancelPendingInput(this, storedInput);

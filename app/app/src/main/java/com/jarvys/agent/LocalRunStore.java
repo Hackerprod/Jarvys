@@ -785,6 +785,12 @@ public final class LocalRunStore {
         return saved.getMessageId();
     }
 
+    /** Exact canonical USER source; no latest-user or provenance override. */
+    public com.jarvys.agent.chatdb.CentralUserRootCheckpoint captureCentralUserRoot(String sessionId,String messageId) {
+        if(chatDatabaseBridge==null)throw noChatDatabase();
+        return chatDatabaseBridge.captureCentralUserRootSync(sessionId,messageId);
+    }
+
     /** Restores the typed input metadata stored with an AGENT/SYSTEM message row. */
     public ConversationInput readConversationInput(String sessionId, String messageId) {
         if (sessionId == null || messageId == null || chatDatabaseBridge == null) return null;

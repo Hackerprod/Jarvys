@@ -76,11 +76,18 @@ public final class CentralContinuationRecord {
     }
 
     /** No mutation may discard lineage, consume twice, reset a claim, or manufacture a cycle replacement. */
-    public void requireSuccessor(CentralContinuationRecord next) {
+    public void requireSuccessor(CentralContinuationRecord next) { requireSuccessor(next,false); }
+    void requireTreeSuccessor(CentralContinuationRecord next) { requireSuccessor(next,true); }
+    private void requireSuccessor(CentralContinuationRecord next,boolean nativeTreeWrite) {
         JSONObject a = toJson(), b = next.toJson();
         require(revision() < Long.MAX_VALUE && next.revision() == revision() + 1, "Continuation revision conflict");
         for (String key : IDENTITY) require(equal(a.opt(key), b.opt(key)), "Immutable continuation identity: " + key);
         JSONArray oldLinks = a.optJSONArray("links"), links = b.optJSONArray("links");
+        if(!nativeTreeWrite) for(int i=0;i<links.length();i++) {
+            JSONObject link=links.optJSONObject(i);
+            if("CHILD_WAIT".equals(link.optString("controlType")))
+                require(i<oldLinks.length()&&equal(oldLinks.opt(i),link),"Generic write cannot create or change native child-wait lineage");
+        }
         require(links.length() >= oldLinks.length() && links.length() <= oldLinks.length() + 1, "Lineage cannot be removed or batched");
         for (int i = 0; i < oldLinks.length(); i++) {
             JSONObject old = oldLinks.optJSONObject(i), value = links.optJSONObject(i);
@@ -168,7 +175,13 @@ public final class CentralContinuationRecord {
             for (int i=0;i<links.length();i++) {
                 JSONObject link = links.getJSONObject(i);
                 require(controls.add(text(link,"controlId")), "Duplicate control link");
-                oneOf(text(link,"controlType"), "RESUME", "CORRECT");
+                oneOf(text(link,"controlType"), "RESUME", "CORRECT", "CHILD_WAIT");
+                boolean childWait="CHILD_WAIT".equals(text(link,"controlType"));
+                if(childWait) {
+                    text(link,"treeRootId");text(link,"treeNodeId");text(link,"treeWaitId");
+                    require(integer(link,"treeWaitRevision")>0,"Missing Registry wait claim revision");digest(text(link,"treeClaimSha256"));
+                    require(text(link,"controlId").equals("child-wait:"+text(link,"treeRootId")+":"+text(link,"treeWaitId")),"Child wait identity changed");
+                }
                 require(integer(link,"observedAssignmentRevision") > 0, "Invalid observed revision");
                 require(cycle.equals(text(link,"oldCycleId")), "Disconnected cycle lineage");
                 digest(text(link,"originCheckpointSha256"));
@@ -179,6 +192,7 @@ public final class CentralContinuationRecord {
                 String state=text(link,"state"); oneOf(state,"PREPARED","BOUND");
                 if("BOUND".equals(state)) {
                     require(integer(link,"admittedAssignmentRevision") > integer(link,"observedAssignmentRevision"), "Invalid admitted revision");
+                    if(childWait)require(integer(link,"admittedAssignmentRevision")==integer(link,"observedAssignmentRevision")+1,"Invalid child-wait execution revision");
                     cycle=text(link,"newCycleId");uuid(cycle); require(cycles.add(cycle), "Cycle reused");
                 } else require(i==links.length()-1 && "".equals(link.getString("newCycleId")), "Invalid pending link");
             }
@@ -248,6 +262,7 @@ public final class CentralContinuationRecord {
             for(Iterator<String> it=x.keys();it.hasNext();) {String k=it.next();if(!y.has(k)||!equal(x.opt(k),y.opt(k)))return false;}return true;
         }
         if(a instanceof JSONArray&&b instanceof JSONArray) {JSONArray x=(JSONArray)a,y=(JSONArray)b;if(x.length()!=y.length())return false;for(int i=0;i<x.length();i++)if(!equal(x.opt(i),y.opt(i)))return false;return true;}
+        if((a instanceof Integer||a instanceof Long)&&(b instanceof Integer||b instanceof Long))return ((Number)a).longValue()==((Number)b).longValue();
         return a.equals(b);
     }
     private static boolean equalWithoutRevision(JSONObject a,JSONObject b) {JSONObject x=copy(a),y=copy(b);x.remove("revision");y.remove("revision");return equal(x,y);}

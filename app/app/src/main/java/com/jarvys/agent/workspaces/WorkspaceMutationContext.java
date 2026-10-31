@@ -11,6 +11,8 @@ public final class WorkspaceMutationContext {
     public final String action;
     public final String workspaceId;
     public final CentralInvocationSource rootSource;
+    public final com.jarvys.agent.CentralTreeAdmission treeAdmission;
+    private final com.jarvys.agent.CancellationToken treeToken;
     private final EffectInvocation invocation;
     private final CentralInvocationWitness sourceWitness;
     private final Runnable checkAccess;
@@ -20,6 +22,12 @@ public final class WorkspaceMutationContext {
 
     WorkspaceMutationContext(String action, String workspaceId, CentralInvocationWitness sourceWitness,
             EffectInvocation invocation, Runnable checkAccess) {
+        this(action,workspaceId,sourceWitness,invocation,checkAccess,null,null);
+    }
+    WorkspaceMutationContext(String action,String workspaceId,CentralInvocationWitness sourceWitness,
+            EffectInvocation invocation,Runnable checkAccess,com.jarvys.agent.CentralTreeAdmission treeAdmission,
+            com.jarvys.agent.CancellationToken treeToken) {
+        this.treeAdmission=treeAdmission;this.treeToken=treeToken;
         this.action = Objects.requireNonNull(action);
         this.workspaceId = workspaceId;
         this.sourceWitness = sourceWitness;
@@ -36,6 +44,16 @@ public final class WorkspaceMutationContext {
         decision = new EffectInvocation.Admission(EffectInvocation.Authorization.ALLOW,
                 "native_contract", "workspaces:" + action + ":" + (workspaceId == null ? "central" : workspaceId),
                 null, "central_workspace");
+    }
+
+    public void requireTreeAdmission() {
+        if(closed || treeAdmission==null || treeToken==null || sourceWitness==null)
+            throw new IllegalStateException("Fresh native Central tree authority required");
+        treeAdmission.requireFreshDelegation(treeToken);sourceWitness.requireInvocationCurrent();
+        if(!rootSource.ownerCentralSessionId.equals(treeAdmission.ownerCentralSessionId()) ||
+            !rootSource.storageGeneration.equals(treeAdmission.storageGeneration()) ||
+            !rootSource.sourceMessageId.equals(treeAdmission.originUserMessageId()))
+            throw new IllegalStateException("Original tree request source changed");
     }
 
     /** Only the assignment/source insertion: no bridge, spawn, listeners or model work in this lease. */
@@ -93,7 +111,7 @@ public final class WorkspaceMutationContext {
     private EffectInvocation.EffectReferenceKind expectedKind() {
         switch (action) {
             case "create": return EffectInvocation.EffectReferenceKind.WORKSPACE;
-            case "delegate": return EffectInvocation.EffectReferenceKind.ASSIGNMENT;
+            case "cancel": case "delegate": return EffectInvocation.EffectReferenceKind.ASSIGNMENT;
             case "reply": case "message": case "continue_result": return EffectInvocation.EffectReferenceKind.WORKSPACE_INPUT;
             case "deliver": return EffectInvocation.EffectReferenceKind.DELIVERY;
             default: throw new IllegalArgumentException("Not a workspace mutation");

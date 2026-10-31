@@ -1814,6 +1814,9 @@ public final class CoreAgentLoop {
             }
             if (message.genuineUser) {
                 ConversationTurn userTurn = new ConversationTurn("user", message.content);
+                // Only real chat steering owns a Room source; Crew USER corrections do not.
+                // Transcript writer binds the Source after confirmed checkpoint persistence.
+                if ("main_chat".equals(message.sourceKind)) userTurn=userTurn.withDurableMessageId(message.id);
                 transcript.add(userTurn);
                 protectedGenuineUser = userTurn;
                 if (compactor != null) compactor.protectGenuineUser(userTurn);

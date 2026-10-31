@@ -5,6 +5,8 @@ import com.jarvys.agent.CoreTool;
 import com.jarvys.agent.CoreToolRegistry;
 import com.jarvys.agent.CoreToolResult;
 import com.jarvys.agent.ToolSpec;
+import com.jarvys.agent.EffectInvocation;
+import com.jarvys.agent.CrewInvocationWitness;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -70,6 +72,18 @@ public final class CrewTools {
         List<CoreTool> tools = new ArrayList<>();
         if (bot.role.tools.contains("msg_send")) tools.add(new BotTool("msg_send", "Send an untrusted content-bearing Crew message (FINDING, CRITIQUE, QUESTION, BLOCKER, ANSWER, RESULT, STATUS or MESSAGE) to the captain or another bot; TASK may be sent to another bot only. USER authority is reserved for native user input, TASK assignments come from the captain, and PROGRESS is runtime-generated. Include the exact ask_chief question message ID in refs when answering it. board_post writes a shared note and does not message the captain.",
                 schema(props("to","string","type","string","text","string","refs","array"),"to","type","text")) {
+            @Override public CoreToolResult execute(Map<String,Object> args,CancellationToken token,CoreTool.ProgressListener progress,EffectInvocation invocation) {
+                CrewTreeSupport owner=manager.treeSupport(bot);
+                if(owner==null||type(args,"type")!=CrewMessage.Type.ANSWER)return execute(args,token);
+                CrewInvocationWitness source=invocation==null?null:invocation.crewSource();
+                if(source==null)throw new IllegalStateException("Native answer source required");
+                source.requireArguments(args);source.requireInvocationCurrent();
+                invocation.admit(new EffectInvocation.Admission(EffectInvocation.Authorization.ALLOW,"native","msg_send",null,"native_tree_contract"));
+                CoreToolResult retained=owner.retainAnswer(bot,token,source,args);
+                if(retained==null)return execute(args,token); // Ordinary MESSAGE answer retains its exact native same-cycle guards.
+                if(manager.treeSupport(bot)!=owner)throw new IllegalStateException("Tree answer owner changed");
+                owner.recordInvocationResult(bot,token,source,retained);return retained;
+            }
             @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                 String to = string(a,"to");
                 CrewMessage.Type type = type(a,"type");
@@ -104,6 +118,18 @@ public final class CrewTools {
                 return manager.isLinkedQuestionYield(bot) ? CoreTool.ResponseCallPolicy.EXCLUSIVE_YIELD
                         : CoreTool.ResponseCallPolicy.MULTIPLE_PER_RESPONSE;
             }
+            @Override public CoreToolResult execute(Map<String,Object> args,CancellationToken token,CoreTool.ProgressListener progress,EffectInvocation invocation){
+                CrewTreeSupport owner=manager.treeSupport(bot);if(owner==null)return execute(args,token);
+                CrewInvocationWitness source=invocation==null?null:invocation.crewSource();
+                if(source==null)throw new IllegalStateException("Native question source required");
+                source.requireArguments(args);source.requireInvocationCurrent();
+                invocation.admit(new EffectInvocation.Admission(EffectInvocation.Authorization.ALLOW,"native","ask_chief",null,"native_tree_contract"));
+                owner.prepareInvocation(bot,token,source,args,"QUESTION_ARM");
+                String evidence=manager.askTreeQuestionExact(bot,originalString(args,"question"),token,source);
+                CoreToolResult result=CoreToolResult.finish("native-question-evidence:"+evidence+"\nAwaiting exact answer and explicit native Resume; not task completion.");
+                if(manager.treeSupport(bot)!=owner)throw new IllegalStateException("Tree question owner changed");
+                owner.recordInvocationResult(bot,token,source,result);return result;
+            }
             @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                 token.throwIfCancelled();
                 String questionEvidence = manager.askChiefAndYieldIfLinked(bot, originalString(a,"question"), token);
@@ -117,6 +143,18 @@ public final class CrewTools {
         });
         if (bot.role.tools.contains("report_done")) tools.add(new BotTool("report_done", "Submit this work cycle's verified, partial, or blocked result to the captain, with exact source/artifact refs, executed checks, unrun checks and limitations. A tool exit code alone does not establish test coverage or final-source validity. A later follow-up retains the mission restriction.",
                 schema(props("result","string","refs","array"),"result")) {
+            @Override public CoreTool.ResponseCallPolicy responseCallPolicy(){return manager.treeSupport(bot)!=null?CoreTool.ResponseCallPolicy.EXCLUSIVE_YIELD:CoreTool.ResponseCallPolicy.MULTIPLE_PER_RESPONSE;}
+            @Override public CoreToolResult execute(Map<String,Object> args,CancellationToken token,CoreTool.ProgressListener progress,EffectInvocation invocation){
+                CrewTreeSupport owner=manager.treeSupport(bot);if(owner==null)return execute(args,token);
+                CrewInvocationWitness source=invocation==null?null:invocation.crewSource();if(source==null)throw new IllegalStateException("Native report source required");
+                source.requireArguments(args);source.requireInvocationCurrent();
+                invocation.admit(new EffectInvocation.Admission(EffectInvocation.Authorization.ALLOW,"native","report_done",null,"native_tree_contract"));
+                owner.prepareInvocation(bot,token,source,args,"REPORT_DONE");
+                manager.reportDoneExact(bot,token,source,string(args,"result"),strings(args.get("refs"),"refs"));
+                CrewTreeSupport.WaitTicket ticket=bot.treeWaitTicket();
+                CoreToolResult result=CoreToolResult.finish(ticket==null?"Reported result to the captain.":"native-tree-wait:"+ticket.waitId+"\nDraft retained pending child reports, not completion.");
+                if(manager.treeSupport(bot)!=owner)throw new IllegalStateException("Tree report owner changed");owner.recordInvocationResult(bot,token,source,result);return result;
+            }
             @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                 token.throwIfCancelled(); manager.reportDone(bot, string(a,"result"), strings(a.get("refs"),"refs"));
                 return CoreToolResult.finish("Reported result to the captain.");

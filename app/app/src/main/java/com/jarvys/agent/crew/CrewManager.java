@@ -1,6 +1,7 @@
 package com.jarvys.agent.crew;
 
 import com.jarvys.agent.CancellationToken;
+import com.jarvys.agent.CrewInvocationWitness;
 import com.jarvys.agent.CoreAgentLoop;
 import com.jarvys.agent.CoreToolAccessPolicy;
 import com.jarvys.agent.CoreToolRegistry;
@@ -87,6 +88,8 @@ public final class CrewManager implements AutoCloseable {
     /** Exact once-per-run capture, never sourced from coalesced UI snapshots. */
     public interface ResultEvidenceListener {
         void onResult(CrewResultEvidence evidence);
+        /** Live scheduling only after native durable evidence and every enrolled tree report committed. */
+        default void afterResult(CrewResultEvidence evidence) { }
 
         /** Persistence failure is diagnostic; it must not change or replay worker execution. */
         default void onDeliveryFailure(CrewResultEvidence evidence, RuntimeException failure) { }
@@ -203,6 +206,9 @@ public final class CrewManager implements AutoCloseable {
         private volatile boolean checkpointAvailable;
         private volatile boolean requiresExplicitResume;
         private volatile boolean durableQuestionYield;
+        private volatile boolean durableTreeQuestionYield;
+        private volatile PendingTreeWait treeWait;
+        public CrewTreeSupport.WaitTicket treeWaitTicket(){PendingTreeWait wait=treeWait;return wait==null?null:wait.ticket;}
         private volatile boolean stopping;
         private volatile boolean definitionDisabled;
         private volatile Runnable checkpointChanged = ()->{
@@ -354,7 +360,7 @@ public final class CrewManager implements AutoCloseable {
         public boolean hasDurableCheckpoint() { return checkpointAvailable; }
 
         public boolean canResume() {
-            return checkpointAvailable && !definitionDisabled && requiresExplicitResume && !cycleScheduled && (status == Status.INTERRUPTED || status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL);
+            return checkpointAvailable && !definitionDisabled && requiresExplicitResume && !cycleScheduled && (status == Status.INTERRUPTED || status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL || status == Status.WAITING && treeWait != null && treeWait.confirmed);
         }
 
         public String recoveryNote() {
@@ -396,14 +402,17 @@ public final class CrewManager implements AutoCloseable {
         }
     }
 
+    private enum CoordinationPurpose { MESSAGE, BLOCKING_ASK, LINKED_ASK }
     private static final class CoordinationRequest {
+        final CoordinationPurpose purpose;
         final CrewCoordinationEvidence evidence;
         final CancellationToken token;
         volatile boolean valid = true;
         boolean active;
         boolean claimed;
         boolean dispatching;
-        CoordinationRequest(CrewCoordinationEvidence evidence, CancellationToken token) {
+        CoordinationRequest(CrewCoordinationEvidence evidence, CancellationToken token,CoordinationPurpose purpose) {
+            this.purpose=purpose;
             this.evidence = evidence; this.token = token;
         }
     }
@@ -500,6 +509,97 @@ public final class CrewManager implements AutoCloseable {
     };
     private volatile ProgressFactory progressFactory;
     private volatile SnapshotListener snapshotListener;
+    private static final class PendingTreeWait {
+        final CrewTreeSupport owner; final CrewTreeSupport.WaitTicket ticket; final CancellationToken token;
+        volatile CrewCheckpointStore.ConfirmedSnapshot saved; volatile boolean confirmed;
+        PendingTreeWait(CrewTreeSupport owner,CrewTreeSupport.WaitTicket ticket,CancellationToken token){this.owner=owner;this.ticket=ticket;this.token=token;}
+    }
+    private volatile CrewTreeSupport treeSupport;
+    private volatile TreePublicationListener treePublicationListener;
+    public synchronized boolean installTreeSupportIfAbsent(CrewTreeSupport support,TreePublicationListener listener){
+        java.util.Objects.requireNonNull(support);java.util.Objects.requireNonNull(listener);
+        if(treeSupport!=null)return false; treePublicationListener=listener;treeSupport=support;return true;
+    }
+    public CrewTreeSupport treeSupport(Bot bot){CrewTreeSupport support=treeSupport;return support!=null&&support.enrolled(bot)?support:null;}
+    public <T> T withCurrentTreeCycle(Bot bot,CancellationToken token,String cycle,java.util.concurrent.Callable<T> transaction){
+        java.util.concurrent.atomic.AtomicReference<T> result=new java.util.concurrent.atomic.AtomicReference<>();
+        boolean accepted=token.runIfActive(()->{synchronized(bot.cycleLock){
+            if(bots.get(bot.id)!=bot||bot.token!=token||!bot.cycleId().equals(cycle)||bot.stopping||bot.definitionDisabled||bot.status==Status.STOPPED)
+                throw new IllegalStateException("Exact tree cycle changed");
+            try{result.set(transaction.call());}catch(RuntimeException failure){throw failure;}catch(Exception failure){throw new IllegalStateException(failure);}
+        }});
+        if(!accepted){token.throwIfCancelled();throw new IllegalStateException("Native cycle admission closed");}return result.get();
+    }
+    public boolean isTreeParkQuiescent(Bot bot,CancellationToken token){synchronized(bot.cycleLock){
+        PendingTreeWait wait=bot.treeWait;
+        return bots.get(bot.id)==bot&&bot.token==token&&!token.isCancellationRequested()&&wait!=null&&wait.token==token
+            &&wait.owner==treeSupport&&wait.confirmed&&bot.cycleId().equals(wait.ticket.cycleId)&&bot.status==Status.WAITING
+            &&!bot.cycleScheduled&&bot.terminated.getCount()==0;
+    }}
+    public boolean hasPendingTreeWait(Bot bot,CancellationToken token){PendingTreeWait wait=bot.treeWait;return wait!=null&&wait.token==token;}
+    private void installTreeWait(Bot bot,CancellationToken token,CrewTreeSupport owner,CrewTreeSupport.WaitTicket ticket){
+        java.util.Objects.requireNonNull(ticket); synchronized(bot.cycleLock){token.throwIfCancelled();
+            if(bots.get(bot.id)!=bot||bot.token!=token||treeSupport!=owner||!bot.cycleId().equals(ticket.cycleId)||bot.treeWait!=null)
+                throw new IllegalStateException("Tree wait owner changed");
+            bot.treeWait=new PendingTreeWait(owner,ticket,token);
+        }
+    }
+    public void requestTreeWait(Bot bot,CancellationToken token,CrewInvocationWitness source,List<String> children,WaitMode mode){
+        CrewTreeSupport owner=java.util.Objects.requireNonNull(treeSupport(bot));source.requireInvocationCurrent();token.throwIfCancelled();
+        if(hasPendingOwnedWork(bot))throw new IllegalStateException("Owned work has not settled");owner.requireCurrentDispatch(bot,token);
+        CrewTreeSupport.WaitTicket ticket=owner.armWait(bot,token,source,Collections.unmodifiableList(new ArrayList<>(children)),mode);
+        if(ticket.implicit||ticket.mode!=mode)throw new IllegalStateException("Explicit wait changed");installTreeWait(bot,token,owner,ticket);
+    }
+    private boolean parkTreeWait(Bot bot,CancellationToken token,CoreAgentLoop loop,String draft){
+        CrewTreeSupport owner=treeSupport(bot);if(owner==null)return false;
+        if(!hasPendingTreeWait(bot,token)){
+            owner.requireCurrentDispatch(bot,token);CrewTreeSupport.WaitTicket ticket=owner.armImplicitWait(bot,token,draft==null?"":draft);
+            if(ticket==null)return false;if(!ticket.implicit||ticket.mode!=WaitMode.ALL)throw new IllegalStateException("Implicit finish must await ALL");
+            installTreeWait(bot,token,owner,ticket);
+        }
+        PendingTreeWait wait=bot.treeWait;CrewCheckpointStore.ConfirmedSnapshot saved;
+        synchronized(bot.cycleLock){token.throwIfCancelled();
+            if(bot.token!=token||wait==null||wait.token!=token||wait.owner!=owner||treeSupport!=owner)throw new IllegalStateException("Park replaced");
+            CheckpointSupport support=checkpointSupport;
+            if(support==null||!support.canPersist(bot)||!support.providesInvocationSource())throw new IllegalStateException("Native confirmed checkpoint required");
+            bot.checkpoint=loop.checkpointSnapshot();bot.transcript=bot.checkpoint.transcript;
+            bot.status=Status.WAITING;bot.requiresExplicitResume=true;bot.waitingReason="children";
+            bot.recoveryNote="Exact child wait retained; no uncertain operation is replayed.";
+            saved=support.persistConfirmed(bot,bus.snapshot(),bus.pending(bot.id));
+            JSONObject record=saved==null?null:saved.metadataJson().optJSONObject(CrewTreeSupport.WaitTicket.FIELD);
+            if(record==null||record.optJSONObject("current")==null||!wait.ticket.waitId.equals(record.optJSONObject("current").optString("waitId","")))
+                throw new IllegalStateException("Exact tree backlink not confirmed");
+            com.jarvys.agent.WorkerTreeWaitRecord.fromJson(record).withTicket(wait.ticket.toJson()); // Same ID must conserve every typed field.
+            bot.checkpointAvailable=true;
+        }
+        owner.confirmPark(bot,token,wait.ticket,saved);
+        synchronized(bot.cycleLock){token.throwIfCancelled();if(bot.token!=token||bot.treeWait!=wait||treeSupport!=owner)throw new IllegalStateException("Park superseded");wait.saved=saved;wait.confirmed=true;}
+        publishPresentation(bot.missionId);return true;
+    }
+    public interface TreePublicationListener {
+        void onTreeResult(Bot bot,CrewResultEvidence evidence,TreePublicationLease lease);
+        void onTreeQuestion(Bot bot,CrewCoordinationEvidence evidence,TreePublicationLease lease);
+    }
+    public static final class TreePublicationLease {
+        public enum Kind { RESULT, NEEDS_INPUT }
+        public final String evidenceId,cycleId;public final Kind kind;
+        private final CrewManager manager;private final Bot bot;private final TreePublicationListener owner;
+        private final Thread thread=Thread.currentThread();private volatile boolean active=true;
+        private TreePublicationLease(CrewManager manager,Bot bot,String id,String cycle,Kind kind){this.manager=manager;this.bot=bot;this.evidenceId=id;this.cycleId=cycle;this.kind=kind;owner=manager.treePublicationListener;}
+        public void requireCurrent(Bot bot,String id,String cycle){
+            if(!active||Thread.currentThread()!=thread||owner!=manager.treePublicationListener||this.bot!=bot||manager.bots.get(bot.id)!=bot
+                ||!evidenceId.equals(id)||!cycleId.equals(cycle)||!bot.cycleId().equals(cycle))throw new IllegalStateException("Publication lease changed or expired");
+        }
+    }
+    public final class TreeParkLease {
+        private final Bot bot;private final PendingTreeWait wait;private final Thread thread=Thread.currentThread();private volatile boolean active=true;
+        private TreeParkLease(Bot bot,PendingTreeWait wait){this.bot=bot;this.wait=wait;}
+        public void requireCurrent(Bot bot,CancellationToken token,CrewTreeSupport.WaitTicket ticket,CrewCheckpointStore.ConfirmedSnapshot saved){
+            if(!active||thread!=Thread.currentThread()||this.bot!=bot||bot.treeWait!=wait||wait.ticket!=ticket||wait.saved!=saved||!isTreeParkQuiescent(bot,token))
+                throw new IllegalStateException("Park lease changed or expired");
+        }
+    }
+
     private volatile ResultEvidenceListener resultEvidenceListener;
     private volatile CoordinationEvidenceListener coordinationEvidenceListener;
     private volatile BiConsumer<Bot, CrewMessage> conversationMessageListener;
@@ -741,6 +841,15 @@ public final class CrewManager implements AutoCloseable {
         if (listener == null || evidence == null) return;
         try {
             listener.onResult(evidence);
+            Bot producer=bots.get(evidence.botId);TreePublicationListener treeListener=treePublicationListener;
+            if(producer!=null&&treeSupport(producer)!=null){
+                if(treeListener==null||producer.resultEvidence()!=evidence||!producer.cycleId().equals(evidence.cycleId))
+                    throw new IllegalStateException("Enrolled result lost exact native publication owner");
+                TreePublicationLease lease=new TreePublicationLease(this,producer,evidence.evidenceId,evidence.cycleId,TreePublicationLease.Kind.RESULT);
+                try{treeListener.onTreeResult(producer,evidence,lease);}finally{lease.active=false;}
+            }
+            if(resultEvidenceListener!=listener)throw new IllegalStateException("Native result listener replaced before live admission");
+            listener.afterResult(evidence);
         } catch (RuntimeException failure) {
             resultEvidenceDeliveryFailures.put(evidence.evidenceId,
                     failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage());
@@ -788,7 +897,8 @@ public final class CrewManager implements AutoCloseable {
     }
 
     private CrewMessage produceCoordination(Bot bot, CancellationToken expectedToken,
-            CrewMessage.Type type, String text, List<String> refs, boolean blocking) {
+            CrewMessage.Type type, String text, List<String> refs, CoordinationPurpose purpose) {
+        if(purpose!=CoordinationPurpose.MESSAGE&&type!=CrewMessage.Type.QUESTION)throw new IllegalArgumentException("Native ask requires QUESTION");
         CoordinationEvidenceListener listener = coordinationEvidenceListener;
         if (listener == null) throw new IllegalStateException("Workspace coordination is not configured");
         CrewMessage source;
@@ -801,9 +911,9 @@ public final class CrewManager implements AutoCloseable {
             evidence = CrewCoordinationEvidence.create(conversationId, bot.missionId, bot.id, bot.cycleId(),
                     message.id, type.name(), message.text, message.refs, message.timestampMillis);
             source = message.withCoordination(evidence);
-            request = evidence.isReplyableKind() ? new CoordinationRequest(evidence, expectedToken) : null;
+            request = evidence.isReplyableKind() ? new CoordinationRequest(evidence, expectedToken, purpose) : null;
             if (request != null) bot.coordinationRequests.put(evidence.evidenceId, request);
-            if (blocking) { bot.status = Status.WAITING; bot.waitingReason = "respuesta del capitán"; }
+            if (purpose==CoordinationPurpose.BLOCKING_ASK) { bot.status = Status.WAITING; bot.waitingReason = "respuesta del capitán"; }
         }
         try {
             // Never hold cycleLock across a storage callback: USER/STOP can invalidate this original slot.
@@ -816,6 +926,11 @@ public final class CrewManager implements AutoCloseable {
                 bus.enqueueFresh(source);
             }
             publishBotConversationMessage(bot, source);
+            TreePublicationListener treeListener=treePublicationListener;
+            if(treeListener!=null&&purpose==CoordinationPurpose.LINKED_ASK&&treeSupport(bot)!=null){
+                TreePublicationLease lease=new TreePublicationLease(this,bot,evidence.evidenceId,evidence.cycleId,TreePublicationLease.Kind.NEEDS_INPUT);
+                try{treeListener.onTreeQuestion(bot,evidence,lease);}finally{lease.active=false;}
+            }
             publishMission(bot.missionId);
             return source;
         } catch (RuntimeException failure) {
@@ -866,6 +981,9 @@ public final class CrewManager implements AutoCloseable {
             throw new IllegalArgumentException("Exact coordination reply fields are required");
         Bot bot = bots.get(evidence.botId);
         if (bot == null) throw new IllegalStateException("Original live worker is unavailable");
+        final boolean treeOrdinary=treeSupport(bot)!=null;
+        if(treeOrdinary&&(!canReplyToOrdinaryCoordination(evidence)||inputBinding==null))throw new IllegalStateException("Formal tree answer requires retained explicit Resume");
+        final java.util.concurrent.atomic.AtomicReference<CoordinationRequest> selected=new java.util.concurrent.atomic.AtomicReference<>();
         validateCurrentProfile(bot.role);
         CrewMessage answer;
         bot.incomingDispatches.incrementAndGet();
@@ -873,6 +991,8 @@ public final class CrewManager implements AutoCloseable {
             synchronized (bot.cycleLock) {
                 CoordinationRequest request = replyableCoordinationLocked(bot, evidence);
                 if (request == null) throw new IllegalStateException("Exact request is no longer replyable");
+                if(treeOrdinary&&(request.purpose!=CoordinationPurpose.MESSAGE||!liveCoordinationCycle(bot,request.token,evidence.cycleId)))throw new IllegalStateException("Ordinary live cycle changed");
+                selected.set(request);
                 if (inputBinding != null) validateInputBinding(bot, text, inputBinding, CrewInputBinding.SourceKind.WORKSPACE_REPLY);
                 if (inputBinding != null && !deterministicReplyMessageId.equals(inputBinding.mailboxMessageId))
                     throw new IllegalArgumentException("Reply mailbox identity changed");
@@ -892,7 +1012,13 @@ public final class CrewManager implements AutoCloseable {
             // Use the ordinary recipient admission path after releasing cycleLock. It steers a live
             // loop and starts a new cycle for DONE, while refusing STOPPED/FAILED/interrupted bots.
             try {
-                answer = dispatch(bot, "chief", bot.id, CrewMessage.Type.ANSWER, text,
+                CoordinationRequest exact=selected.get();
+                if(treeOrdinary) answer=dispatch(bot,"chief",bot.id,CrewMessage.Type.ANSWER,text,Collections.emptyList(),false,answer,exact.token,()->{
+                    if(bot.coordinationRequests.get(evidence.evidenceId)!=exact||!exact.valid||!exact.active||!exact.dispatching||exact.claimed
+                        ||exact.purpose!=CoordinationPurpose.MESSAGE||!liveCoordinationCycle(bot,exact.token,evidence.cycleId)
+                        ||!exact.evidence.toJson().toString().equals(evidence.toJson().toString()))throw new IllegalStateException("Ordinary reply source replaced");
+                },true,true);
+                else answer = dispatch(bot, "chief", bot.id, CrewMessage.Type.ANSWER, text,
                         Collections.emptyList(), false, answer);
             } catch (AdmissionUncertainException uncertain) {
                 finishCoordinationDispatch(bot, evidence, true);
@@ -921,6 +1047,70 @@ public final class CrewManager implements AutoCloseable {
         }
     }
 
+    public boolean canReplyToOrdinaryCoordination(CrewCoordinationEvidence evidence){
+        Bot bot=evidence==null?null:bots.get(evidence.botId);if(bot==null)return false;
+        synchronized(bot.cycleLock){CoordinationRequest request=replyableCoordinationLocked(bot,evidence);
+            return request!=null&&request.purpose==CoordinationPurpose.MESSAGE&&liveCoordinationCycle(bot,request.token,evidence.cycleId);}
+    }
+    /** Source-cycle lease around pure Registry claim only; no IO/parent lock or scheduling inside. */
+    public <T> T withCurrentTreeQuestion(CrewCoordinationEvidence evidence,java.util.concurrent.Callable<T> claim){
+        Bot bot=evidence==null?null:bots.get(evidence.botId);if(bot==null)throw new IllegalStateException("Question owner missing");
+        synchronized(bot.cycleLock){CoordinationRequest request=bot.coordinationRequests.get(evidence.evidenceId);
+            if(request==null||request.purpose!=CoordinationPurpose.LINKED_ASK||!request.valid||!request.active||request.claimed||request.dispatching
+                ||request.token!=bot.token||request.token.isCancellationRequested()||bot.stopping||bot.definitionDisabled
+                ||!bot.cycleId().equals(evidence.cycleId)||!request.evidence.toJson().toString().equals(evidence.toJson().toString())
+                ||!(bot.status==Status.RUNNING||bot.status==Status.WAITING||bot.status==Status.PARTIAL&&bot.durableTreeQuestionYield))
+                throw new IllegalStateException("Native question no longer current");
+            try{return claim.call();}catch(RuntimeException failure){throw failure;}catch(Exception failure){throw new IllegalStateException(failure);}
+        }
+    }
+    public void resumeCompletedTreeUserControlExact(String id,CancellationToken token,String text,CrewInputBinding binding,ResumeCheckpointCommit commit){
+        if(commit==null)throw new IllegalArgumentException("Exact USER control required");resumeWithUserMessage(id,text,binding,token,commit,true);
+    }
+    private void requireResumeState(Bot bot,CancellationToken token,ResumeCheckpointCommit commit,boolean completed){
+        if(!completed){if(!bot.canResume())throw new IllegalStateException("Not ready for explicit resume");return;}
+        if(bot.status!=Status.DONE||!bot.checkpointAvailable||bot.definitionDisabled||bot.cycleScheduled||bot.terminated.getCount()!=0||bot.token!=token)
+            throw new IllegalStateException("Completed tree worker not quiescent");
+        java.util.Objects.requireNonNull(treeSupport(bot)).requireCompletedUserResume(bot,token,commit);
+    }
+    /** Exact unchanged live cycle only. Pending input never becomes a silent generic reanimation. */
+    public CrewMessage sendUserMessageSameCycleExact(String id,CancellationToken token,String text,CrewInputBinding binding,ResumeCheckpointCommit commit){
+        Bot bot=bots.get(id);if(bot==null||commit==null)throw new IllegalArgumentException("Exact native control required");
+        java.util.concurrent.atomic.AtomicReference<CrewMessage> staged=new java.util.concurrent.atomic.AtomicReference<>();bot.incomingDispatches.incrementAndGet();
+        try{boolean accepted=token.runIfActive(()->{synchronized(bot.cycleLock){
+            if(bot.token!=token||bot.stopping||bot.requiresExplicitResume||!(bot.status==Status.RUNNING||bot.status==Status.WAITING))throw new IllegalStateException("Live control cycle changed");
+            java.util.Objects.requireNonNull(treeSupport(bot)).requireLinkedResume(bot,token,commit);
+            CheckpointSupport support=java.util.Objects.requireNonNull(checkpointSupport);
+            validateInputBinding(bot,text,binding,CrewInputBinding.SourceKind.NATIVE_CORRECT);
+            CrewMessage message=new CrewMessage(binding.mailboxMessageId,conversationId,"user",bot.id,CrewMessage.Type.USER,text,Collections.emptyList(),System.currentTimeMillis()).withInputBinding(binding);
+            bus.enqueueFresh(message);staged.set(message);commit.commit(bot,support,bus.snapshot(),bus.pending(bot.id));
+            bot.checkpointAvailable=true;invalidateCoordinationLocked(bot);
+        }});if(!accepted){token.throwIfCancelled();throw new IllegalStateException("Control closed");}
+            bus.publishAdmitted(staged.get());return staged.get();
+        }catch(RuntimeException failure){if(staged.get()!=null){token.cancel();throw new AdmissionUncertainException("Input staged but control confirmation failed",failure,false);}throw failure;}
+        finally{if(bot.incomingDispatches.decrementAndGet()==0)synchronized(bot.cycleLock){bot.cycleLock.notifyAll();}}
+    }
+    public CrewMessage enqueueTreeReportExact(String id,CancellationToken token,CrewMessage message){return enqueueTreeInputExact(id,token,message,CrewInputBinding.SourceKind.TREE_REPORT);}
+    public CrewMessage enqueueTreeAnswerExact(String id,CancellationToken token,CrewMessage message){return enqueueTreeInputExact(id,token,message,CrewInputBinding.SourceKind.TREE_ANSWER);}
+    private CrewMessage enqueueTreeInputExact(String id,CancellationToken token,CrewMessage message,CrewInputBinding.SourceKind kind){
+        Bot bot=bots.get(id);if(bot==null)throw new IllegalArgumentException("Unknown worker");
+        synchronized(bot.cycleLock){token.throwIfCancelled();CrewInputBinding binding=message==null?null:message.inputBinding;
+            if(bot.token!=token||bot.status!=Status.QUEUED||bot.cycleScheduled||treeSupport(bot)==null||binding==null||binding.sourceKind!=kind
+                ||!binding.executionSessionId.equals(conversationId)||!binding.botId.equals(bot.id)||!binding.missionId.equals(bot.missionId)
+                ||!binding.admissionCycleId.equals(bot.cycleId())||!binding.matchesDelivery(message)||message.inputProvenance==null)
+                throw new IllegalArgumentException("Tree input does not match exact successor");
+            if(kind==CrewInputBinding.SourceKind.TREE_ANSWER&&(!"chief".equals(message.from)||message.type!=CrewMessage.Type.ANSWER))throw new IllegalArgumentException("Invalid retained answer transport");
+            return bus.enqueueFresh(message);
+        }
+    }
+    public void reportDoneExact(Bot bot,CancellationToken token,CrewInvocationWitness source,String result,List<String> refs){
+        if(result==null||result.trim().isEmpty())throw new IllegalArgumentException("Result required");token.throwIfCancelled();source.requireInvocationCurrent();
+        if(bot.token!=token||!bot.id.equals(source.source().botId)||!bot.cycleId().equals(source.source().cycleId)||!"report_done".equals(source.source().toolName))throw new IllegalStateException("Report source changed");
+        if(hasPendingOwnedWork(bot))throw new IllegalStateException("Owned work not settled");CrewTreeSupport owner=java.util.Objects.requireNonNull(treeSupport(bot));owner.requireCurrentDispatch(bot,token);
+        CrewTreeSupport.WaitTicket ticket=owner.armReportDoneWait(bot,token,source,result.trim());
+        if(ticket!=null){if(!ticket.implicit||ticket.mode!=WaitMode.ALL)throw new IllegalStateException("Report must await ALL");installTreeWait(bot,token,owner,ticket);return;}
+        publishReportDone(bot,result,refs);
+    }
     public void configureCheckpoints(CheckpointSupport support) {
         checkpointSupport = support;
     }
@@ -1138,6 +1328,10 @@ public final class CrewManager implements AutoCloseable {
 
     private boolean persistCheckpoint(Bot bot) {
         synchronized (bot) {
+            PendingTreeWait sealed=bot.treeWait;
+            if(sealed!=null&&sealed.confirmed&&sealed.saved!=null&&sealed.owner==treeSupport&&sealed.token==bot.token
+                &&bot.status==Status.WAITING&&!bot.stopping&&!bot.token.isCancellationRequested()
+                &&bot.cycleId().equals(sealed.ticket.cycleId))return true; // Preserve the exact confirmed park source until typed successor/control.
             CheckpointSupport support = checkpointSupport;
             if (support != null && support.canPersist(bot) && (!bot.requiresExplicitResume || bot.checkpointAvailable)) {
                 support.persist(bot, bus.snapshot(), bus.pending(bot.id));
@@ -1172,6 +1366,9 @@ public final class CrewManager implements AutoCloseable {
     }
 
     private void resumeWithUserMessage(String id, String userText, CrewInputBinding inputBinding, CancellationToken expectedToken, ResumeCheckpointCommit linkedCommit) {
+        resumeWithUserMessage(id,userText,inputBinding,expectedToken,linkedCommit,false);
+    }
+    private void resumeWithUserMessage(String id,String userText,CrewInputBinding inputBinding,CancellationToken expectedToken,ResumeCheckpointCommit linkedCommit,boolean completedTreeControl){
         if (userText != null && userText.trim().isEmpty())
             throw new IllegalArgumentException("User correction must be non-empty");
         Bot bot = bots.get(id);
@@ -1179,9 +1376,10 @@ public final class CrewManager implements AutoCloseable {
         final CheckpointSupport support;
         synchronized (bot.cycleLock) {
             if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
-            if (!bot.canResume()) throw new IllegalStateException("This bot is not ready for explicit resume");
+            requireResumeState(bot,expectedToken,linkedCommit,completedTreeControl);
             support = checkpointSupport;
             if (support == null) throw new IllegalStateException("Resume is unavailable in this runtime");
+            if(treeSupport(bot)!=null)treeSupport(bot).requireLinkedResume(bot,expectedToken,linkedCommit);
             if (support.requiresLinkedResume(bot) && linkedCommit == null)
                 throw new IllegalStateException("This native continuation requires its exact durable control link");
             if (inputBinding != null) validateInputBinding(bot, userText, inputBinding, CrewInputBinding.SourceKind.NATIVE_CORRECT);
@@ -1190,7 +1388,7 @@ public final class CrewManager implements AutoCloseable {
         synchronized (bot.cycleLock) {
             if (bot.token != expectedToken || checkpointSupport != support)
                 throw new IllegalStateException("Worker cycle or checkpoint owner changed");
-            if (!bot.canResume()) throw new IllegalStateException("This bot is not ready for explicit resume");
+            requireResumeState(bot,expectedToken,linkedCommit,completedTreeControl);
             try {
                 ResumePlan plan = support.reconcile(bot);
                 if (bot.role.missionAccess == CrewMissionAccess.READ_ONLY
@@ -1210,6 +1408,7 @@ public final class CrewManager implements AutoCloseable {
                 bot.stopping = false;
                 bot.reanimationRequested = false;
                 bot.durableQuestionYield = false;
+                bot.durableTreeQuestionYield=false;bot.treeWait=null;
                 bot.error = "";
                 bot.recoveryNote = "";
                 bot.status = Status.QUEUED;
@@ -1320,6 +1519,7 @@ public final class CrewManager implements AutoCloseable {
         observedDefinitionRevisions.put(definition.id, definition.revision);
         for (Bot bot : bots.values()) {
             if (bot.role.profileVersion <= 0 || !definition.id.equals(bot.role.id)) continue;
+            CancellationToken changedToken=null;
             synchronized (bot.cycleLock) {
                 bot.definitionDisabled = !definition.enabled;
                 if (!definition.enabled || definition.profile.version != bot.role.profileVersion) {
@@ -1330,9 +1530,10 @@ public final class CrewManager implements AutoCloseable {
                             : "This bot definition is disabled. Enable it before starting or resuming work.";
                     // Cancel even a terminal bot's old token so no late owned operation can survive.
                     bot.token.cancel();
-                    try { stop(bot.id); } catch (RuntimeException ignored) { }
+                    changedToken=bot.token;
                 }
             }
+            if(changedToken!=null)try { stopExact(bot.id,changedToken); } catch(RuntimeException ignored) { }
             try { publishPresentation(bot.missionId); } catch (RuntimeException ignored) { }
         }
     }
@@ -1399,7 +1600,8 @@ public final class CrewManager implements AutoCloseable {
             }
         }
         if (missionAccess == CrewMissionAccess.READ_ONLY
-                && (role.profileVersion <= 0 || role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT)) {
+                && (role.profileVersion <= 0 || (role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT
+                    && !(treeSupport!=null&&WorkspaceIdentity.isExecutionSession(conversationId))))) {
             throw new IllegalArgumentException("read_only requires a versioned conversation-project profile");
         }
         role = role.withMissionAccess(missionAccess);
@@ -1490,6 +1692,17 @@ public final class CrewManager implements AutoCloseable {
                 missionId, originalInstructions, assignmentId, deferStart, initialTaskAssignment);
     }
 
+    /** Descendant TASK is attributed to the actual worker, never fabricated chief authority. */
+    public Bot spawnTreeChildDeferred(WorkspaceAssignment assignment,Bot parent,CancellationToken parentToken,Object taskTitle){
+        if(assignment==null||!assignmentIdIsValid(assignment)||parent==null||bots.get(parent.id)!=parent
+            ||parent.token!=parentToken||!assignment.getMissionId().equals(parent.missionId)||treeSupport(parent)==null)
+            throw new IllegalArgumentException("Exact enrolled parent and assignment required");
+        parentToken.throwIfCancelled();treeSupport(parent).requireCurrentDispatch(parent,parentToken);
+        return spawnAdmitted(assignment.getRole(),assignment.getMissionText(),assignment.getTools(),assignment.getName(),
+            assignment.getMissionAccess(),taskTitle,assignment.getMissionId(),assignment.getOriginalUserRequest(),
+            assignment.getAssignmentId(),true,assignment,parent);
+    }
+
     /** Starts a deferred worker after its workspace assignment is durably bound. */
     public void startPreparedForMission(Bot bot) {
         if (bot == null) throw new IllegalArgumentException("Prepared worker is required");
@@ -1534,6 +1747,12 @@ public final class CrewManager implements AutoCloseable {
     private Bot spawnAdmitted(String roleId, String mission, List<String> requestedTools, String requestedName,
             CrewMissionAccess missionAccess, Object taskTitle, String explicitMissionId, String originalInstructions,
             String assignmentId, boolean deferStart, WorkspaceAssignment initialTaskAssignment) {
+        return spawnAdmitted(roleId,mission,requestedTools,requestedName,missionAccess,taskTitle,explicitMissionId,
+            originalInstructions,assignmentId,deferStart,initialTaskAssignment,null);
+    }
+    private Bot spawnAdmitted(String roleId,String mission,List<String> requestedTools,String requestedName,
+            CrewMissionAccess missionAccess,Object taskTitle,String explicitMissionId,String originalInstructions,
+            String assignmentId,boolean deferStart,WorkspaceAssignment initialTaskAssignment,Bot treeParent){
         CrewRole role = resolveAdmissionRole(roleId, mission, requestedTools, requestedName, missionAccess);
         String id = "bot-" + UUID.randomUUID();
         String name = requestedName == null || requestedName.trim().isEmpty() ? role.name : requestedName.trim();
@@ -1567,12 +1786,12 @@ public final class CrewManager implements AutoCloseable {
         }
         String missionId = missionState.id;
         if (initialTaskAssignment != null) {
-            CrewMessage task = new CrewMessage(conversationId, "chief", id, CrewMessage.Type.TASK,
+            CrewMessage task = new CrewMessage(conversationId, treeParent==null?"chief":treeParent.id, id, CrewMessage.Type.TASK,
                     mission, Collections.emptyList(), System.currentTimeMillis());
             ConversationInput.Provenance provenance = new ConversationInput.Provenance(
-                    WorkspaceIdentity.CENTRAL_SESSION, initialTaskAssignment.getWorkspaceId(),
-                    initialTaskAssignment.getAssignmentId(), id, task.id, ConversationInput.Kind.TASK,
-                    ConversationInput.Provenance.PrincipalRole.SUPERVISOR, "", "", "",
+                    treeParent==null?WorkspaceIdentity.CENTRAL_SESSION:conversationId, initialTaskAssignment.getWorkspaceId(),
+                    initialTaskAssignment.getAssignmentId(), treeParent==null?id:treeParent.id, task.id, ConversationInput.Kind.TASK,
+                    treeParent==null?ConversationInput.Provenance.PrincipalRole.SUPERVISOR:ConversationInput.Provenance.PrincipalRole.PEER, "", "", "",
                     initialTaskAssignment.getRevision(), initialTaskAssignment.getRequestId(),
                     initialTaskAssignment.getMissionId(), "");
             CrewMessage admitted = bus.enqueueFresh(task.withInputProvenance(provenance));
@@ -1645,6 +1864,7 @@ public final class CrewManager implements AutoCloseable {
         boolean lifecycleStarted = false;
         try {
             token.throwIfCancelled();
+            CrewTreeSupport tree=treeSupport(bot);if(tree!=null)tree.requireCurrentDispatch(bot,token);
             validateCurrentProfile(bot.role);
             synchronized (bot.cycleLock) {
                 bot.status = Status.RUNNING;
@@ -1788,13 +2008,14 @@ public final class CrewManager implements AutoCloseable {
                         bot.waitingReason = "needs_input";
                         bot.recoveryNote = "Question retained. An exact answer and native explicit Resume are required.";
                         bot.finishedAtMillis = System.currentTimeMillis();
-                        invalidateCoordinationLocked(bot);
+                        if(!bot.durableTreeQuestionYield)invalidateCoordinationLocked(bot);
                     }
                     publishMission(bot.missionId);
                     return;
                 }
                 awaitOwnedWork(bot, token);
                 token.throwIfCancelled();
+                if(parkTreeWait(bot,token,loop,result.text))return;
                 boolean complete;
                 String resultToPublish = null;
                 synchronized (bot.cycleLock) {
@@ -1868,7 +2089,7 @@ public final class CrewManager implements AutoCloseable {
                 boolean restart = false;
                 CrewResultEvidence evidence = null;
                 synchronized (bot.cycleLock) {
-                    if (bot.status != Status.DONE) invalidateCoordinationLocked(bot);
+                    if (bot.status != Status.DONE && !(bot.status==Status.PARTIAL&&bot.durableTreeQuestionYield)) invalidateCoordinationLocked(bot);
                     // Capture before replacing the generation, but never call persistence/model code here.
                     if (terminalReport != null && !cycleId.isEmpty() && resultEvidenceListener != null) {
                         evidence = CrewResultEvidence.create(conversationId, bot.missionId, bot.id, cycleId,
@@ -1921,6 +2142,11 @@ public final class CrewManager implements AutoCloseable {
             } finally {
                 // Always release the generation that entered this run, including failed finalization.
                 completedLatch.countDown();
+                PendingTreeWait wait=bot.treeWait;
+                if(wait!=null&&isTreeParkQuiescent(bot,token)){
+                    TreeParkLease lease=new TreeParkLease(bot,wait);
+                    try{wait.owner.afterParkQuiescent(bot,token,wait.ticket,wait.saved,lease);}finally{lease.active=false;}
+                }
             }
         }
     }
@@ -2058,8 +2284,10 @@ public final class CrewManager implements AutoCloseable {
         if (!"chief".equals(to) && recipient == null) throw new IllegalArgumentException("Unknown Crew recipient");
         if (text == null || text.trim().isEmpty()) throw new IllegalArgumentException("text must be non-empty");
         if (sender != null && recipient == null && coordinationEvidenceListener != null && coordinationKind(type))
-            return produceCoordination(sender, sender.token, type, text, refs, false);
+            return produceCoordination(sender, sender.token, type, text, refs, CoordinationPurpose.MESSAGE);
         CorrelatedAnswer correlatedAnswer = null;
+        if(recipient!=null&&"chief".equals(from)&&type==CrewMessage.Type.ANSWER&&treeSupport(recipient)!=null)
+            throw new IllegalStateException("Enrolled answers require exact ordinary request or retained formal answer");
         if ("chief".equals(from) && recipient != null && type == CrewMessage.Type.ANSWER)
             correlatedAnswer = correlateChiefAnswer(recipient, text, refs);
         CrewMessage message;
@@ -2118,7 +2346,7 @@ public final class CrewManager implements AutoCloseable {
             CrewMessage.Type type, String text, List<String> refs) {
         if (bots.get(bot.id) != bot) throw new IllegalArgumentException("Unknown worker");
         if (coordinationEvidenceListener != null && "chief".equals(to) && coordinationKind(type))
-            return produceCoordination(bot, expectedToken, type, text, refs, false);
+            return produceCoordination(bot, expectedToken, type, text, refs, CoordinationPurpose.MESSAGE);
         synchronized (bot.cycleLock) {
             if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
             expectedToken.throwIfCancelled();
@@ -2286,6 +2514,7 @@ public final class CrewManager implements AutoCloseable {
     /** Native CORRECT only; the source authority is checked by the caller before this exact admission. */
     public CrewMessage sendUserMessageExact(String botId, CancellationToken expectedToken, String text, CrewInputBinding inputBinding) {
         Bot bot = bots.get(botId);
+        if(bot!=null&&treeSupport(bot)!=null)throw new IllegalStateException("Enrolled USER input requires linked control");
         if (bot == null) throw new IllegalArgumentException("Unknown worker");
         synchronized (bot.cycleLock) {
             if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
@@ -2314,6 +2543,7 @@ public final class CrewManager implements AutoCloseable {
 
     public CrewMessage sendUserMessage(String botId, String text) {
         Bot bot = bots.get(botId);
+        if(bot!=null&&treeSupport(bot)!=null)throw new IllegalStateException("Enrolled USER input requires exact native control");
         if (bot == null || bot.status == Status.INTERRUPTED || bot.requiresExplicitResume) throw new IllegalArgumentException("Bot is not available for user messages");
         if (text == null || text.trim().isEmpty()) throw new IllegalArgumentException("text must be non-empty");
         CrewMessage message = dispatch(bot, "user", botId, CrewMessage.Type.USER, text.trim(), Collections.emptyList(), true);
@@ -2339,6 +2569,10 @@ public final class CrewManager implements AutoCloseable {
     private CrewMessage dispatch(Bot recipient, String from, String to, CrewMessage.Type type, String text,
             List<String> refs, boolean explicitUser, CrewMessage receipt,
             CancellationToken expectedToken, Runnable finalAdmission, boolean requireDurableAdmission) {
+        return dispatch(recipient,from,to,type,text,refs,explicitUser,receipt,expectedToken,finalAdmission,requireDurableAdmission,false);
+    }
+    private CrewMessage dispatch(Bot recipient,String from,String to,CrewMessage.Type type,String text,List<String> refs,boolean explicitUser,
+            CrewMessage receipt,CancellationToken expectedToken,Runnable finalAdmission,boolean requireDurableAdmission,boolean treeOrdinary){
         if (recipient == null) {
             Bot sender = bots.get(from);
             CrewMessage proposed = new CrewMessage(conversationId, from, to, type,
@@ -2357,6 +2591,14 @@ public final class CrewManager implements AutoCloseable {
         recipient.incomingDispatches.incrementAndGet();
         try {
             synchronized (recipient.cycleLock) {
+                if(treeSupport(recipient)!=null&&recipient.treeWait!=null)
+                    throw new IllegalStateException("Parked tree inbox requires exact typed successor staging");
+                if(type==CrewMessage.Type.ANSWER&&treeSupport(recipient)!=null) {
+                    for(CoordinationRequest question:recipient.coordinationRequests.values())
+                        if(question.purpose==CoordinationPurpose.LINKED_ASK&&question.valid&&question.active&&
+                                question.token==recipient.token&&question.evidence.cycleId.equals(recipient.cycleId()))
+                            throw new IllegalStateException("Formal tree answer must be retained for explicit USER Resume");
+                }
                 if (expectedToken != null && recipient.token != expectedToken)
                     throw new AdmissionDeferredException("Worker generation changed before supervisor message admission");
                 if (expectedToken != null && expectedToken.isCancellationRequested())
@@ -2365,7 +2607,7 @@ public final class CrewManager implements AutoCloseable {
                 if (recipient.requiresExplicitResume || status == Status.INTERRUPTED) throw new IllegalArgumentException("Interrupted bots cannot be reanimated");
                 if ((status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL || recipient.stopping) && !explicitUser) throw new IllegalArgumentException("Only an explicit user message can reanimate a stopped or failed bot");
                 if (status == Status.DONE || status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL || recipient.stopping) {
-                    if (checkpointSupport != null && checkpointSupport.requiresLinkedResume(recipient))
+                    if ((checkpointSupport != null && checkpointSupport.requiresLinkedResume(recipient))||treeSupport(recipient)!=null)
                         throw new IllegalStateException("A terminal linked worker requires native explicit continuation, not generic reanimation");
                     MissionState mission = missions.get(recipient.missionId);
                     if (mission != null && !"RUNNING".equals(mission.status) && !"PARTIAL".equals(mission.status)) {
@@ -2399,7 +2641,10 @@ public final class CrewManager implements AutoCloseable {
                 CrewMessage message = receipt;
                 if (message == null) message = bus.enqueueFresh(new CrewMessage(conversationId, from, to,
                         type, text, refs, System.currentTimeMillis()));
-                else if (message.inputBinding != null) bus.enqueueFresh(message);
+                else if (message.inputBinding != null) {
+                    if(treeOrdinary){CrewMessage exact=message;java.util.Objects.requireNonNull(treeSupport(recipient)).admitOrdinaryEnqueue(recipient,expectedToken,()->bus.enqueueFresh(exact));}
+                    else bus.enqueueFresh(message);
+                }
                 else bus.restore(Collections.singletonList(message), Collections.singletonList(message));
                 messageEnqueued = true;
                 if (recipient.status == Status.DONE || recipient.status == Status.STOPPED || recipient.status == Status.FAILED || recipient.status == Status.PARTIAL) recipient.status = Status.QUEUED;
@@ -2518,16 +2763,31 @@ public final class CrewManager implements AutoCloseable {
     /** Protocol-aware safe yield: source is durable, but no live capability survives the pause. */
     public boolean isLinkedQuestionYield(Bot bot) {
         CheckpointSupport support = checkpointSupport;
-        return support != null && support.requiresLinkedResume(bot);
+        if(support==null&&treeSupport(bot)!=null)throw new IllegalStateException("Enrolled question requires native checkpoint");
+        return support != null && (support.requiresLinkedResume(bot)||treeSupport(bot)!=null);
     }
 
     public String askChiefAndYieldIfLinked(Bot bot, String question, CancellationToken expectedToken) {
+        if(treeSupport(bot)!=null)throw new IllegalStateException("Enrolled question requires exact native invocation");
+        return askChiefAndYieldInternal(bot,question,expectedToken);
+    }
+    public String askTreeQuestionExact(Bot bot,String question,CancellationToken token,CrewInvocationWitness source){
+        CrewTreeSupport owner=java.util.Objects.requireNonNull(treeSupport(bot));
+        if(!isLinkedQuestionYield(bot))throw new IllegalStateException("Native question checkpoint unavailable");
+        source.requireInvocationCurrent();
+        if(bot.token!=token||!source.source().botId.equals(bot.id)||!source.source().cycleId.equals(bot.cycleId())
+            ||!"ask_chief".equals(source.source().toolName))throw new IllegalStateException("Question source changed");
+        owner.requireCurrentDispatch(bot,token);
+        return askChiefAndYieldInternal(bot,question,token);
+    }
+    private String askChiefAndYieldInternal(Bot bot,String question,CancellationToken expectedToken){
         if (!isLinkedQuestionYield(bot)) return null;
-        CrewMessage source = produceCoordination(bot, expectedToken, CrewMessage.Type.QUESTION, question, Collections.emptyList(), false);
+        CrewMessage source = produceCoordination(bot, expectedToken, CrewMessage.Type.QUESTION, question, Collections.emptyList(), CoordinationPurpose.LINKED_ASK);
         synchronized (bot.cycleLock) {
             if (bot.token != expectedToken) throw new IllegalStateException("Question cycle changed");
             expectedToken.throwIfCancelled();
             bot.durableQuestionYield = true;
+            bot.durableTreeQuestionYield=treeSupport(bot)!=null;
         }
         return source.coordination.evidenceId;
     }
@@ -2537,12 +2797,13 @@ public final class CrewManager implements AutoCloseable {
     }
 
     public boolean askChief(Bot bot, String question, CancellationToken expectedToken) {
+        if(treeSupport(bot)!=null)throw new IllegalStateException("Enrolled question cannot enter legacy blocking route");
         CrewMessage source = null;
         CoordinationRequest request = null;
         boolean exact = coordinationEvidenceListener != null;
         try {
             if (exact) {
-                source = produceCoordination(bot, expectedToken, CrewMessage.Type.QUESTION, question, Collections.emptyList(), true);
+                source = produceCoordination(bot, expectedToken, CrewMessage.Type.QUESTION, question, Collections.emptyList(), CoordinationPurpose.BLOCKING_ASK);
                 synchronized (bot.cycleLock) { request = bot.coordinationRequests.get(source.coordination.evidenceId); }
                 if (request == null || !request.valid) return false;
             } else {
@@ -2559,7 +2820,7 @@ public final class CrewManager implements AutoCloseable {
                             bot.missionId, bot.id, bot.cycleId(), plainQuestion.id, CrewMessage.Type.QUESTION.name(),
                             plainQuestion.text, plainQuestion.refs, plainQuestion.timestampMillis);
                     questionMessage = plainQuestion.withCoordination(evidence);
-                    request = new CoordinationRequest(evidence, expectedToken);
+                    request = new CoordinationRequest(evidence, expectedToken, CoordinationPurpose.BLOCKING_ASK);
                     request.active = true;
                     bot.coordinationRequests.put(evidence.evidenceId, request);
                     bus.enqueueFresh(questionMessage);
@@ -2611,6 +2872,10 @@ public final class CrewManager implements AutoCloseable {
     }
 
     public void reportDone(Bot bot, String result, List<String> refs) {
+        if(treeSupport(bot)!=null)throw new IllegalStateException("Enrolled report_done requires exact invocation");
+        publishReportDone(bot,result,refs);
+    }
+    private void publishReportDone(Bot bot,String result,List<String> refs){
         if (result == null || result.trim().isEmpty()) throw new IllegalArgumentException("result must be non-empty");
         if (hasPendingOwnedWork(bot)) throw new IllegalStateException("Owned project jobs are still pending; wait for their terminal result before reporting done");
         synchronized (bot.cycleLock) {
@@ -2672,29 +2937,37 @@ public final class CrewManager implements AutoCloseable {
 
     /** A late parent STOP may cancel only the cycle that parent actually admitted. */
     public boolean stopForUserControl(String id, CancellationToken expectedToken) {
-        Bot bot = bots.get(id);
-        if (bot == null) throw new IllegalArgumentException("Unknown worker");
-        synchronized (bot.cycleLock) {
-            if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
-            return stop(id);
-        }
+        Bot bot=bots.get(id);
+        if(bot==null)throw new IllegalArgumentException("Unknown worker");
+        return stopCaptured(bot,expectedToken,true);
     }
-
-    public boolean stopExact(String id, CancellationToken expectedToken) {
-        Bot bot = bots.get(id);
-        if (bot == null) return false;
-        synchronized (bot.cycleLock) {
-            return bot.token == expectedToken && stop(id);
-        }
+    public boolean stopExact(String id,CancellationToken expectedToken) {
+        Bot bot=bots.get(id);return bot!=null&&stopCaptured(bot,expectedToken,false);
     }
-
     public boolean stop(String id) {
-        Bot bot = bots.get(id);
-        if (bot == null) return false;
-        synchronized (bot.cycleLock) {
-            RuntimeException cancellationFailure = null;
+        Bot bot=bots.get(id);return bot!=null&&stopCaptured(bot,bot.token,false);
+    }
+    private boolean stopCaptured(Bot bot,CancellationToken expectedToken,boolean requireExact) {
+        final String capturedCycle;
+        synchronized(bot.cycleLock) {
+            if(bots.get(bot.id)!=bot||bot.token!=expectedToken) {
+                if(requireExact)throw new IllegalStateException("Worker cycle changed");
+                return false;
+            }
+            capturedCycle=bot.cycleId();
+        }
+        RuntimeException cancellationFailure=null;
+        // The adapter captures durable targets/latches before terminal early-return. No cycle lock -> Registry inversion.
+        try { CrewTreeSupport support=treeSupport;if(support!=null)support.onRequesterStop(bot,expectedToken,capturedCycle); }
+        catch(RuntimeException failure){cancellationFailure=failure;}
+        synchronized(bot.cycleLock) {
+            if(bots.get(bot.id)!=bot||bot.token!=expectedToken||!bot.cycleId().equals(capturedCycle)) {
+                if(cancellationFailure!=null)throw cancellationFailure;
+                if(requireExact)throw new IllegalStateException("Worker cycle changed");
+                return false;
+            }
             try { if (checkpointSupport != null) checkpointSupport.cancelContinuation(bot); }
-            catch (RuntimeException failure) { cancellationFailure = failure; }
+            catch (RuntimeException failure) { if(cancellationFailure==null)cancellationFailure=failure;else cancellationFailure.addSuppressed(failure); }
             if (terminal(bot.status)) {
                 if (cancellationFailure != null) throw cancellationFailure;
                 return false;

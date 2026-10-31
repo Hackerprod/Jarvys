@@ -72,6 +72,7 @@ public final class CrewCheckpointStore {
                 CentralContinuationRecord.fromJson(metadata.getJSONObject(CentralContinuationRecord.FIELD))
                     .requireCheckpoint(conversationId, botId, scopeIdentity, metadata);
             }
+            if (metadata.has(WorkerTreeWaitRecord.FIELD)) WorkerTreeWaitRecord.fromJson(metadata.getJSONObject(WorkerTreeWaitRecord.FIELD));
             for (CrewInputIncorporation proof : loop.incorporations.values()) {
                 if (!conversationId.equals(proof.binding.executionSessionId)
                         || !botId.equals(proof.binding.botId)
@@ -206,6 +207,10 @@ public final class CrewCheckpointStore {
     /** Internal mode is reachable only after the native coordination CAS below. */
     private ConfirmedSnapshot saveConfirmedInternal(String conversationId, String botId, JSONObject metadata, String scopeIdentity,
             CoreAgentLoop.Checkpoint loop, JSONObject artifactOwnership, boolean coordinationWrite) {
+        return saveConfirmedInternal(conversationId,botId,metadata,scopeIdentity,loop,artifactOwnership,coordinationWrite,false);
+    }
+    private ConfirmedSnapshot saveConfirmedInternal(String conversationId,String botId,JSONObject metadata,String scopeIdentity,
+            CoreAgentLoop.Checkpoint loop,JSONObject artifactOwnership,boolean coordinationWrite,boolean treeWaitWrite) {
         synchronized (ConversationMetadataAccess.lockForSession(conversationId)) {
             requireActive(conversationId);
             try {
@@ -223,6 +228,13 @@ public final class CrewCheckpointStore {
                         throw new IllegalStateException("Ordinary checkpoint save cannot replace coordination metadata");
                     if (oldBlock != null) metadata.put(CentralContinuationRecord.FIELD, new JSONObject(oldBlock.toString()));
                 }
+                if (!treeWaitWrite) {
+                    Object oldWait = prior == null ? null : prior.metadata.opt(WorkerTreeWaitRecord.FIELD);
+                    if (metadata.has(WorkerTreeWaitRecord.FIELD) && !WorkerTreeWaitRecord.equal(oldWait,metadata.opt(WorkerTreeWaitRecord.FIELD)))
+                        throw new IllegalStateException("Ordinary save cannot replace tree wait evidence");
+                    if (oldWait != null) metadata.put(WorkerTreeWaitRecord.FIELD,new JSONObject(oldWait.toString()));
+                }
+                if (metadata.has(WorkerTreeWaitRecord.FIELD)) WorkerTreeWaitRecord.fromJson(metadata.getJSONObject(WorkerTreeWaitRecord.FIELD));
                 if (metadata.has(CentralContinuationRecord.FIELD))
                     CentralContinuationRecord.fromJson(metadata.getJSONObject(CentralContinuationRecord.FIELD))
                         .requireCheckpoint(conversationId, botId, scopeIdentity, metadata);
@@ -284,6 +296,119 @@ public final class CrewCheckpointStore {
                 throw new IllegalStateException("Could not save Crew checkpoint; original evidence is preserved", failure);
             }
         }
+    }
+
+    /** Prepare native CHILD_WAIT lineage without changing any P1 result/dispatch/consumption fields. */
+    public ConfirmedSnapshot prepareTreeSuccessorConfirmed(TreeSuccessorCertificate certificate) {
+        if(certificate==null)throw new IllegalArgumentException("Typed Registry claim required");
+        ConfirmedSnapshot source=certificate.source;
+        synchronized(ConversationMetadataAccess.lockForSession(source.conversationId)) {
+            ConfirmedSnapshot current=requireCurrentCheckpoint(source);
+            if(!current.metadataJson().has(CentralContinuationRecord.FIELD))return current;
+            try {
+                CentralContinuationRecord old=continuation(current);JSONObject next=old.toJson();
+                if(!next.isNull("selectedResult"))throw new IllegalStateException("Consumed P1 producer cannot be rearmed by child wait");
+                next.put("revision",old.revision()+1);next.getJSONArray("links").put(certificate.preparedLink());
+                CentralContinuationRecord prepared=CentralContinuationRecord.fromJson(next);old.requireTreeSuccessor(prepared);
+                requireNewSourceCertificate(current,old,prepared);
+                return saveCoordination(current,prepared,current.metadataJson(),current.scopeIdentity,current.loopForEvidence(),current.artifactOwnershipJson());
+            }catch(org.json.JSONException e){throw new IllegalArgumentException("Malformed child wait preparation",e);}
+        }
+    }
+    public ConfirmedSnapshot saveTreeSuccessorConfirmed(ConfirmedSnapshot expected,TreeSuccessorCertificate certificate,
+            JSONObject metadata,String scopeIdentity,CoreAgentLoop.Checkpoint loop,JSONObject ownership) {
+        if(expected==null||certificate==null)throw new IllegalArgumentException("Exact tree successor required");
+        synchronized(ConversationMetadataAccess.lockForSession(expected.conversationId)) {
+            ConfirmedSnapshot current=requireCurrentCheckpoint(expected);
+            requireTreeSuccessorIdentity(current,certificate.source,metadata,scopeIdentity);
+            if(!current.metadataJson().has(CentralContinuationRecord.FIELD)) {
+                if(!current.payloadSha256.equals(certificate.source.payloadSha256))throw new IllegalStateException("Tree-only source certificate changed");
+                return saveConfirmedInternal(current.conversationId,current.botId,metadata,scopeIdentity,loop,ownership,false);
+            }
+            try {
+                CentralContinuationRecord old=continuation(current);JSONObject next=old.toJson();JSONArray links=next.getJSONArray("links");
+                if(links.length()==0||!WorkerTreeWaitRecord.equal(links.getJSONObject(links.length()-1),certificate.preparedLink()))
+                    throw new IllegalArgumentException("Tree claim does not match prepared lineage");
+                JSONObject link=links.getJSONObject(links.length()-1);link.put("state","BOUND").put("newCycleId",metadata.getString("cycleId"))
+                    .put("admittedAssignmentRevision",certificate.admittedAssignmentRevision);
+                next.put("revision",old.revision()+1).put("expectedCycleId",metadata.getString("cycleId"));
+                CentralContinuationRecord bound=CentralContinuationRecord.fromJson(next);old.requireTreeSuccessor(bound);
+                return saveCoordination(current,bound,metadata,scopeIdentity,loop,ownership);
+            }catch(org.json.JSONException e){throw new IllegalArgumentException("Malformed tree successor",e);}
+        }
+    }
+    /** Tree-only USER control; P1 continues to use its original native control protocol. */
+    public ConfirmedSnapshot saveTreeUserSuccessorConfirmed(TreeUserControlCertificate certificate,
+            JSONObject metadata,String scopeIdentity,CoreAgentLoop.Checkpoint loop,JSONObject ownership) {
+        if(certificate==null)throw new IllegalArgumentException("Exact USER control source required");
+        synchronized(ConversationMetadataAccess.lockForSession(certificate.source.conversationId)) {
+            ConfirmedSnapshot current=requireCurrentCheckpoint(certificate.source);
+            if(current.metadataJson().has(CentralContinuationRecord.FIELD))throw new IllegalArgumentException("P1 requires its own native control lineage");
+            requireTreeSuccessorIdentity(current,certificate.source,metadata,scopeIdentity);
+            return saveConfirmedInternal(current.conversationId,current.botId,metadata,scopeIdentity,loop,ownership,false);
+        }
+    }
+    /** Exact same-cycle USER CORRECT write. No automatic incorporation/Registry ACK is performed here. */
+    public ConfirmedSnapshot saveTreeUserSameCycleConfirmed(TreeUserControlCertificate certificate,
+            JSONObject metadata,String scopeIdentity,CoreAgentLoop.Checkpoint loop,JSONObject ownership) {
+        if(certificate==null||!"CORRECT".equals(certificate.controlType))
+            throw new IllegalArgumentException("Same-cycle correction requires exact USER certificate");
+        synchronized(ConversationMetadataAccess.lockForSession(certificate.source.conversationId)) {
+            ConfirmedSnapshot current=requireCurrentCheckpoint(certificate.source);
+            try {
+                JSONObject old=current.metadataJson();
+                if(!current.scopeIdentity.equals(scopeIdentity)||!Boolean.TRUE.equals(old.opt("nativeWorkspaceCheckpoint"))
+                    ||!Boolean.TRUE.equals(metadata.opt("nativeWorkspaceCheckpoint")))throw new IllegalArgumentException("Same-cycle correction scope changed");
+                for(String field:java.util.Arrays.asList("conversationId","botId","assignmentId","missionId","role","missionAccess","cycleId"))
+                    if(!WorkerTreeWaitRecord.equal(old.opt(field),metadata.opt(field)))throw new IllegalArgumentException("Same-cycle correction identity changed: "+field);
+                if(!java.util.UUID.fromString(metadata.getString("cycleId")).toString().equals(metadata.getString("cycleId")))
+                    throw new IllegalArgumentException("Same-cycle correction has invalid native cycle");
+            }catch(org.json.JSONException invalid){throw new IllegalArgumentException("Malformed same-cycle correction",invalid);}
+            // Generic conservation rejects any attempted P1/wait replacement; omitted fields are retained exactly.
+            return saveConfirmedInternal(current.conversationId,current.botId,metadata,scopeIdentity,loop,ownership,false);
+        }
+    }
+
+    private static void requireTreeSuccessorIdentity(ConfirmedSnapshot current,ConfirmedSnapshot source,JSONObject next,String scope) {
+        try {
+            JSONObject old=source.metadataJson();
+            if(!current.conversationId.equals(source.conversationId)||!current.botId.equals(source.botId)||!current.scopeIdentity.equals(source.scopeIdentity)
+                    || !scope.equals(source.scopeIdentity)||!Boolean.TRUE.equals(old.opt("nativeWorkspaceCheckpoint"))
+                    || !Boolean.TRUE.equals(next.opt("nativeWorkspaceCheckpoint")))throw new IllegalArgumentException("Tree successor scope changed");
+            for(String field:java.util.Arrays.asList("conversationId","botId","assignmentId","missionId","role","missionAccess"))
+                if(!WorkerTreeWaitRecord.equal(old.opt(field),next.opt(field)))throw new IllegalArgumentException("Tree successor identity changed: "+field);
+            String oldCycle=old.getString("cycleId"),newCycle=next.getString("cycleId");
+            if(!oldCycle.equals(current.metadataJson().getString("cycleId"))||oldCycle.equals(newCycle)
+                    ||!java.util.UUID.fromString(newCycle).toString().equals(newCycle))throw new IllegalArgumentException("Tree successor cycle changed or reused");
+        }catch(org.json.JSONException e){throw new IllegalArgumentException("Malformed tree successor identity",e);}
+    }
+
+    /** Exact native wait receipt append; no Registry claim or live permission is created here. */
+    public ConfirmedSnapshot saveWorkerTreeWaitConfirmed(ConfirmedSnapshot expected,JSONObject metadata,String scopeIdentity,
+            CoreAgentLoop.Checkpoint loop,JSONObject ownership,JSONObject ticket) {
+        if(expected==null)throw new IllegalArgumentException("Confirmed wait source required");
+        WorkerTreeWaitRecord.validateTicket(ticket);
+        synchronized(ConversationMetadataAccess.lockForSession(expected.conversationId)) {
+            ConfirmedSnapshot current=requireCurrentCheckpoint(expected);
+            try {
+                if(!scopeIdentity.equals(current.scopeIdentity)
+                        || !current.conversationId.equals(metadata.getString("conversationId"))
+                        || !current.botId.equals(metadata.getString("botId"))
+                        || !current.metadataJson().getString("assignmentId").equals(metadata.getString("assignmentId"))
+                        || !metadata.getString("cycleId").equals(ticket.getString("cycleId"))
+                        || !current.metadataJson().getString("cycleId").equals(ticket.getString("cycleId")))
+                    throw new IllegalArgumentException("Wait source identity changed");
+                JSONObject previous=current.metadataJson().optJSONObject(WorkerTreeWaitRecord.FIELD);
+                WorkerTreeWaitRecord next=previous==null?WorkerTreeWaitRecord.create(ticket):WorkerTreeWaitRecord.fromJson(previous).withTicket(ticket);
+                JSONObject merged=new JSONObject(metadata.toString()).put(WorkerTreeWaitRecord.FIELD,next.toJson());
+                return saveConfirmedInternal(current.conversationId,current.botId,merged,scopeIdentity,loop,ownership,false,true);
+            } catch(org.json.JSONException e){throw new IllegalArgumentException("Malformed wait checkpoint",e);}
+        }
+    }
+    private ConfirmedSnapshot requireCurrentCheckpoint(ConfirmedSnapshot expected) {
+        ConfirmedSnapshot current=confirmDurable(expected.conversationId,expected.botId,expected.scopeIdentity);
+        if(current==null||!current.payloadSha256.equals(expected.payloadSha256))throw new IllegalStateException("Checkpoint payload CAS conflict");
+        return current;
     }
 
     /** Initial coordination creation on an already confirmed, bound worker checkpoint. */

@@ -60,6 +60,29 @@ final class MainChatTranscriptStore {
     private boolean storageWarningChecked;
     private final Map<String, CallBinding> committedCalls = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /** Minted only after exact checkpoint Room commit and Source publication. */
+    static final class TreeExitReceipt {
+        final String runId,ownerMessageId,digest;
+        final Set<String> committedIncomingIds;
+        private TreeExitReceipt(String runId,String ownerMessageId,String digest,Set<String> incoming) {
+            this.runId=runId;this.ownerMessageId=ownerMessageId;this.digest=digest;
+            this.committedIncomingIds=Collections.unmodifiableSet(new java.util.LinkedHashSet<>(incoming));
+        }
+    }
+    private boolean captureTreeExit;
+    private CoreAgentLoop.Checkpoint confirmedTreeCheckpoint;
+    private TreeExitReceipt confirmedTreeReceipt;
+    void enableTreeExitReceipt(){captureTreeExit=true;}
+    TreeExitReceipt confirmTreeExit(CoreAgentLoop.Checkpoint checkpoint,String runId) {
+        synchronized(archiveLock) {
+            if(checkpoint!=confirmedTreeCheckpoint || confirmedTreeReceipt==null || !confirmedTreeReceipt.runId.equals(runId))
+                throw new IllegalStateException("Central exit checkpoint was not confirmed");
+            for(String state:checkpoint.toolLifecycle.values())if("STARTED".equals(state) || "INTERRUPTED_UNCERTAIN".equals(state))
+                throw new IllegalStateException("Central exit has uncertain effects");
+            return confirmedTreeReceipt;
+        }
+    }
+
     private volatile Object attachmentIdentity = new Object();
     private com.jarvys.agent.chatdb.MemorySessionBinding memorySessionBinding;
     void setMemorySessionBinding(com.jarvys.agent.chatdb.MemorySessionBinding binding) {
@@ -325,6 +348,17 @@ final class MainChatTranscriptStore {
                                 }
                                 if ("STARTED".equals(checkpoint.toolLifecycle.get(call.id))) binding.started = true;
                             }
+                        }
+                        if(captureTreeExit) {
+                            java.security.MessageDigest sha=java.security.MessageDigest.getInstance("SHA-256");
+                            String receipt=new JSONObject().put("owner",userMessageId).put("run",runId)
+                                .put("rows",new JSONArray(checkpointRows)).put("applied",new JSONArray(checkpoint.appliedIncomingIds))
+                                .put("lifecycle",new JSONObject(checkpoint.toolLifecycle)).toString();
+                            for(int i=0;i<receipt.length();i++){char ch=receipt.charAt(i);sha.update((byte)(ch>>>8));sha.update((byte)ch);}
+                            StringBuilder digest=new StringBuilder();
+                            for(byte b:sha.digest())digest.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
+                            confirmedTreeReceipt=new TreeExitReceipt(runId,userMessageId,digest.toString(),checkpoint.appliedIncomingIds);
+                            confirmedTreeCheckpoint=checkpoint;
                         }
                     } finally {
                         pendingCheckpointRows.remove();

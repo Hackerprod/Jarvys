@@ -1677,6 +1677,62 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
             CodingJobSemanticRepository(repos.database).source(entryId, jobId, maxChars)
         } }
 
+    /** Exact source and lifecycle: neither latest USER nor decoded provenance may substitute. */
+    fun captureCentralUserRootSync(conversationId:String,messageId:String):CentralUserRootCheckpoint = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            val generation=runBlocking { ConnectionProjectionRepository(repos.database).generation() }
+            val digest=runBlocking { captureCentralUserRootDigest(repos.database,conversationId,messageId) }
+            CentralUserRootCheckpoint(generation,conversationId,messageId,digest,anchor.attest(repos.database,generation))
+        }
+    }
+
+    /** A successful exact assistant commit, never inferred from response text. */
+    fun confirmCentralTreeExitSync(conversationId:String,messageId:String,ownerId:String,runId:String):String = execute { repos ->
+        repos.database.withChatReadTransaction {
+            check(com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(conversationId))
+            repos.database.chatSql.query("SELECT role,owner_user_message_id,run_id,status,hidden_kind FROM messages WHERE conversation_id=? AND message_id=?",arrayOf(conversationId,messageId)).use { c ->
+                check(c.moveToFirst() && c.getString(0)=="assistant" && c.getString(1)==ownerId && c.getString(2)==runId &&
+                    c.getString(3)=="COMPLETED" && c.isNull(4) && !c.moveToNext()) { "Central exit assistant commit does not match exact run" }
+            }
+            messageId
+        }
+    }
+
+    /** Canonical source of the already-ACKed native steering callback, not authority to dispatch. */
+    fun confirmCentralTreeIncomingSync(conversationId:String,incoming:com.jarvys.agent.CoreAgentLoop.IncomingMessage):String = execute { repos ->
+        repos.database.withChatReadTransaction {
+            check(com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(conversationId) && incoming.sourceKind=="main_chat")
+            val role=incoming.origin.name.lowercase(java.util.Locale.ROOT)
+            check(role in setOf("user","agent","system"))
+            repos.database.chatSql.query("SELECT role,hidden_kind,input_state FROM messages WHERE conversation_id=? AND message_id=?",arrayOf(conversationId,incoming.id)).use { c ->
+                check(c.moveToFirst() && c.getString(0)==role && c.isNull(1) && c.getString(2)=="incorporated" && !c.moveToNext()) {
+                    "Central final owner is not an exact incorporated input"
+                }
+            }
+            val row=requireNotNull(repos.reader.readMessage(conversationId,incoming.id))
+            check(row.text==incoming.content) { "Central incorporated content changed" }
+            val parts=row.parts.filter { it.kind==com.jarvys.agent.ConversationInput.PROVENANCE_PART_KIND }
+            if(incoming.origin==com.jarvys.agent.ConversationInput.Origin.USER) {
+                check(incoming.genuineUser && incoming.provenance==null && parts.isEmpty())
+            } else {
+                check(!incoming.genuineUser && incoming.provenance!=null && parts.size==1)
+                val encoded=org.json.JSONObject(parts.single().payload)
+                check(encoded.getString("origin")==incoming.origin.name)
+                val canonical=requireNotNull(com.jarvys.agent.ConversationInput.Provenance.fromJson(encoded.getJSONObject("provenance")))
+                check(canonical.toJson().toString()==incoming.provenance.toJson().toString()) { "Central incorporated provenance changed" }
+            }
+            val digest=java.security.MessageDigest.getInstance("SHA-256")
+            fun field(value:String) {
+                for(shift in listOf(24,16,8,0))digest.update((value.length ushr shift).toByte())
+                value.forEach { ch -> digest.update((ch.code ushr 8).toByte());digest.update(ch.code.toByte()) }
+            }
+            field("central-incorporated-owner-v1");field(conversationId);field(incoming.id);field(role)
+            row.parts.forEach { field(it.kind);field(it.payload) }
+            digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+        }
+    }
+
     /** Capture exact Central-call provenance and the SAME database lifecycle; release before returning. */
     fun captureCentralInvocationSync(conversationId: String, ownerMessageId: String, batchId: String,
                                     callId: String, toolName: String, runId: String, processId: String): CentralInvocationCheckpoint =
