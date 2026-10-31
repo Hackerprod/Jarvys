@@ -35,8 +35,8 @@ class PersonalMemorySearchFallbackTest {
                 }
                 val bridge = ChatDatabaseBridge.getInstance(context)
                 assertTrue(bridge.ensureConversationSync("like-special-session") is ChatDbResult.Success)
-                val literalId = bridge.personalAgentSaveMemory("account_id is paired with a 100% discount", "daily", null, .4, "test").id
-                bridge.personalAgentSaveMemory("accountXid is paired with a 1000 discount", "daily", null, .4, "test")
+                val literalId = bridge.personalAgentSaveMemory("account_id is paired with a 100% discount", "daily", null, .4, "test", MemorySaveOptions()).id
+                bridge.personalAgentSaveMemory("accountXid is paired with a 1000 discount", "daily", null, .4, "test", MemorySaveOptions())
 
                 assertEquals(listOf(literalId), bridge.personalAgentSearch("account_id").map { it.id })
                 assertEquals(listOf(literalId), bridge.personalAgentSearch("100%").map { it.id })
@@ -58,8 +58,8 @@ class PersonalMemorySearchFallbackTest {
                 }
                 val bridge = ChatDatabaseBridge.getInstance(context)
                 assertTrue(bridge.ensureConversationSync("$directoryName-session") is ChatDbResult.Success)
-                val weaker = bridge.personalAgentSaveMemory("Hackerprod enjoys gardening", "daily", null, .4, "test")
-                val stronger = bridge.personalAgentSaveMemory("Hackerprod develops Android applications", "curated", null, .8, "test")
+                val weaker = bridge.personalAgentSaveMemory("Hackerprod enjoys gardening", "daily", null, .4, "test", MemorySaveOptions())
+                val stronger = bridge.personalAgentSaveMemory("Hackerprod develops Android applications", "curated", null, .8, "test", MemorySaveOptions())
 
                 assertEquals(mode.storedValue, bridge.personalAgentSearchCapability())
                 val hits = bridge.personalAgentSearch("Hacker Andro")

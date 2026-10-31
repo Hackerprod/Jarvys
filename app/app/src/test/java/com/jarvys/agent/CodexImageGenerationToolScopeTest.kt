@@ -24,7 +24,7 @@ class CodexImageGenerationToolScopeTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
     @Before
-    fun awaitStorageReady() = runBlocking { SingleSessionReset.awaitReady(context) }
+    fun awaitStorageReady() = runBlocking { FreshStorageBootstrap.awaitReady(context) }
 
     @After
     fun resetCodexSelection() {
@@ -73,15 +73,9 @@ class CodexImageGenerationToolScopeTest {
         assertEquals(CodexImageGenerationTool.NAME, imageTool.declaration().name)
         assertTrue(imageTool.declaration().description.contains("quota"))
 
-        val memory = MemoryStore(File(temporaryFolder.root, "reflection-memory"), true, testMemorySeedProvider())
-            .forConversation("reflection-session").bindAutomaticWritesForToolset()
-        memory.ensureInitialized()
-        val reflectionWorkspace = WorkspaceStore(File(temporaryFolder.root, "reflection-workspaces"),
-            "a".repeat(24), null, null, memory, "reflection-session", true,
-            MemoryStore.Actor.REFLECTION, "reflection-group", true)
-        val reflectionTools = WorkspaceTools.createReflectionMemoryOnly(reflectionWorkspace)
-        assertEquals(listOf("ls", "read", "write", "edit", "delete"), reflectionTools.map { it.declaration().name })
-        assertFalse(reflectionTools.any { it.declaration().name == CodexImageGenerationTool.NAME })
+        val extractionTools = PersonalMemoryTools.createForExtraction(context, "reflection-session")
+        assertTrue(extractionTools.any { it.declaration().name == "memory_save" })
+        assertFalse(extractionTools.any { it.declaration().name == CodexImageGenerationTool.NAME })
         assertFalse(WorkspaceTools.names().contains(CodexImageGenerationTool.NAME))
     }
 

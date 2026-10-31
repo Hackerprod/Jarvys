@@ -36,9 +36,9 @@ class MainActivityDrawerNavigationTest {
                 .apply { isAccessible = true }.set(null, null)
             secretSingleton.set(null, SecretStore(context.getSharedPreferences("s2-navigation-secrets", 0)))
             WorkManagerTestInitHelper.initializeTestWorkManager(context)
-            chatTestStore.onDatabaseWorker { SingleSessionReset.awaitReadyBlocking(context.filesDir) }
-            // This fixture represents an existing user, past the two independent first-use modals.
-            MemoryStore(context).markDisclosureShown()
+            chatTestStore.onDatabaseWorker { FreshStorageBootstrap.awaitReadyBlocking(context.filesDir) }
+            // Retain the current reflection disclosure fixture; legacy file-memory disclosure no longer exists.
+
             MemoryReflectionPreferences(context).markDisclosureShown()
         }
 

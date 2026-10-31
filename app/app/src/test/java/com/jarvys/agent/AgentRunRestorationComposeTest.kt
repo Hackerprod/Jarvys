@@ -43,8 +43,7 @@ class AgentRunRestorationComposeTest {
         val prepared = chatTestStore.withLocalRunStore(root) { store ->
             val userId = store.appendConversationMessage(session, "user", "Create a web page")
             val projectId = WorkspaceStore.projectIdForSession(session)
-            val workspace = WorkspaceStore(File(root, "jarvys/g3/workspaces"), projectId,
-                null, null, null, session, false)
+            val workspace = WorkspaceStore(com.jarvys.agent.StorageGeneration(root), projectId, null, null, session)
             workspace.write("index.html", "<!doctype html><h1>Restored page</h1>")
             val artifacts = DeliveredArtifactStore(root)
             val artifact = artifacts.snapshot(session, workspace, "index.html", null, CancellationToken.uncancellable())

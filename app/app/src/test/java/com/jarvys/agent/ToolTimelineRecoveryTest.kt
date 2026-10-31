@@ -40,7 +40,7 @@ class ToolTimelineRecoveryTest {
     // The conversation store is gated by the single-session reset; await it off the main thread first.
     @org.junit.Before fun storageReady() {
         chatTestStore.onDatabaseWorker {
-            SingleSessionReset.awaitReadyBlocking(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir)
+            FreshStorageBootstrap.awaitReadyBlocking(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir)
         }
     }
 

@@ -13,12 +13,40 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.Arrays;
 
 /** Real live Crew provenance for local tests; never constructs a witness from arbitrary metadata. */
 public final class CodingSubmissionTestSource {
     private CodingSubmissionTestSource() { }
 
     public static void run(Context context, BiConsumer<EffectInvocation, CancellationToken> action) throws Exception {
+        runProbe(context, false, (invocation, token) -> {
+            action.accept(invocation, token);
+            return CoreToolResult.success("Synthetic local callback completed");
+        });
+    }
+
+    /** Exercises the actual registry ASYNC_JOB branch and returns the producer receipt unchanged. */
+    public static void runAsync(Context context,
+            BiFunction<EffectInvocation, CancellationToken, CoreToolResult> action) throws Exception {
+        runProbe(context, true, action);
+    }
+
+    /** Required observation/cancellation catalog companion; never substitutes for job execution. */
+    public static CoreTool projectJobsCompanion() {
+        return new CoreTool() {
+            private final ToolSpec spec = new ToolSpec("project_jobs", "test", "Observe fixture jobs", "test",
+                    ToolSpec.Status.IMPLEMENTED, Collections.emptyMap(), Collections.emptyList());
+            @Override public ToolSpec declaration() { return spec; }
+            @Override public CoreToolResult execute(Map<String,Object> args, CancellationToken token) {
+                throw new AssertionError("Fixture must not invent a job observation");
+            }
+        };
+    }
+
+    private static void runProbe(Context context, boolean asynchronous,
+            BiFunction<EffectInvocation, CancellationToken, CoreToolResult> action) throws Exception {
         String session = WorkspaceIdentity.executionSessionId(UUID.randomUUID().toString());
         new LocalRunStore(context).appendConversationMessage(session, "user", "Synthetic Coding source fixture");
         AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -28,6 +56,9 @@ public final class CodingSubmissionTestSource {
             private final ToolSpec spec = new ToolSpec("project_exec", "test", "Local source fixture", "test",
                     ToolSpec.Status.IMPLEMENTED, Collections.emptyMap(), Collections.emptyList());
             @Override public ToolSpec declaration() { return spec; }
+            @Override public AccessClassification accessClassification() { return asynchronous ? AccessClassification.WRITE : AccessClassification.READ; }
+            @Override public CompletionMode completionMode(Map<String,Object> args) { return asynchronous ? CompletionMode.ASYNC_JOB : CompletionMode.SYNCHRONOUS; }
+            @Override public boolean hasCompleteAsyncSubmissionCoverage() { return asynchronous; }
             @Override public CoreToolResult execute(Map<String,Object> arguments, CancellationToken token) {
                 throw new AssertionError("Explicit invocation transport is required");
             }
@@ -37,17 +68,16 @@ public final class CodingSubmissionTestSource {
                     if (invocation.crewSource() == null) throw new AssertionError("Real Crew source missing");
                     invocation.crewSource().requireInvocationCurrent();
                     calls.incrementAndGet();
-                    action.accept(invocation, token);
-                    return CoreToolResult.success("Synthetic local callback completed");
+                    return action.apply(invocation, token);
                 } catch (Throwable error) {
                     failure.set(error);
                     throw new AssertionError("Synthetic local callback failed", error);
                 } finally { invoked.countDown(); }
             }
         };
-        CoreToolRegistry registry = new CoreToolRegistry(Collections.singletonList(probe));
+        CoreToolRegistry registry = new CoreToolRegistry(Arrays.asList(probe, projectJobsCompanion()));
         CrewRole role = new CrewRole("coding-source-fixture", "Fixture", "coding", "Observe exact source",
-                Collections.singletonList("project_exec"), null, "Local fixture profile", 1,
+                Arrays.asList("project_exec", "project_jobs"), null, "Local fixture profile", 1,
                 Collections.emptyList(), CrewProfile.WorkspaceMode.CONVERSATION_PROJECT);
         AtomicInteger turns = new AtomicInteger();
         try (CrewManager manager = new CrewManager(session, registry,

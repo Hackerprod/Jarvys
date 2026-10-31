@@ -22,7 +22,7 @@ import org.robolectric.annotation.Config
 class PreviewMobileViewportIntegrationTest {
     // The conversation store is gated by the single-session reset; await it before building fixtures.
     @org.junit.Before fun storageReady() {
-        kotlinx.coroutines.runBlocking { SingleSessionReset.awaitReady(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()) }
+        kotlinx.coroutines.runBlocking { FreshStorageBootstrap.awaitReady(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()) }
     }
 
     private val context: Context get() = ApplicationProvider.getApplicationContext()
@@ -151,8 +151,7 @@ class PreviewMobileViewportIntegrationTest {
     }
     private fun fixture(snapshot: Boolean = false, document: String = html): Fixture {
         val session = "ux41-${UUID.randomUUID()}"
-        val workspace = WorkspaceStore(File(context.filesDir, "jarvys/workspaces"), WorkspaceStore.projectIdForSession(session),
-            null, null, null, session, false)
+        val workspace = WorkspaceStore(com.jarvys.agent.StorageGeneration(context.filesDir), WorkspaceStore.projectIdForSession(session), null, null, session)
         workspace.write("index.html", document)
         val content = if (snapshot) {
             val store = DeliveredArtifactStore(context)

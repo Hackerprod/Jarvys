@@ -1994,4 +1994,6 @@ Confirmed retired sources:
     <string name="memory_orphan_backup_warning">Before reclassification, this operation creates and verifies a private copy of the WHOLE shared SQLite database, even with zero candidates. It includes conversations/transcripts, bindings, historical and soft-deleted data, and OTHER PROJECTS, beyond the authorized repair scope. The copy stays in app-private storage; nothing is uploaded or exported. It is not JSON export, automatic restore, or guaranteed forensic recovery.</string>
     <string name="memory_orphan_consent">I authorize this whole-database private copy even with zero changes, and terminal orphaned reclassification of the current matching relations. I understand the preview can change and the indefinite retention policy.</string>
     <string name="memory_orphan_preview">Preview pending relation categories</string>
+    <string name="workspace_registry_preserved_title">Workspace storage unavailable</string>
+    <string name="workspace_registry_preserved_body">The workspace registry could not be safely opened. Existing data was preserved; no repair, import, or deletion was attempted. Do not clear storage or reinstall. Preserve this installation and request support.</string>
 </resources>

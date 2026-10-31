@@ -180,13 +180,13 @@ class ConnectionPreferencesOwnerTest {
 
     @Test fun localBootstrapDoesNotWaitForPendingOrFailedConversationStartup() {
         val app = ApplicationProvider.getApplicationContext<Context>()
-        val field = com.jarvys.agent.SingleSessionReset::class.java.getDeclaredField("startups").apply { isAccessible = true }
+        val field = com.jarvys.agent.FreshStorageBootstrap::class.java.getDeclaredField("startups").apply { isAccessible = true }
         @Suppress("UNCHECKED_CAST")
         val startups = field.get(null) as MutableMap<String, Any>
         for (failed in listOf(false, true)) {
             val root = temporary.newFolder(if (failed) "failed-chat" else "pending-chat")
             val context = RootContext(app, root)
-            worker { com.jarvys.agent.SingleSessionReset.register(root) }
+            worker { com.jarvys.agent.FreshStorageBootstrap.register(root) }
             val key = root.canonicalPath
             try {
                 if (failed) {
@@ -196,11 +196,11 @@ class ConnectionPreferencesOwnerTest {
                     val completion = completionField.get(startup) as kotlinx.coroutines.CompletableDeferred<Unit>
                     completion.completeExceptionally(IllegalStateException("synthetic startup failure"))
                 }
-                assertFalse(worker { com.jarvys.agent.SingleSessionReset.isReady(context) })
+                assertFalse(worker { com.jarvys.agent.FreshStorageBootstrap.isReady(context) })
                 val owner = worker { ConnectionPreferencesOwner.forContext(context, projectionFence, providerIdentity) }
                 assertEquals(BootstrapStatus.READY, owner.initializeAsync().get(10, TimeUnit.SECONDS).status)
                 assertEquals(DestinationState.UNBOUND, owner.snapshot().destinationState)
-                assertFalse(worker { com.jarvys.agent.SingleSessionReset.isReady(context) })
+                assertFalse(worker { com.jarvys.agent.FreshStorageBootstrap.isReady(context) })
             } finally { synchronized(startups) { startups.remove(key) } }
         }
     }

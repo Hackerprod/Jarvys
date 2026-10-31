@@ -44,7 +44,7 @@ class TaskManualRunWorkerTest {
         WorkManagerTestInitHelper.initializeTestWorkManager(context,
             Configuration.Builder().setExecutor { command -> command.run() }.build(),
             WorkManagerTestInitHelper.ExecutorsMode.LEGACY_OVERRIDE_WITH_SYNCHRONOUS_EXECUTORS)
-        chatTestStore.onDatabaseWorker { com.jarvys.agent.SingleSessionReset.awaitReadyBlocking(context.filesDir) }
+        chatTestStore.onDatabaseWorker { com.jarvys.agent.FreshStorageBootstrap.awaitReadyBlocking(context.filesDir) }
     }
 
     @After fun closeWorkManager() {

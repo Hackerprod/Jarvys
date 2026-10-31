@@ -71,11 +71,10 @@ class MainActivityArtifactPreviewGestureTest {
                 .apply { isAccessible = true }.set(null, null)
             secretSingleton.set(null, SecretStore(context.getSharedPreferences("ux22-preview-secrets", 0)))
             WorkManagerTestInitHelper.initializeTestWorkManager(context)
-            chatTestStore.onDatabaseWorker { SingleSessionReset.awaitReadyBlocking(context.filesDir) }
-            MemoryStore(context).markDisclosureShown()
+            chatTestStore.onDatabaseWorker { FreshStorageBootstrap.awaitReadyBlocking(context.filesDir) }
+
             MemoryReflectionPreferences(context).markDisclosureShown()
-            val workspace = WorkspaceStore(File(context.filesDir, "jarvys/workspaces"), projectId,
-                null, null, null, session, false)
+            val workspace = WorkspaceStore(com.jarvys.agent.StorageGeneration(context.filesDir), projectId, null, null, session)
             workspace.write("index.html", deliveredHtml)
             val artifacts = DeliveredArtifactStore(context)
             attachment = artifacts.snapshot(session, workspace, "index.html", null, CancellationToken.uncancellable())

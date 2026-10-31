@@ -71,7 +71,7 @@ class ArtifactHtmlPreviewUiTest {
     // The conversation store is gated by the single-session reset; await it off the main thread first.
     @Before fun storageReady() {
         chatTestStore.onDatabaseWorker {
-            SingleSessionReset.awaitReadyBlocking(
+            FreshStorageBootstrap.awaitReadyBlocking(
                 androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().filesDir)
         }
     }
@@ -444,8 +444,7 @@ class ArtifactHtmlPreviewUiTest {
         return Fixture(session, workspace, attachment, descriptor, html, css, javascript, png)
     }
 
-    private fun workspace(session: String) = WorkspaceStore(File(compose.activity.filesDir, "jarvys/workspaces"),
-        WorkspaceStore.projectIdForSession(session), null, null, null, session, false)
+    private fun workspace(session: String) = WorkspaceStore(com.jarvys.agent.StorageGeneration(compose.activity.filesDir), WorkspaceStore.projectIdForSession(session), null, null, session)
 
     private fun request(web: WebView, url: String, method: String = "GET"): WebResourceResponse {
         var response: WebResourceResponse? = null

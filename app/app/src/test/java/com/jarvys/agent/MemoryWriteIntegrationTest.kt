@@ -39,7 +39,7 @@ class MemoryWriteIntegrationTest {
             override fun getApplicationContext(): Context = this
             override fun getFilesDir() = files
         }
-        runBlocking { SingleSessionReset.awaitReady(context) }
+        runBlocking { FreshStorageBootstrap.awaitReady(context) }
         bridge = ChatDatabaseBridge.getInstance(context)
         assertTrue(bridge.ensureConversationSync(conversation) is ChatDbResult.Success)
         policy = MemoryWritePolicy.forContext(context)
@@ -104,7 +104,7 @@ class MemoryWriteIntegrationTest {
         val old = PersonalMemoryTools.create(context, "request", conversation).single { it.declaration().name == "memory_save" }
         policy.setEnabledBlocking(false)
         policy.setEnabledBlocking(true)
-        val arguments = mapOf<String, Any>("text" to "A new local preference", "layer" to "curated", "kind" to "preference")
+        val arguments = mapOf<String, Any>("title" to "Local preference", "content" to "A new local preference", "layer" to "curated", "type" to "preference")
         val stale = old.execute(arguments, token)
         assertFalse(stale.success)
         assertEquals(0L, scalar("SELECT COUNT(*) FROM memory_entries WHERE text='A new local preference'"))
@@ -118,7 +118,7 @@ class MemoryWriteIntegrationTest {
         val ticket = policy.captureTicket()
         policy.setEnabledBlocking(false)
         assertThrows(MemoryWriteGate.RejectedException::class.java) { saveAutomatic(ticket, "Blocked automatic entry") }
-        val human = bridge.personalAgentSaveMemory("Explicit user entry", "curated", null, 0.7, null)
+        val human = bridge.personalAgentSaveMemory("Explicit user entry", "curated", null, 0.7, null, com.jarvys.agent.chatdb.MemorySaveOptions())
         assertEquals("saved", human.status)
         assertTrue(bridge.personalAgentBrowse().any { it.id == human.id })
         bridge.personalAgentForget(requireNotNull(human.id))

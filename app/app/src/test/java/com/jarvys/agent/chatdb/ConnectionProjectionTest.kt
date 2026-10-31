@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.ChatTestStore
-import com.jarvys.agent.SingleSessionReset
+import com.jarvys.agent.FreshStorageBootstrap
 import com.jarvys.agent.connectors.ConnectionStateCoordinator
 import com.jarvys.agent.connectors.ConnectionStateCoordinator.*
 import kotlinx.coroutines.runBlocking
@@ -38,7 +38,7 @@ class ConnectionProjectionTest {
             override fun getApplicationContext(): Context = this
             override fun getFilesDir() = files
         }
-        runBlocking { SingleSessionReset.awaitReady(context) }
+        runBlocking { FreshStorageBootstrap.awaitReady(context) }
         bridge = ChatDatabaseBridge.getInstance(context)
         anchor = ChatDatabaseBridge.connectionProjectionAnchor(context)
         db = JarvysChatDatabaseProvider.getInstance(context)

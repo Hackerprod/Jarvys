@@ -1,0 +1,95 @@
+{
+  "scope": "Only newly supplemented obsolete legacy-subject tests; no published v98 test removed; no production deletion or migration",
+  "removed": [
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/MemoryAutomaticWriteTicketTest.kt",
+      "supplement_sha256": "80471374efef799c35fbf7e0bee30fe0e822d1cec1fdbf34da5ec79468a6bee7",
+      "removed_sha256": "80471374efef799c35fbf7e0bee30fe0e822d1cec1fdbf34da5ec79468a6bee7",
+      "reason": "Removed legacy MemoryStore/seed/scoped-file-memory UI/export subject; current Engram tests retained."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/MemoryLanguageQ2Test.kt",
+      "supplement_sha256": "76433f2c702d7cf69f733445b0433b10891276b9edd3d2bf72690bf45c8c5db8",
+      "removed_sha256": "76433f2c702d7cf69f733445b0433b10891276b9edd3d2bf72690bf45c8c5db8",
+      "reason": "Removed legacy MemoryStore/seed/scoped-file-memory UI/export subject; current Engram tests retained."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/MemoryScopeRuntimeTest.kt",
+      "supplement_sha256": "ef8fcb6e6e3e2a4b73519a9b55c750aaa34f99768531222100826ec86cc1206f",
+      "removed_sha256": "ef8fcb6e6e3e2a4b73519a9b55c750aaa34f99768531222100826ec86cc1206f",
+      "reason": "Removed legacy MemoryStore/seed/scoped-file-memory UI/export subject; current Engram tests retained."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/MemoryScopeStoreTest.kt",
+      "supplement_sha256": "e652150fdb13f55405d5b796a050e9e8ee56d407848f1095f6c2b75483914262",
+      "removed_sha256": "e652150fdb13f55405d5b796a050e9e8ee56d407848f1095f6c2b75483914262",
+      "reason": "Removed legacy MemoryStore/seed/scoped-file-memory UI/export subject; current Engram tests retained."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/MemorySeedFixtures.kt",
+      "supplement_sha256": "2c23723f6e4addb033f80bc9590eacfebed1fe12e5af7b17ac253c77334e5271",
+      "removed_sha256": "2c23723f6e4addb033f80bc9590eacfebed1fe12e5af7b17ac253c77334e5271",
+      "reason": "Removed legacy MemoryStore/seed/scoped-file-memory UI/export subject; current Engram tests retained."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/MemoryStoreTest.kt",
+      "supplement_sha256": "15f5a6b19adce62fa8b0b502ab2da632894e4c9b2dec17c01f21b4ff9300c619",
+      "removed_sha256": "15f5a6b19adce62fa8b0b502ab2da632894e4c9b2dec17c01f21b4ff9300c619",
+      "reason": "Removed legacy MemoryStore/seed/scoped-file-memory UI/export subject; current Engram tests retained."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/MemoryUiLogicTest.kt",
+      "supplement_sha256": "f61052dd74cde555ecb807dc6c6ab38e7e9f397d178d9ef1c29086848249974f",
+      "removed_sha256": "f61052dd74cde555ecb807dc6c6ab38e7e9f397d178d9ef1c29086848249974f",
+      "reason": "Removed legacy MemoryStore/seed/scoped-file-memory UI/export subject; current Engram tests retained."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/NativeMemoryExportOwnershipTest.kt",
+      "supplement_sha256": "55cff135f8059b44992748a06c3cb781312fcd37fd57a2eb6cf33621f7c51b03",
+      "removed_sha256": "55cff135f8059b44992748a06c3cb781312fcd37fd57a2eb6cf33621f7c51b03",
+      "reason": "Removed legacy MemoryStore/seed/scoped-file-memory UI/export subject; current Engram tests retained."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/SingleSessionResetTest.kt",
+      "supplement_sha256": "8f5bc6ef5f8d132ca5969e136f7c81b96ec60e24b8f9c87e5ae0fb9ae30c1d54",
+      "removed_sha256": "8f5bc6ef5f8d132ca5969e136f7c81b96ec60e24b8f9c87e5ae0fb9ae30c1d54",
+      "reason": "Removed legacy reset/startup migration subject; current FreshStorageBootstrap and generation compatibility tests retained."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/SingleSessionStartupTest.kt",
+      "supplement_sha256": "22a5f66acf9f51a75d577fc357111040bc330a82e81e24a2c038ee48ab80e052",
+      "removed_sha256": "22a5f66acf9f51a75d577fc357111040bc330a82e81e24a2c038ee48ab80e052",
+      "reason": "Removed legacy reset/startup migration subject; current FreshStorageBootstrap and generation compatibility tests retained."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/chatdb/CodingJobMigrationTest.kt",
+      "supplement_sha256": "cb9fec1fb461a55d9d3426b2a4f9b77bef85e6a17b05283bb432ce809cd6243a",
+      "removed_sha256": "cb9fec1fb461a55d9d3426b2a4f9b77bef85e6a17b05283bb432ce809cd6243a",
+      "reason": "Removed pre-current-generation migration/import API subject; current-generation schema compatibility is independently tested, not legacy imported."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/chatdb/ConnectionStateEventMigrationTest.kt",
+      "supplement_sha256": "4800f1c0c9be73476afd3645f04d1e0544df3729d6ebdb1ca5ca9f20607d39d2",
+      "removed_sha256": "4800f1c0c9be73476afd3645f04d1e0544df3729d6ebdb1ca5ca9f20607d39d2",
+      "reason": "Removed pre-current-generation migration/import API subject; current-generation schema compatibility is independently tested, not legacy imported."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/chatdb/EpisodeIdentityMigrationTest.kt",
+      "supplement_sha256": "d7fefc89dc9fe023f90e41b3f7ffe1e1888ab5adbfa13ac4f664e5eef1115482",
+      "removed_sha256": "d7fefc89dc9fe023f90e41b3f7ffe1e1888ab5adbfa13ac4f664e5eef1115482",
+      "reason": "Removed pre-current-generation migration/import API subject; current-generation schema compatibility is independently tested, not legacy imported."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/chatdb/MigrationDriverParityTest.kt",
+      "supplement_sha256": "cbdb231506c18611a2f2f6bdf8fb102ca50e9fe43b444b9b65275e87613f555f",
+      "removed_sha256": "cbdb231506c18611a2f2f6bdf8fb102ca50e9fe43b444b9b65275e87613f555f",
+      "reason": "Removed pre-current-generation migration/import API subject; current-generation schema compatibility is independently tested, not legacy imported."
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/connectors/AutonomyAuditMigrationTest.kt",
+      "supplement_sha256": "1074d3fa455874414ff06cade3b3d89ecabfd08223a7fe64c9bc3b3e0f9db8db",
+      "removed_sha256": "1074d3fa455874414ff06cade3b3d89ecabfd08223a7fe64c9bc3b3e0f9db8db",
+      "reason": "Removed pre-current-generation migration/import API subject; current-generation schema compatibility is independently tested, not legacy imported."
+    }
+  ]
+}

@@ -57,7 +57,7 @@ class WorkspaceStoreTest {
                 override fun clear(serverId: String) = Unit
             }))
             skillInstance.set(null, null)
-            val workspace = WorkspaceStore(app, projectId, "symlink-session", false)
+            val workspace = WorkspaceStore(app, projectId, "symlink-session")
             assertEquals("Production Context path follows the filesDir alias.", board.read("notes/guide.md"))
             assertEquals("Skill root is canonicalized.", workspace.read("/skills/$skillId/guide.md"))
             assertTrue(workspace.list("/skills").any { it == "DIR  $skillId" })
@@ -207,65 +207,38 @@ Read and verify the project files.
     }
 
     @Test
-    fun memoryZoneUsesConversationStoreAndDeleteCannotTouchOtherChatsWorkspaceOrSkills() {
+    fun removedMemoryMountCannotMutateWorkspaceOrInstalledSkills() {
         val projectRoot = temporaryFolder.newFolder("project-memory-zone")
         val skillsRoot = temporaryFolder.newFolder("skills-memory-zone")
-        val memoryRoot = temporaryFolder.newFolder("scoped-memory-zone")
-        val memoryOwner = MemoryStore(memoryRoot, true, testMemorySeedProvider())
-        val memory = memoryOwner.forConversation("conversation-a").also { it.ensureInitialized() }
-        val otherMemory = memoryOwner.forConversation("conversation-b").also { it.ensureInitialized() }
-        val projectId = WorkspaceStore.projectIdForSession("project-a")
         val observer = object : WorkspaceStore.SkillWorkspaceObserver {
             override fun commitSkillWorkspaceWrite(skillId: String, skillMarkdown: String?, writeFile: Runnable) = writeFile.run()
         }
-        val workspace = WorkspaceStore(projectRoot, projectId, skillsRoot, observer, memory, "conversation-a")
-        val tools = CoreToolRegistry(WorkspaceTools.create(workspace))
-        val content = "---\nname: Person\ndescription: User details.\n---\nName shared by the user."
-
-        val written = tools.invoke("write", mapOf("path" to "/memory/person.md", "content" to content), CancellationToken.uncancellable())
-        assertTrue(written.success)
-        assertTrue(written.content.contains("revision"))
-        assertEquals(content, File(memory.rootDirectory(), "person.md").readText())
-        assertFalse(File(projectRoot, "memory/person.md").exists())
-        assertTrue(workspace.list("/memory").any { it.startsWith("FILE person.md") })
-        assertFalse(File(memoryRoot, "person.md").exists())
-        assertFalse(otherMemory.list("").any { it.startsWith("FILE person.md") })
-        val otherContent = content.replace("Name shared by the user.", "A separate chat's note.")
-        otherMemory.write("person.md", otherContent, MemoryStore.Actor.USER, "conversation-b")
-
+        val workspace = WorkspaceStore(projectRoot, WorkspaceStore.projectIdForSession("project-a"), skillsRoot, observer)
         workspace.write("project.txt", "project")
         workspace.write("/skills/com.jarvys.test/guide.md", "skill")
+        val tools = CoreToolRegistry(WorkspaceTools.create(workspace))
+        for (path in listOf("/memory/person.md", "/memory/../project.txt", " /memory/person.md ")) {
+            assertFalse(tools.invoke("write", mapOf("path" to path, "content" to "forbidden"), CancellationToken.uncancellable()).success)
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { workspace.read(path) }
+        }
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { workspace.list("/memory") }
+        assertFalse(tools.names().contains("delete"))
         assertEquals("project", workspace.read("project.txt"))
         assertEquals("skill", workspace.read("/skills/com.jarvys.test/guide.md"))
-        assertTrue(workspace.read("/memory/person.md").contains("Name shared by the user."))
-
-        val deleted = tools.invoke("delete", mapOf("path" to "/memory/person.md"), CancellationToken.uncancellable())
-        assertTrue(deleted.success)
-        assertFalse(File(memory.rootDirectory(), "person.md").exists())
-        assertEquals(otherContent, otherMemory.read("person.md"))
-        assertEquals("project", workspace.read("project.txt"))
-        assertEquals("skill", workspace.read("/skills/com.jarvys.test/guide.md"))
-        runCatching { workspace.deleteMemoryFile("/skills/com.jarvys.test/guide.md") }
-            .onSuccess { error("Memory delete reached the skills zone") }
-        runCatching { workspace.deleteMemoryFile("project.txt") }
-            .onSuccess { error("Memory delete reached the project workspace") }
+        assertFalse(File(projectRoot, "memory/person.md").exists())
     }
 
     @Test
-    fun disabledMemoryIsNotAnnouncedAndRejectsAgentWrites() {
+    fun fileToolsNeverAdvertiseOrRecreateTheRemovedMemoryMount() {
         val projectRoot = temporaryFolder.newFolder("project-memory-disabled")
-        val skillsRoot = temporaryFolder.newFolder("skills-memory-disabled")
-        val memory = MemoryStore(temporaryFolder.newFolder("memory-disabled"), true, testMemorySeedProvider())
-            .forConversation("conversation").also { it.ensureInitialized() }
-        memory.setEnabled(false)
-        val workspace = WorkspaceStore(projectRoot, WorkspaceStore.projectIdForSession("disabled"),
-            skillsRoot, null, memory, "conversation")
+        val workspace = WorkspaceStore(projectRoot, WorkspaceStore.projectIdForSession("disabled"))
         val tools = WorkspaceTools.create(workspace)
         assertFalse(tools.any { it.declaration().name == "delete" })
         assertFalse(tools.any { it.declaration().description.contains("/memory/") })
-        runCatching { workspace.write("/memory/note.md", "---\nname: Note\ndescription: Note.\n---\nbody") }
-            .onSuccess { error("Agent wrote while memory was disabled") }
-        assertTrue(File(memory.rootDirectory(), "human.md").exists())
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            workspace.write("/memory/note.md", "forbidden")
+        }
+        assertFalse(File(projectRoot, "memory").exists())
     }
 
     private class FilesDirContext(base: Context, private val filesDirectory: File) : ContextWrapper(base) {

@@ -23,7 +23,7 @@ import org.robolectric.annotation.Config
 class PreviewResponsePolicyTest {
     // The conversation store is gated by the single-session reset; await it before building fixtures.
     @org.junit.Before fun storageReady() {
-        kotlinx.coroutines.runBlocking { SingleSessionReset.awaitReady(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()) }
+        kotlinx.coroutines.runBlocking { FreshStorageBootstrap.awaitReady(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()) }
     }
 
     private val context: Context get() = ApplicationProvider.getApplicationContext()
@@ -216,8 +216,7 @@ class PreviewResponsePolicyTest {
 
     private fun fixture(snapshot: Boolean = false): Fixture {
         val session = "ux39-${UUID.randomUUID()}"
-        val workspace = WorkspaceStore(File(context.filesDir, "jarvys/workspaces"), WorkspaceStore.projectIdForSession(session),
-            null, null, null, session, false)
+        val workspace = WorkspaceStore(com.jarvys.agent.StorageGeneration(context.filesDir), WorkspaceStore.projectIdForSession(session), null, null, session)
         val resources = linkedMapOf(
             "index.html" to "<!doctype html><meta name=viewport content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"style.css\"><script src=\"app.js\"></script><script type=\"module\" src=\"module.js\"></script><img src=\"icon.svg\"><a href=\"next.html\">Next</a><button onclick=\"this.textContent='ok'\">Tap</button>",
             "next.html" to "<!doctype html><meta name=viewport content=\"width=device-width, initial-scale=1\"><p id=\"section\">Next local page</p>",

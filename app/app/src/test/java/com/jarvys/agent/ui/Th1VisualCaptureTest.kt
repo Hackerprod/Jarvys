@@ -44,8 +44,7 @@ import com.jarvys.agent.JarvysSettingsPage
 import com.jarvys.agent.JarvysSettingsScreen
 import com.jarvys.agent.JarvysThemeMode
 import com.jarvys.agent.MemoryConstants
-import com.jarvys.agent.MemorySettingsScreen
-import com.jarvys.agent.MemoryStore
+import com.jarvys.agent.memory.PersonalMemoryScreen
 import com.jarvys.agent.tasks.ui.TasksListScreen
 import com.jarvys.agent.proactive.ProactiveStatus
 import com.jarvys.agent.tasks.CalendarCadence
@@ -93,6 +92,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34])
 class Th1VisualCaptureTest {
+    @get:Rule val storage = com.jarvys.agent.ChatTestStore(registerApplicationFilesDirectory = true)
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private val output = TestCaptureDirectories.create("th1-shots")
 
@@ -100,6 +100,7 @@ class Th1VisualCaptureTest {
 
     @Test fun captureBeforeOrAfterScenesIndependentlyInBothThemes() {
         if (com.jarvys.agent.BuildConfig.FLAVOR != "play") return
+        kotlinx.coroutines.runBlocking { com.jarvys.agent.FreshStorageBootstrap.awaitReady(compose.activity) }
         val stage = System.getenv("TH1_CAPTURE_STAGE") ?: "after"
         require(stage == "before" || stage == "after")
         output.listFiles()?.filter { it.name.startsWith("${stage}_") && it.extension == "png" }
@@ -113,7 +114,7 @@ class Th1VisualCaptureTest {
                     runCatching { compose.onNodeWithTag("tasks-list").fetchSemanticsNode(); true }.getOrDefault(false)
                 }
                 if (scene == Scene.MEMORY) compose.waitUntil(10_000) {
-                    runCatching { compose.onNodeWithTag("memory-reflection-card").fetchSemanticsNode(); true }.getOrDefault(false)
+                    runCatching { compose.onNodeWithTag("memory-screen-scroll").fetchSemanticsNode(); true }.getOrDefault(false)
                 }
                 repeat(3) { compose.mainClock.advanceTimeByFrame() }
                 val bitmap = captureActivityBitmap()
@@ -272,17 +273,7 @@ class Th1VisualCaptureTest {
     }
 
     @Composable private fun MemoryGallery(context: android.content.Context) {
-        val memory = remember {
-            MemoryStore(context).forConversation("th1-memory").also { it.ensureInitialized() }
-        }
-        val registryOwner = rememberMemoryActivityResultOwner()
-        CompositionLocalProvider(LocalActivityResultRegistryOwner provides registryOwner) {
-            MemorySettingsScreen(store = memory, enabled = true, onEnabledChange = {},
-                conversationId = "th1-memory", onShowDisclosure = {}, onMemoryChanged = {},
-                reflectionEnabled = true, reflectionStatus = "Completada", lastReflectionMillis = System.currentTimeMillis() - 3_600_000L,
-                reflecting = false, onReflectionEnabledChange = {}, onReflectionDisclosure = {},
-                onOpenHistory = {}, onOpenFile = { _, _ -> })
-        }
+        PersonalMemoryScreen(conversationId = "th1-memory")
     }
 
     @Composable private fun rememberMemoryActivityResultOwner(): ActivityResultRegistryOwner {

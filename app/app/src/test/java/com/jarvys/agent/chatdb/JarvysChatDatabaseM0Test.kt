@@ -1037,6 +1037,7 @@ class JarvysChatDatabaseM0Test {
                     category = null,
                     importance = 0.8,
                     sourceRef = "v1-reset-test",
+                    options = MemorySaveOptions(),
                 )
                 assertEquals("saved", receipt.status)
                 assertTrue("memory could not be searched after reset", personalAgent.search("concise replies").any {

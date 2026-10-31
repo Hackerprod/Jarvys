@@ -1,5 +1,6 @@
 package com.jarvys.agent
 
+import com.jarvys.agent.chatdb.MemoryNamespace
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -7,118 +8,76 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.junit.rules.TemporaryFolder
-import java.io.File
 import java.util.concurrent.CancellationException
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 
-/** Synthetic memory only. Native memory tools run directly while keeping their real state boundaries. */
+/** Current file/Engram separation; no legacy file-memory mutation implementation is restored. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
 class NativeMemoryActionRuntimeTest {
     @get:Rule val temporary = TemporaryFolder()
     private val token = CancellationToken.uncancellable()
-    private fun root() = MemoryStore(temporary.newFolder(), true, testMemorySeedProvider())
-    private fun note(value: String) = "---\nname: Note\ndescription: Synthetic note\n---\n$value\n"
-    private fun workspace(root: MemoryStore, enabled: Boolean = true) = WorkspaceStore(
-        File(temporary.root, "workspaces"), WorkspaceStore.projectIdForSession("session"),
-        File(temporary.root, "skills").apply { mkdirs() }, null, root, "session", enabled)
+    private fun workspace() = WorkspaceStore(temporary.newFolder(), WorkspaceStore.projectIdForSession("session"))
 
-    @Test fun memoryWorkspaceToolsWriteEditDeleteAndPreserveOrdinaryFiles() {
-        val root = root()
-        val workspace = workspace(root)
+    @Test fun fileToolsCannotWriteEditReadOrDeleteEngramThroughRemovedMemoryPaths() {
+        val workspace = workspace()
         val tools = CoreToolRegistry(WorkspaceTools.createWithSearchForTests(workspace, null))
-        val selected = root.forConversation("session").bindAutomaticWritesForToolset()
-
-        val write = tools.invoke("write", mapOf("path" to "/memory/new.md", "content" to note("first")), token)
-        assertTrue(write.content, write.success)
-        assertTrue(selected.read("new.md").contains("first"))
-
-        val edit = tools.invoke("edit", mapOf("path" to "/memory/new.md", "old_text" to "first", "new_text" to "updated"), token)
-        assertTrue(edit.content, edit.success)
-        assertTrue(selected.read("new.md").contains("updated"))
-
-        val delete = tools.invoke("delete", mapOf("path" to "/memory/new.md"), token)
-        assertTrue(delete.content, delete.success)
-        assertFalse(File(selected.rootDirectory(), "new.md").exists())
-
+        for (name in listOf("write", "edit", "read")) {
+            val result = tools.invoke(name, mapOf("path" to "/memory/new.md", "content" to "first",
+                "old_text" to "first", "new_text" to "updated"), token)
+            assertFalse("$name must not expose file memory", result.success)
+        }
+        assertFalse(tools.names().contains("delete"))
         workspace.write("ordinary.txt", "ordinary")
         assertEquals("ordinary", workspace.read("ordinary.txt"))
+        assertThrows(IllegalArgumentException::class.java) { workspace.read("/memory/new.md") }
     }
 
-    @Test fun disabledMemoryRemainsUnavailableWhileOrdinaryWorkspaceWritesWork() {
-        val root = root()
-        val workspace = workspace(root, enabled = false)
-        val tools = CoreToolRegistry(WorkspaceTools.createWithSearchForTests(workspace, null))
-        assertFalse(tools.invoke("write", mapOf("path" to "/memory/new.md", "content" to note("no")), token).success)
-        workspace.write("ordinary.txt", "still available")
-        assertEquals("still available", workspace.read("ordinary.txt"))
+    @Test fun currentEngramScopeSelectionCannotGrantUnknownProjectOwnership() {
+        val namespace = MemoryNamespace.central()
+        assertEquals(MemoryNamespace.CENTRAL, namespace.project)
+        assertEquals("project", namespace.scope)
+        assertThrows(IllegalArgumentException::class.java) { namespace.selectWrite("foreign-project", "project") }
+        assertEquals(MemoryNamespace.CENTRAL, namespace.selectWrite(null, "global").project)
+        assertThrows(IllegalArgumentException::class.java) { namespace.selectWrite("foreign-project", "global") }
+        assertEquals(MemoryNamespace.CENTRAL, namespace.selectWrite(null, "personal").project)
+        assertEquals("personal", namespace.selectWrite(null, "personal").scope)
     }
 
-    @Test fun exactToolArgumentsAreCapturedOnceBeforeTheSharedEffect() {
-        val root = root()
-        val workspace = workspace(root)
+    @Test fun exactOrdinaryToolContentIsCapturedOnceBeforeEffect() {
+        val workspace = workspace()
         var contentReads = 0
         val args = object : LinkedHashMap<String, Any>() {
             override fun get(key: String): Any? = if (key == "content") {
-                contentReads++; note(if (contentReads == 1) "captured" else "changed")
+                contentReads++; if (contentReads == 1) "captured" else "changed"
             } else super.get(key)
-        }.apply { put("path", "/memory/note.md"); put("content", "placeholder") }
+        }.apply { put("path", "note.md"); put("content", "placeholder") }
         val tools = CoreToolRegistry(WorkspaceTools.createWithSearchForTests(workspace, null))
-
         val result = tools.invoke("write", args, token)
-
         assertTrue(result.content, result.success)
         assertEquals(1, contentReads)
-        assertTrue(workspace.read("/memory/note.md").contains("captured"))
-        assertFalse(workspace.read("/memory/note.md").contains("changed"))
+        assertEquals("captured", workspace.read("note.md"))
     }
 
-    @Test fun compoundNativeMutationCompletesAndCancelledActionDoesNotRun() {
-        val store = root().forConversation("session").bindAutomaticWritesForToolset()
-        val actions = MemoryNativeActions.forTool(store)
-        val changes = AtomicInteger()
-        val listener = object : MemoryStore.MemoryChangeListener {
-            override fun onMemoryChanged(revision: MemoryStore.Revision) { changes.incrementAndGet() }
-            override fun onMemoryCleared() = Unit
+    @Test fun cancelledNativeFileActionDoesNotRun() {
+        val workspace = workspace()
+        val tools = CoreToolRegistry(WorkspaceTools.createWithSearchForTests(workspace, null))
+        val cancelled = CancellationToken.cancellable().also { it.cancel() }
+        assertThrows(CancellationException::class.java) {
+            tools.invoke("write", mapOf("path" to "must-not-exist.md", "content" to "cancelled"), cancelled)
         }
-        store.ensureInitialized()
-        store.addChangeListener(listener)
-        try {
-            actions.run(store, token) { store.createDirectoryForUser("two/levels", "session") }
-            assertEquals(2, changes.get())
-            assertTrue(File(store.rootDirectory(), "two/levels/MEMORY.md").exists())
-
-            val cancelled = CancellationToken.cancellable().also { it.cancel() }
-            assertThrows(CancellationException::class.java) {
-                actions.run(store, cancelled) { store.write("must-not-exist.md", note("cancelled"), MemoryStore.Actor.AGENT, "session") }
-            }
-            assertFalse(File(store.rootDirectory(), "must-not-exist.md").exists())
-        } finally { store.removeChangeListener(listener) }
+        assertThrows(IllegalArgumentException::class.java) { workspace.read("must-not-exist.md") }
     }
 
-    @Test fun memoryViewStateChangeInvalidatesPreparedActionWithoutPartialEffect() {
-        val store = root().forConversation("session").bindAutomaticWritesForToolset()
-        val actions = MemoryNativeActions.forTool(store)
-        val prepared = actions.prepare(store, token)
-        store.write("changed.md", note("new state"), MemoryStore.Actor.USER, "session")
-        val failure = runCatching { prepared.execute { store.write("must-not-exist.md", note("stale"), MemoryStore.Actor.AGENT, "session") } }
-            .exceptionOrNull()
-        assertNotNull(failure)
-        assertFalse(File(store.rootDirectory(), "must-not-exist.md").exists())
-        prepared.close()
-    }
-
-    @Test fun reflectionRestoreCompletesAllUndoRevisions() {
-        val store = root().forConversation("session").bindAutomaticWritesForToolset().also { it.ensureInitialized() }
-        val beforeHuman = store.read("human.md"); val beforePersona = store.read("persona.md")
-        store.beginReflectionGroup("group", "session")
-        store.write("human.md", note("new human"), MemoryStore.Actor.REFLECTION, "session", "group")
-        store.write("persona.md", note("new persona"), MemoryStore.Actor.REFLECTION, "session", "group")
-        store.finishReflectionGroup("group", "completed")
-
-        val result = MemoryNativeActions.forTool(store).run(store, token) { store.undoReflectionGroup("group", "session") }
-
-        assertEquals(2, result.size)
-        assertEquals(beforeHuman, store.read("human.md")); assertEquals(beforePersona, store.read("persona.md"))
+    @Test fun currentMemoryViewAuthorityChangeInvalidatesQueuedActionWithoutEffect() {
+        val selected = AtomicBoolean(true)
+        val executed = AtomicBoolean(false)
+        MemoryUiAutomationGuard.registerViewAuthority { selected.get() }.use {
+            val epoch = MemoryUiAutomationGuard.captureAutomationEpoch()
+            selected.set(false)
+            MemoryUiAutomationGuard.invalidateQueuedAutomation()
+            assertFalse(MemoryUiAutomationGuard.runAutomated(epoch) { executed.set(true) })
+            assertFalse(executed.get())
+        }
     }
 }

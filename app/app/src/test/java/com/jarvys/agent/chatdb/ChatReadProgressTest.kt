@@ -269,7 +269,7 @@ class ChatReadProgressTest {
             }
         }
         // Hold all four handles at once to prove none is missing.
-        val held = ArrayList<android.database.sqlite.SQLiteDatabase>()
+        val held = ArrayList<androidx.sqlite.SQLiteConnection>()
         try {
             repeat(4) { held += withTimeout(5_000) { JarvysChatDatabaseProvider.acquireReadDatabase(database) } }
         } finally {

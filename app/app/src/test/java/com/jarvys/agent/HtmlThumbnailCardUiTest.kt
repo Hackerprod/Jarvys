@@ -270,8 +270,7 @@ class HtmlThumbnailCardUiTest {
 
     private fun delivered(name: String): Pair<String, ChatAttachment> {
         val session = "ux33-thumbnail-card-${UUID.randomUUID()}"
-        val workspace = WorkspaceStore(File(compose.activity.filesDir, "jarvys/workspaces"),
-            WorkspaceStore.projectIdForSession(session), null, null, null, session, false)
+        val workspace = WorkspaceStore(com.jarvys.agent.StorageGeneration(compose.activity.filesDir), WorkspaceStore.projectIdForSession(session), null, null, session)
         workspace.write(name, "<!doctype html><html><body><h1>Immutable garden report</h1></body></html>")
         val attachment = DeliveredArtifactStore(compose.activity).snapshot(session, workspace, name, null,
             CancellationToken.uncancellable())

@@ -64,7 +64,7 @@ class ProactiveAgentProcessorTest {
     @Before fun setUp() {
         context = RuntimeEnvironment.getApplication()
         // The test body runs on the main looper: let the single-session startup finish before any store opens.
-        kotlinx.coroutines.runBlocking { com.jarvys.agent.SingleSessionReset.awaitReady(context) }
+        kotlinx.coroutines.runBlocking { com.jarvys.agent.FreshStorageBootstrap.awaitReady(context) }
         WorkManagerTestInitHelper.initializeTestWorkManager(context)
         WorkManagerTestInitHelper.getTestDriver(context)
         context.getSharedPreferences("jarvys_proactive_preferences", Context.MODE_PRIVATE).edit().clear().commit()

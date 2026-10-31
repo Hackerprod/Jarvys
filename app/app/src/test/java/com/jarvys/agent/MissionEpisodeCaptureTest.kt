@@ -53,7 +53,7 @@ class MissionEpisodeCaptureTest {
 
     @Before fun prepare() {
         context = ApplicationProvider.getApplicationContext()
-        runBlocking { SingleSessionReset.awaitReady(context) }
+        runBlocking { FreshStorageBootstrap.awaitReady(context) }
         context.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
         registry = WorkspaceRegistry(context)
         store = LocalRunStore(context)

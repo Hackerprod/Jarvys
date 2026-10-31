@@ -31,7 +31,7 @@ class CompactionFlushPersistenceTest {
             override fun getApplicationContext(): Context = this
             override fun getFilesDir() = files
         }
-        runBlocking { SingleSessionReset.awaitReady(context) }
+        runBlocking { FreshStorageBootstrap.awaitReady(context) }
         bridge = ChatDatabaseBridge.getInstance(context)
     }
 

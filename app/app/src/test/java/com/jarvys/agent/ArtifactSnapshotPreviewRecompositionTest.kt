@@ -42,7 +42,7 @@ class ArtifactSnapshotPreviewRecompositionTest {
 
     @Before fun storageReady() {
         val filesDir = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().filesDir
-        chatTestStore.onDatabaseWorker { SingleSessionReset.awaitReadyBlocking(filesDir) }
+        chatTestStore.onDatabaseWorker { FreshStorageBootstrap.awaitReadyBlocking(filesDir) }
     }
 
     @Test fun changingModifierRecomposesAndroidViewWithoutResettingInternalNavigationHistoryOrScroll() {
@@ -132,8 +132,7 @@ class ArtifactSnapshotPreviewRecompositionTest {
     /** Delivers one HTML snapshot into its own conversation, as the thread card does before opening it. */
     private fun deliver(label: String): Delivered {
         val session = "ux22-$label-${UUID.randomUUID()}"
-        val workspace = WorkspaceStore(File(compose.activity.filesDir, "jarvys/workspaces"),
-            WorkspaceStore.projectIdForSession(session), null, null, null, session, false)
+        val workspace = WorkspaceStore(com.jarvys.agent.StorageGeneration(compose.activity.filesDir), WorkspaceStore.projectIdForSession(session), null, null, session)
         workspace.write("index.html", "<!doctype html><a href='details.html'>$label</a>")
         val artifacts = DeliveredArtifactStore(compose.activity)
         val attachment = artifacts.snapshot(session, workspace, "index.html", null, CancellationToken.uncancellable())

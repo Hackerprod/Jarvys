@@ -65,8 +65,8 @@ class MainActivityWorkspaceRoutingTest {
             .apply { isAccessible = true }.set(null, null)
         secretSingleton.set(null, SecretStore(context.getSharedPreferences("ux43-route-test-secrets", 0)))
         WorkManagerTestInitHelper.initializeTestWorkManager(context)
-        chatTestStore.onDatabaseWorker { SingleSessionReset.awaitReadyBlocking(context.filesDir) }
-        MemoryStore(context).markDisclosureShown()
+        chatTestStore.onDatabaseWorker { FreshStorageBootstrap.awaitReadyBlocking(context.filesDir) }
+
         MemoryReflectionPreferences(context).markDisclosureShown()
         AgentRunUiState.bindGeneration(legacy, Long.MAX_VALUE)
         AgentRunUiState.stopPendingGeneration(legacy, Long.MAX_VALUE)

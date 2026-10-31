@@ -3,7 +3,7 @@ package com.jarvys.agent.flavor
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.ChatTestStore
-import com.jarvys.agent.SingleSessionReset
+import com.jarvys.agent.FreshStorageBootstrap
 import kotlinx.coroutines.runBlocking
 import org.junit.Before
 import org.junit.Rule
@@ -48,7 +48,7 @@ import org.robolectric.RobolectricTestRunner
 class LinuxToolsTest {
     @get:Rule val fixture = ChatTestStore(registerApplicationFilesDirectory = true)
 
-    @Before fun awaitStorageStartup() = runBlocking { SingleSessionReset.awaitReady(context) }
+    @Before fun awaitStorageStartup() = runBlocking { FreshStorageBootstrap.awaitReady(context) }
 
     private val context get() = ApplicationProvider.getApplicationContext<android.content.Context>()
     private val budget = CorePromptBudget(4096, 256, 1, 256, 4096)

@@ -76,7 +76,7 @@ class ScheduledTaskProcessorTest {
     @Before fun setUp() {
         context = RuntimeEnvironment.getApplication()
         // The test body runs on the main looper: let the single-session startup finish before any store opens.
-        kotlinx.coroutines.runBlocking { com.jarvys.agent.SingleSessionReset.awaitReady(context) }
+        kotlinx.coroutines.runBlocking { com.jarvys.agent.FreshStorageBootstrap.awaitReady(context) }
         actionPolicyPreferences = context.getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE)
         hadPriorDefaultPolicy = actionPolicyPreferences.contains(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
         priorDefaultPolicy = actionPolicyPreferences.getString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, null)

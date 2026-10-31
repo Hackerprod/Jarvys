@@ -1996,4 +1996,6 @@ Fuentes retiradas confirmadas:
     <string name="memory_orphan_backup_warning">Antes de reclasificar, esta operación crea y verifica una copia privada de TODA la base SQLite compartida, incluso con cero candidatas. Incluye conversaciones/transcripciones, bindings, datos históricos y borrados lógicamente, y OTROS PROYECTOS, más allá del alcance autorizado de reparación. La copia permanece en almacenamiento privado de la aplicación; no se sube ni exporta nada. No es una exportación JSON, restauración automática ni recuperación forense garantizada.</string>
     <string name="memory_orphan_consent">Autorizo esta copia privada integral incluso con cero cambios y la reclasificación terminal orphaned de las relaciones que cumplan el predicado actual. Entiendo que la vista previa puede cambiar y la política de retención indefinida.</string>
     <string name="memory_orphan_preview">Ver categorías de relaciones pending</string>
+    <string name="workspace_registry_preserved_title">Almacenamiento de espacios no disponible</string>
+    <string name="workspace_registry_preserved_body">No se pudo abrir de forma segura el registro de espacios. Se conservaron los datos; no se intentó repararlos, importarlos ni borrarlos. No borres el almacenamiento ni reinstales la app. Conserva esta instalación y solicita asistencia.</string>
 </resources>

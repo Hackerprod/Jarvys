@@ -50,8 +50,8 @@ class PersonalMemoryConsolidationGateTest {
     @Test fun candidateSnapshotCannotReceiveFreshAuthorityDuringPromptRead() = verifyBoundary(2)
 
     private fun verifyBoundary(callableNumber: Int) {
-        val first = bridge.personalAgentSaveMemory("The user studies Kotlin", "daily", null, .7, null)
-        val second = bridge.personalAgentSaveMemory("The user builds a local assistant", "daily", null, .8, null)
+        val first = bridge.personalAgentSaveMemory("The user studies Kotlin", "daily", null, .7, null, com.jarvys.agent.chatdb.MemorySaveOptions())
+        val second = bridge.personalAgentSaveMemory("The user builds a local assistant", "daily", null, .8, null, com.jarvys.agent.chatdb.MemorySaveOptions())
         val ids = listOf(first.id, second.id)
         val before = bridge.personalAgentGet(ids).associate { it.id to Pair(it.text, it.revision) }
         assertEquals(ids.toSet(), bridge.personalAgentDailyConsolidationCandidates().map { it.id }.toSet())

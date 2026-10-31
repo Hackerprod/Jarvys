@@ -20,7 +20,7 @@ class ProactiveActionReceiverTest {
     @Test fun receiverIsPrivateAndRejectsUnknownMessageAndThreadBeforeWritingOrLaunching() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         // The test body runs on the main looper: let the single-session startup finish before any store opens.
-        kotlinx.coroutines.runBlocking { com.jarvys.agent.SingleSessionReset.awaitReady(context) }
+        kotlinx.coroutines.runBlocking { com.jarvys.agent.FreshStorageBootstrap.awaitReady(context) }
         val appReceiver = context.packageManager.getReceiverInfo(ComponentName(context, ProactiveActionReceiver::class.java), 0)
         val approvalReceiver = context.packageManager.getReceiverInfo(
             ComponentName(context, com.jarvys.agent.connectors.ApprovalActionReceiver::class.java), 0,

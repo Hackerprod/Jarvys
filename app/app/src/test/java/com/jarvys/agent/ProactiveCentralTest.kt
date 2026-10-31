@@ -114,7 +114,7 @@ class ProactiveCentralTest {
         val store = LocalRunStore(context)
         val threadKey = ScheduledTaskConversation.threadKey("task-9")
         val result = store.appendProactiveAssistantMessageIfAbsent(central, "occurrence-1", "Report\n\nAll fine", emptyList(), threadKey)
-        val intent = SingleSessionReset.stamp(android.content.Intent(TaskActionReceiver.ACTION_SUGGESTED_REPLY))
+        val intent = FreshStorageBootstrap.stamp(android.content.Intent(TaskActionReceiver.ACTION_SUGGESTED_REPLY))
             .putExtra(TaskActionReceiver.EXTRA_TASK_ID, "task-9")
             .putExtra(TaskActionReceiver.EXTRA_MESSAGE_ID, result)
             .putExtra(TaskActionReceiver.EXTRA_REPLY_TEXT, "Explain the report")

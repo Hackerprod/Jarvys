@@ -14,6 +14,6 @@ class CoreMcpToolNameTest {
         assertEquals("Preview Workspace", CoreToolRegistry.humanizeToolName("preview_workspace"))
         assertEquals("Delegate Subtask", CoreToolRegistry.humanizeToolName("delegate_subtask"))
         assertEquals(listOf("ls", "read", "write", "edit", "preview_workspace"), WorkspaceTools.names())
-        assertEquals("write", WorkspaceTools.canonicalToolName("workspace_write"))
+        org.junit.Assert.assertFalse(WorkspaceTools.acceptedNames().contains("workspace_write"))
     }
 }

@@ -81,23 +81,20 @@ class TaskManagementToolsTest {
         assertTrue(explicitTask.toolScope.writesAllowed)
     }
 
-    @Test fun memoryFileCapabilitiesAreSavedOnlyWhenTheCreatorHadMemoryEnabled() {
+    @Test fun capabilitiesAreSavedOnlyWithinTheCreatorsGrantedTaskCapabilityIntersection() {
         val capabilities = listOf("read", "write", "search_files")
         val withoutMemory = fixture(creatorNames = capabilities, taskCapabilityNames = listOf("search_files"))
         val noMemoryRow = payload(withoutMemory.tools.tool(TaskManagementTools.SCHEDULE_TASK).execute(
             scheduleArgs("Search available files"), CancellationToken.uncancellable()))
         val noMemoryTask = withoutMemory.repository.get(noMemoryRow.getString("task_id"))!!
-        assertFalse(noMemoryTask.toolScope.memory)
         assertEquals(listOf("search_files"), noMemoryTask.toolScope.tools)
         assertFalse(noMemoryTask.creatorToolNames.contains("read"))
         assertFalse(noMemoryTask.creatorToolNames.contains("write"))
 
-        val withMemory = fixture(creatorNames = capabilities, taskCapabilityNames = capabilities,
-            creatorMemoryAllowed = true)
+        val withMemory = fixture(creatorNames = capabilities, taskCapabilityNames = capabilities)
         val memoryRow = payload(withMemory.tools.tool(TaskManagementTools.SCHEDULE_TASK).execute(
             scheduleArgs("Review saved notes"), CancellationToken.uncancellable()))
         val memoryTask = withMemory.repository.get(memoryRow.getString("task_id"))!!
-        assertTrue(memoryTask.toolScope.memory)
         assertEquals(capabilities.sorted(), memoryTask.toolScope.tools.sorted())
         assertTrue(memoryTask.creatorToolNames.containsAll(listOf("read", "write")))
     }
@@ -314,7 +311,6 @@ class TaskManagementToolsTest {
     private fun fixture(
         creatorNames: List<String> = emptyList(),
         taskCapabilityNames: List<String> = creatorNames,
-        creatorMemoryAllowed: Boolean = false,
         creatorSkillIds: List<String> = emptyList(),
         clock: Clock = this.clock,
         zone: ZoneId = this.zone,
@@ -334,7 +330,7 @@ class TaskManagementToolsTest {
         val pendingActions = TaskPendingActionStore(File(root, "pending.jsonl"))
         return Fixture(TaskManagementTools(context, sessionId, names, repository, ledger, clock, zoneProvider, registry,
             { _, id, _, expected -> enqueued += id to expected }, { _, _ -> false }, taskCapabilityNames,
-            pendingActions, creatorMemoryAllowed, creatorSkillIds),
+            pendingActions, creatorSkillIds),
             repository, ledger, sessionId, names, enqueued, pendingActions)
     }
 

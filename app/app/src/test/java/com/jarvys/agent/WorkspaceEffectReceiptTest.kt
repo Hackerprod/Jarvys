@@ -108,70 +108,87 @@ class WorkspaceEffectReceiptTest {
 
     @Test fun realMemoryMutationsAreExcludedWithoutPretendingTheyAreReads() {
         val files = chatStore.newFilesDirectory("native-memory")
-        val memory = MemoryStore(File(files, "memory"), true, testMemorySeedProvider())
-        val workspace = WorkspaceStore(File(files, "workspace"), WorkspaceStore.projectIdForSession("memory-session"),
-            null, null, memory, "memory-session")
-        val tools = CoreToolRegistry(WorkspaceTools.create(workspace)).withInvocationObserver(object : CoreToolRegistry.InvocationObserver {
-            override fun beforeDispatch(tool: CoreTool, callId: String, arguments: Map<String, Any>) { fail("Memory must not create an episode") }
-            override fun afterDispatch(tool: CoreTool, callId: String, result: CoreToolResult?, failure: Throwable?) { fail("Memory must not finish an episode") }
-        })
-        val content = "---\nname: Note\ndescription: A local note.\n---\nOriginal note."
-        val operations = listOf(
-            "write" to mapOf("path" to "/memory/note.md", "content" to content),
-            "edit" to mapOf("path" to "/memory/note.md", "old_text" to "Original note.", "new_text" to "Updated note."),
-            "delete" to mapOf("path" to "/memory/note.md")
-        )
-        for ((name, args) in operations) {
-            val tool = tools.get(name)
-            assertEquals(CoreTool.EffectClass.WRITE, tool.effectClass(args))
-            assertEquals(CoreTool.PersistenceEffect.MEMORY, tool.persistenceEffect(args))
-            val invocation = EffectInvocation { fail("Memory must not admit an external effect") }
-            val result = tools.invoke(name, args, CancellationToken.cancellable(), null, "memory-$name", invocation)
-            assertTrue(result.content, result.success)
-            assertNull(result.effectReceipt)
-            assertTrue(invocation.ownsMemoryCompletion(result.administrativeReceipt))
-            assertFalse(invocation.ownsReadCompletion(result.administrativeReceipt))
-            assertFalse(invocation.admitted())
+        chatStore.withLocalRunStore(files) { store ->
+            val context = object : ContextWrapper(ApplicationProvider.getApplicationContext<Context>()) {
+                override fun getApplicationContext(): Context = this
+                override fun getFilesDir() = files
+            }
+            FreshStorageBootstrap.ensure(context)
+            MemoryWritePolicy.forContext(context).setEnabledBlocking(true)
+            val session = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+            val db = ChatDatabaseBridge.getInstance(context)
+            val owner = store.appendConversationMessage(session, "user", "Save this note, update it, then forget it")
+            val runId = java.util.UUID.randomUUID().toString()
+            val transcript = MainChatTranscriptStore(files, session, store)
+            var completed = 0
+            val native = PersonalMemoryTools.create(context, owner, session).filter {
+                it.declaration().name in setOf("memory_save", "memory_update", "memory_forget")
+            }
+            assertEquals(3, native.size)
+            val observed = native.map { actual -> object : CoreTool by actual {
+                override fun execute(args: Map<String, Any>, token: CancellationToken,
+                                     progress: CoreTool.ProgressListener?, invocation: EffectInvocation): CoreToolResult {
+                    assertEquals(CoreTool.EffectClass.WRITE, actual.effectClass(args))
+                    assertEquals(CoreTool.PersistenceEffect.MEMORY, actual.persistenceEffect(args))
+                    val source = invocation.centralSource()!!.source()
+                    val committed = db.readEpisodeToolSourceSync(session, source.sourceBatchId, source.sourceCallId)!!
+                    assertEquals(actual.declaration().name, committed.toolName)
+                    assertNull(committed.output)
+                    val result = actual.execute(args, token, progress, invocation)
+                    assertTrue(result.content, result.success)
+                    assertNull(result.effectReceipt)
+                    assertFalse(invocation.admitted())
+                    assertFalse(result.persistenceEvidence.isNullOrEmpty())
+                    completed++
+                    return result
+                }
+            } }
+            val tools = CoreToolRegistry(observed).withInvocationObserver(object : CoreToolRegistry.InvocationObserver {
+                override fun beforeDispatch(tool: CoreTool, callId: String, arguments: Map<String, Any>) { fail("Memory must not create an episode") }
+                override fun afterDispatch(tool: CoreTool, callId: String, result: CoreToolResult?, failure: Throwable?) { fail("Memory must not finish an episode") }
+            }).withInvocationSourceProvider(transcript.centralSourceProvider(owner, runId))
+            var turn = 0
+            var savedId = ""
+            val loop = CoreAgentLoop(CoreAgentLoop.Model { _, _, _, _ ->
+                when (turn++) {
+                    0 -> ModelReply("", listOf(ModelReply.Call("save-note", "memory_save",
+                        mapOf("title" to "Local note", "content" to "Original note."))))
+                    1 -> {
+                        savedId = db.personalAgentSearch("Original note").single().id
+                        ModelReply("", listOf(ModelReply.Call("update-note", "memory_update",
+                            mapOf("id" to savedId, "expected_project" to session, "content" to "Updated note."))))
+                    }
+                    2 -> {
+                        assertEquals("Updated note.", db.personalAgentGet(listOf(savedId)).single().text)
+                        ModelReply("", listOf(ModelReply.Call("forget-note", "memory_forget", mapOf("id" to savedId))))
+                    }
+                    else -> ModelReply("Memory updated and forgotten", emptyList())
+                }
+            }, tools, "Use the requested native observation operations", session)
+            transcript.attach(loop, emptyList(), owner, runId)
+            val result = loop.run("Save this note, update it, then forget it", emptyList(), emptyList(),
+                CancellationToken.cancellable(), null, owner, runId)
+            assertEquals("COMPLETED", result.outcome)
+            assertEquals(3, completed)
+            assertTrue(db.personalAgentGet(listOf(savedId)).isEmpty())
+            assertTrue(db.personalAgentEpisodesForSourceMessagesSync(session, listOf(owner)).isEmpty())
         }
     }
 
-    @Test fun disabledMemoryAliasesAndMemoryOnlyScopePreserveAuthority() {
+    @Test fun removedMemoryFileAliasesCannotGrantMemoryOrExternalWriteAuthority() {
         val files = chatStore.newFilesDirectory("native-memory-boundaries")
-        val session = "memory-boundary-session"
-        val memory = MemoryStore(File(files, "memory"), true, testMemorySeedProvider())
-        val workspace = WorkspaceStore(File(files, "workspace"), WorkspaceStore.projectIdForSession(session),
-            null, null, memory, session)
+        val workspace = WorkspaceStore(File(files, "workspace"), WorkspaceStore.projectIdForSession("memory-boundary-session"))
         val tools = CoreToolRegistry(WorkspaceTools.create(workspace))
-        val content = "---\nname: Note\ndescription: A local note.\n---\nRetained text."
-        val aliasInvocation = EffectInvocation { fail("Memory alias must not admit an external effect") }
-        val alias = tools.invoke("write", mapOf("path" to "  /memory/note.md  ", "content" to content),
-            CancellationToken.cancellable(), null, "memory-alias", aliasInvocation)
-        assertTrue(alias.content, alias.success)
-        assertTrue(aliasInvocation.ownsMemoryCompletion(alias.administrativeReceipt))
-        assertEquals(content, workspace.read("/memory/note.md"))
-        for (path in listOf("/memory/../escape.md", "/memory/skills/note.md")) {
-            val rejected = tools.invoke("write", mapOf("path" to path, "content" to content), CancellationToken.cancellable())
-            assertFalse(rejected.success)
+        for (path in listOf("/memory/note.md", "  /memory/note.md  ", "/memory/../escape.md", "/memory/skills/note.md")) {
+            val invocation = EffectInvocation { fail("Removed memory alias must not admit a write") }
+            val rejected = tools.invoke("write", mapOf("path" to path, "content" to "not applied"),
+                CancellationToken.cancellable(), null, "removed-${path.hashCode()}", invocation)
+            assertFalse(rejected.content, rejected.success)
+            assertFalse(invocation.admitted())
             assertNull(rejected.administrativeReceipt)
         }
-        val memoryOnly = WorkspaceStore(File(files, "only-workspace"), WorkspaceStore.projectIdForSession("only"),
-            null, null, memory, session, true, MemoryStore.Actor.AGENT, null, true)
-        val onlyTools = CoreToolRegistry(WorkspaceTools.create(memoryOnly))
-        val onlyInvocation = EffectInvocation { fail("Memory-only scope must not admit an external effect") }
-        val forbidden = onlyTools.invoke("write", mapOf("path" to "outside.txt", "content" to "not applied"),
-            CancellationToken.cancellable(), null, "outside", onlyInvocation)
-        assertFalse(forbidden.success)
-        assertFalse(onlyInvocation.admitted())
-        assertNull(forbidden.administrativeReceipt)
-        assertFalse(File(File(files, "only-workspace"), "${memoryOnly.projectId()}/outside.txt").exists())
-        memory.forConversation(session).bindAutomaticWritesForToolset().setEnabled(false)
-        val disabledInvocation = EffectInvocation { fail("Disabled memory must not admit an external effect") }
-        val disabled = tools.invoke("write", mapOf("path" to "/memory/note.md", "content" to "not applied"),
-            CancellationToken.cancellable(), null, "disabled", disabledInvocation)
-        assertFalse(disabled.success)
-        assertFalse(disabledInvocation.admitted())
-        assertNull(disabled.administrativeReceipt)
-        assertEquals(content, File(memory.forConversation(session).bindAutomaticWritesForToolset().rootDirectory(), "note.md").readText())
+        assertFalse(File(files, "memory").exists())
+        assertTrue(File(files, "workspace").walkTopDown().none { it.isFile })
     }
 
     @Test fun cancellationAfterAdmissionNeverWritesAndMalformedPathsRemainClassifiable() {
@@ -196,7 +213,7 @@ class WorkspaceEffectReceiptTest {
     @Test fun codingRouterDoesNotSealOrInventCompletionAndCursorNeverAdmits() {
         val files = chatStore.newFilesDirectory("native-coding")
         val workspace = WorkspaceStore(StorageGeneration(files), WorkspaceStore.projectIdForSession("coding-session"),
-            null, null, null, "coding-session", false)
+            null, null, "coding-session")
         val tools = CoreToolRegistry(WorkspaceTools.create(workspace))
         val scope = workspace.codingProjectScope()
         val write = tools.get("write")

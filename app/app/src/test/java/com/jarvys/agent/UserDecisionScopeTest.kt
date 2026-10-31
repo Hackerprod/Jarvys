@@ -36,7 +36,7 @@ class UserDecisionScopeTest {
     @Test fun mainChatGetsDecisionToolButProactiveReflectionCrewAndChildScopesDoNot() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         // The test body runs on the main looper: let the single-session startup finish before any store opens.
-        kotlinx.coroutines.runBlocking { SingleSessionReset.awaitReady(context) }
+        kotlinx.coroutines.runBlocking { FreshStorageBootstrap.awaitReady(context) }
         val runtime = CoreAgentRuntime(context, "e1-scope-${System.nanoTime()}", emptyList())
         val mainTools = runtime.createTools()
         assertTrue(mainTools.names().contains(UserDecisionTool.NAME))
@@ -69,10 +69,9 @@ class UserDecisionScopeTest {
         assertFalse(proactive.names().contains(UserDecisionTool.NAME))
         com.jarvys.agent.tasks.TaskManagementTools.TOOL_NAMES.forEach { assertFalse(it in proactive.names()) }
 
-        val reflectionWorkspace = WorkspaceTools.createReflectionMemoryOnly(
-            context, "e1-reflection-${System.nanoTime()}", MemoryStore(context), "group-e1")
-        val reflection = CoreToolRegistry(reflectionWorkspace)
-        assertEquals(listOf("ls", "read", "write", "edit", "delete"), reflection.names())
+        val reflection = CoreToolRegistry(PersonalMemoryTools.createForExtraction(context, "e1-extraction"))
+        assertTrue(reflection.names().contains("memory_save"))
+        assertFalse(reflection.names().contains("write"))
         assertFalse(reflection.names().contains(UserDecisionTool.NAME))
         com.jarvys.agent.tasks.TaskManagementTools.TOOL_NAMES.forEach { assertFalse(it in reflection.names()) }
     }

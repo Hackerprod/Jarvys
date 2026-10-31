@@ -435,7 +435,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showStorageStartupFailure(failure: Exception) {
-        if (generateSequence<Throwable>(failure) { it.cause }.none { it is CleanInstallRequiredException }) {
+        val registryPreserved = generateSequence<Throwable>(failure) { it.cause }
+            .any { it is com.jarvys.agent.workspaces.WorkspaceRegistryCorruptException }
+        if (!registryPreserved && generateSequence<Throwable>(failure) { it.cause }.none { it is CleanInstallRequiredException }) {
             reportChatDatabaseFailure(failure)
             return
         }
@@ -447,9 +449,9 @@ class MainActivity : ComponentActivity() {
                     Column(modifier = Modifier.fillMaxSize().padding(24.dp),
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(stringResource(R.string.clean_install_required_title), style = MaterialTheme.typography.headlineSmall)
+                        Text(stringResource(if (registryPreserved) R.string.workspace_registry_preserved_title else R.string.clean_install_required_title), style = MaterialTheme.typography.headlineSmall)
                         Spacer(Modifier.height(16.dp))
-                        Text(stringResource(R.string.clean_install_required_body), style = MaterialTheme.typography.bodyLarge)
+                        Text(stringResource(if (registryPreserved) R.string.workspace_registry_preserved_body else R.string.clean_install_required_body), style = MaterialTheme.typography.bodyLarge)
                     }
                 }
             }

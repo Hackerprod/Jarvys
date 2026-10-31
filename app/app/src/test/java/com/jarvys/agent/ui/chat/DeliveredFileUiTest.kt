@@ -84,8 +84,7 @@ class DeliveredFileUiTest {
 
     @Test fun deliveredImageRestoresAsImageAndViewerHasDownloadShareWithoutTinyFilename() {
         val session = "delivered-image-${UUID.randomUUID()}"
-        val workspace = WorkspaceStore(File(compose.activity.filesDir, "jarvys/workspaces"),
-            WorkspaceStore.projectIdForSession(session), null, null, null, session, false)
+        val workspace = WorkspaceStore(com.jarvys.agent.StorageGeneration(compose.activity.filesDir), WorkspaceStore.projectIdForSession(session), null, null, session)
         workspace.write("landscape.png", "staged")
         val image = Bitmap.createBitmap(120, 80, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
         workspace.resolvePreviewPath("landscape.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -212,8 +211,7 @@ class DeliveredFileUiTest {
     }
 
     private fun deliver(session: String, filename: String, body: String): ChatAttachment {
-        val workspace = WorkspaceStore(File(compose.activity.filesDir, "jarvys/workspaces"),
-            WorkspaceStore.projectIdForSession(session), null, null, null, session, false)
+        val workspace = WorkspaceStore(com.jarvys.agent.StorageGeneration(compose.activity.filesDir), WorkspaceStore.projectIdForSession(session), null, null, session)
         workspace.write(filename, body)
         return DeliveredArtifactStore(compose.activity).snapshot(session, workspace, filename, null, CancellationToken.uncancellable())
             .also { LocalRunStore(compose.activity).appendDeliveredFile(session, it) }

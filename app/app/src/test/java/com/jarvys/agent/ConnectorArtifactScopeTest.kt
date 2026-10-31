@@ -18,7 +18,7 @@ class ConnectorArtifactScopeTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     @Before fun awaitStorageReady() {
         chatTestStore.onDatabaseWorker {
-            SingleSessionReset.awaitReadyBlocking(ApplicationProvider.getApplicationContext<Context>().filesDir)
+            FreshStorageBootstrap.awaitReadyBlocking(ApplicationProvider.getApplicationContext<Context>().filesDir)
         }
     }
 

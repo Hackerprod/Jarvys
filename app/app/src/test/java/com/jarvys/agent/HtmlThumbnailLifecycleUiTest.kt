@@ -245,8 +245,7 @@ class HtmlThumbnailLifecycleUiTest {
 
     private fun fixture(name: String): Fixture {
         val session = "ux28-lifecycle-${UUID.randomUUID()}"
-        val workspace = WorkspaceStore(File(compose.activity.filesDir, "jarvys/workspaces"),
-            WorkspaceStore.projectIdForSession(session), null, null, null, session, false)
+        val workspace = WorkspaceStore(com.jarvys.agent.StorageGeneration(compose.activity.filesDir), WorkspaceStore.projectIdForSession(session), null, null, session)
         workspace.write(name, "<!doctype html><html><body><h1>Immutable pending page</h1></body></html>")
         val artifacts = DeliveredArtifactStore(compose.activity)
         val attachment = artifacts.snapshot(session, workspace, name, null, CancellationToken.uncancellable())

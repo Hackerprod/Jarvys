@@ -24,9 +24,9 @@ class MainAgentInteractionTest {
         registerApplicationFilesDirectory = true,
     )
 
-    @Before fun awaitSingleSessionStorage() {
+    @Before fun awaitCurrentStorage() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        chatTestStore.onDatabaseWorker { SingleSessionReset.awaitReadyBlocking(context.filesDir) }
+        chatTestStore.onDatabaseWorker { FreshStorageBootstrap.awaitReadyBlocking(context.filesDir) }
     }
 
     @After fun cleanup() {

@@ -169,9 +169,9 @@ class EpisodeNarrationTest {
         val id = start("one")
         finish("one", "ok")
         val expected = bridge.personalAgentEpisodeNarrationInputSync(id)!!
-        val corrected = bridge.personalAgentCorrect(id, "User-corrected narrative")
-        assertNotEquals(id, corrected.id)
-        assertNull(bridge.personalAgentEpisodeNarrationInputSync(id))
+        val corrected = bridge.personalAgentUpdate(id, com.jarvys.agent.chatdb.MemoryNamespace.CENTRAL,
+            com.jarvys.agent.chatdb.MemoryUpdateOptions(content = "User-corrected narrative"))
+        assertEquals(id, corrected.id)
         assertFalse(bridge.personalAgentCommitEpisodeNarrationSync(id, expected, "done", "Generated", "Stale narrative"))
         assertEquals("User-corrected narrative", bridge.personalAgentEpisodeNarrationInputSync(corrected.id)!!.text)
         assertEquals(expected.evidence, bridge.personalAgentEpisodeNarrationInputSync(corrected.id)!!.evidence)

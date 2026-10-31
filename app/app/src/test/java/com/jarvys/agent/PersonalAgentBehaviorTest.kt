@@ -186,7 +186,7 @@ class PersonalAgentBehaviorTest {
 
     @Test fun scenario06_globalMemorySettingGovernsFactsAndMemoryTools() {
         bridge.personalAgentSetDirective("nickname", "The user's nickname is Hackerprod.", "m1", "explicit")
-        bridge.personalAgentSaveMemory("User likes hiking", "curated", null, .5, "m2")
+        bridge.personalAgentSaveMemory("User likes hiking", "curated", null, .5, "m2", com.jarvys.agent.chatdb.MemorySaveOptions())
         val runtime = CoreAgentRuntime(context, "memory-session", emptyList(), CorePromptBudget.standard())
         val tools = runtime.createTools()
         val prompt = runtime.instructions(tools, true)
@@ -211,13 +211,13 @@ class PersonalAgentBehaviorTest {
         val session = ordinarySession("room-provider-boundary")
         val legacyLocal = "LegacyLocalProviderCanary"
         val legacyShared = "LegacySharedProviderCanary"
-        val legacyRoot = MemoryStore(context, testMemorySeedProvider())
-        val legacy = legacyRoot.forConversation(session)
-        val donor = legacyRoot.forConversation("legacy-provider-donor")
-        fun note(value: String) = "---\nname: Note\ndescription: Synthetic note.\n---\n$value\n"
-        legacy.write("local.md", note(legacyLocal), MemoryStore.Actor.USER, session)
-        donor.write("shared.md", note(legacyShared), MemoryStore.Actor.USER, "legacy-provider-donor")
-        donor.approveSharedPersonal(donor.reviewForSharing("shared.md"))
+        // Inert legacy canaries: native Room/Engram must never hydrate file-era memory.
+        java.io.File(context.filesDir, "memory/conversations/$session/local.md").apply {
+            parentFile!!.mkdirs(); writeText(legacyLocal)
+        }
+        java.io.File(context.filesDir, "memory/shared/shared.md").apply {
+            parentFile!!.mkdirs(); writeText(legacyShared)
+        }
         val firstText = "The user prefers concise synthetic reports."
         val secondText = "The user prefers detailed synthetic reports."
         val first = bridge.personalAgentSetDirective("style", firstText, "synthetic-first", "explicit")
@@ -285,7 +285,7 @@ class PersonalAgentBehaviorTest {
 
     @Test fun taskAndProactiveReceiveProfileButNoPrivateNotesAndSubagentGetsNoUserMemory() {
         bridge.personalAgentSetDirective("nickname", "The user's nickname is Hackerprod.", "m1", "explicit")
-        bridge.personalAgentSaveMemory("User likes hiking", "curated", null, .5, "m2")
+        bridge.personalAgentSaveMemory("User likes hiking", "curated", null, .5, "m2", com.jarvys.agent.chatdb.MemorySaveOptions())
 
         val task = bridge.personalAgentPromptContext("task-run", true, "task")
         val proactive = bridge.personalAgentPromptContext("proactive-run", true, "proactive")
@@ -345,10 +345,10 @@ class PersonalAgentBehaviorTest {
         assertFalse(bridge.personalAgentBrowse().any { it.id == original.id })
 
         val next = bridge.personalAgentSetDirective("nickname", "The user's nickname is Hackerprod.", "m2", "explicit")
-        val corrected = bridge.personalAgentCorrect(next.id, "The user's nickname is DevHacker.")
-        assertEquals("corrected", corrected.status)
+        val corrected = bridge.personalAgentSetDirective("nickname", "The user's nickname is DevHacker.", "m3", "explicit correction", next.id)
+        assertEquals("saved", corrected.status)
         assertEquals(corrected.id, bridge.personalAgentBrowse().first { it.kind == "profile" }.id)
-        assertTrue(bridge.personalAgentRevisions(next.id).any { it.cause == "correct" })
+        assertTrue(bridge.personalAgentRevisions(next.id).any { it.cause == "superseded" })
         assertTrue(bridge.personalAgentPromptContext("next-session", true).userProfile.contains("DevHacker"))
     }
 
@@ -435,7 +435,7 @@ class PersonalAgentBehaviorTest {
         com.jarvys.agent.coding.ProjectScopeStore(context.filesDir).open(session)
         val worker = androidx.work.testing.TestListenableWorkerBuilder.from(context, PersonalMemoryExtractionWorker::class.java)
             .setInputData(androidx.work.Data.Builder()
-                .putString(SingleSessionReset.GENERATION_EXTRA, StorageGeneration.NAME)
+                .putString(FreshStorageBootstrap.GENERATION_EXTRA, StorageGeneration.NAME)
                 .putString("conversation_id", session)
                 .putString("maintenance_type", PersonalMemoryExtractionWorker.TYPE_EXTRACT)
                 .putBoolean("manual_request", true)
@@ -466,8 +466,8 @@ class PersonalAgentBehaviorTest {
     }
 
     @Test fun dailyConsolidationCitesPersistedSourcesAndKeepsThemActive() {
-        val first = bridge.personalAgentSaveMemory("User is learning Kotlin", "daily", null, .7, "message-1")
-        val second = bridge.personalAgentSaveMemory("User is building a personal assistant", "daily", null, .8, "message-2")
+        val first = bridge.personalAgentSaveMemory("User is learning Kotlin", "daily", null, .7, "message-1", com.jarvys.agent.chatdb.MemorySaveOptions())
+        val second = bridge.personalAgentSaveMemory("User is building a personal assistant", "daily", null, .8, "message-2", com.jarvys.agent.chatdb.MemorySaveOptions())
         val sourceIds = listOf(first.id, second.id)
         val summary = "The user is learning Kotlin while building a personal assistant."
 

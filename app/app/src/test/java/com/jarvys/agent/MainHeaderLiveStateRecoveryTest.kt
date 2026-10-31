@@ -106,11 +106,16 @@ class MainHeaderLiveStateRecoveryTest {
         assertNull(mode())
     }
 
-    @Test fun seedIsHiddenButCreateEditAndUndoRemainVisible() {
-        for ((index, operation) in listOf("SEED", "CREATE", "EDIT", "UNDO").withIndex()) {
-            AgentRunUiState.memoryChanged(MemoryStore.Revision(index.toLong(), "now", MemoryStore.Actor.AGENT,
-                session, "note.md", "", operation, false, "before", true, "after"))
+    @Test fun restoredMemoryEventsRemainVisibleWithoutFabricatingLiveWaits() {
+        AgentRunUiState.stopPendingGeneration(session, generation)
+        val events = listOf("CREATE", "EDIT", "UNDO").mapIndexed { index, operation ->
+            AgentRunUiEvent(index.toLong() + 1, "memory", operation, "Retained observation change")
         }
+        AgentRunUiState.restoreSession(session, events)
         assertEquals(listOf("CREATE", "EDIT", "UNDO"), state().events.filter { it.kind == "memory" }.map { it.stage })
+        assertNull(state().liveModelWaitId)
+        assertNull(state().liveUserWaitId)
+        assertNull(state().liveRunIdentity)
+        assertNull(mode())
     }
 }

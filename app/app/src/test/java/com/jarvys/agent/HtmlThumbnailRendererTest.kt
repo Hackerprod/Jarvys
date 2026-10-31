@@ -401,8 +401,7 @@ class HtmlThumbnailRendererTest {
 
     private fun fixture(): Fixture {
         val session = "ux28-thumbnail-renderer-${UUID.randomUUID()}"
-        val workspace = WorkspaceStore(File(context.filesDir, "jarvys/workspaces"),
-            WorkspaceStore.projectIdForSession(session), null, null, null, session, false)
+        val workspace = WorkspaceStore(com.jarvys.agent.StorageGeneration(context.filesDir), WorkspaceStore.projectIdForSession(session), null, null, session)
         val name = "garden-report.html"
         val html = """
             <!doctype html><html><head><link rel="stylesheet" href="styles.css">

@@ -137,7 +137,7 @@ class MemorySearchIndexTest {
         }
         val workspace = WorkspaceStore(workspacesRoot, projectId)
         val coordinator = MemorySearchIndexCoordinator(
-            FileMemorySearchIndex(File(temporaryFolder.root, "background-index.bin")), false)
+            FileMemorySearchIndex(File(temporaryFolder.root, "background-index.bin")))
         try {
             val hit = coordinator.search(workspace, "needle", setOf("workspace"), null).single()
             assertEquals("docs/917.md", hit.document.path)
@@ -149,136 +149,46 @@ class MemorySearchIndexTest {
     }
 
     @Test
-    fun memoryExportDoesNotIncludeThePrivateDerivedIndex() {
-        val memoryRoot = File(temporaryFolder.root, "memory").apply { mkdirs() }
-        val indexFile = File(temporaryFolder.root, "index/workspace-a-m.bin").apply {
-            parentFile!!.mkdirs()
-            writeText("private derived cache")
-        }
-        val store = MemoryStore(memoryRoot, true, testMemorySeedProvider())
-            .forConversation("export-session").bindAutomaticWritesForToolset().also { it.ensureInitialized() }
-        val zip = ByteArrayOutputStream().also { store.exportZip(it, true) }.toByteArray()
-        val names = ArrayList<String>()
-        ZipInputStream(zip.inputStream()).use { input ->
-            while (true) {
-                val entry = input.nextEntry ?: break
-                names += entry.name
-            }
-        }
-        assertTrue(names.any { it == "MEMORY.md" })
-        assertFalse(names.any { it.contains("index") || it.endsWith(".bin") })
-        assertTrue(indexFile.isFile)
-    }
-
-    @Test
-    fun freshScopedSearchTracksWriteEditDeleteUndoRestoreClearAndReflectionUndoWithoutCachingMemory() {
-        val root = temporaryFolder.newFolder("memory-source")
-        val store = MemoryStore(root, true, testMemorySeedProvider()).forConversation("memory-test").bindAutomaticWritesForToolset()
-        val workspace = WorkspaceStore(temporaryFolder.newFolder("memory-workspaces"),
-            WorkspaceStore.projectIdForSession("memory-test"), null, null, store, "memory-test")
-        val persistedMemoryIndex = File(File(root.parentFile, "index"), "workspace-test-m.bin")
-        val index = FileMemorySearchIndex(persistedMemoryIndex)
-        val coordinator = MemorySearchIndexCoordinator(index, true)
+    fun obsoleteMemoryZoneCannotReadRetainedDerivedPayload() {
+        val workspace = WorkspaceStore(temporaryFolder.newFolder("workspace"), "a".repeat(24))
+        val index = FileMemorySearchIndex(File(temporaryFolder.root, "stale.bin"))
+        index.replaceAll(listOf(SearchDocument("memory", "private.md", "foreignlegacytoken", 0L)))
+        val coordinator = MemorySearchIndexCoordinator(index)
         try {
-            store.ensureInitialized()
-            assertMemoryMatchesSource(store, workspace, coordinator)
-            val created = store.write("dated.md", note("user preference on 2026-10-05: concise", "Evidence source: user said so in chat, 2026-10-05."),
-                MemoryStore.Actor.USER, "memory-test")
-            assertMemoryMatchesSource(store, workspace, coordinator)
-            store.edit("dated.md", "concise", "brief", MemoryStore.Actor.USER, "memory-test")
-            assertMemoryMatchesSource(store, workspace, coordinator)
-            store.restoreRevision(created.id, MemoryStore.Actor.USER, "memory-test")
-            assertMemoryMatchesSource(store, workspace, coordinator)
-            store.delete("dated.md", MemoryStore.Actor.USER, "memory-test")
-            assertMemoryMatchesSource(store, workspace, coordinator)
-            store.undoLast(MemoryStore.Actor.USER, "memory-test")
-            assertMemoryMatchesSource(store, workspace, coordinator)
-
-            store.beginReflectionGroup("search-group", "memory-test")
-            store.write("reflected.md", note("Preference", "Date 2026-10-05; source: said by user in chat."),
-                MemoryStore.Actor.REFLECTION, "memory-test", "search-group")
-            store.finishReflectionGroup("search-group", "completed")
-            assertMemoryMatchesSource(store, workspace, coordinator)
-            store.undoReflectionGroup("search-group", "memory-test")
-            assertMemoryMatchesSource(store, workspace, coordinator)
-
-            val random = Random(1405L)
-            repeat(80) { step ->
-                val path = "random-${random.nextInt(6)}.md"
-                when (random.nextInt(4)) {
-                    0, 1 -> runCatching { store.write(path, note("Entry", "fixedseed token-${random.nextInt(8)} step-$step"),
-                        MemoryStore.Actor.USER, "memory-test") }
-                    2 -> runCatching { store.edit(path, "fixedseed", "changed$step", MemoryStore.Actor.USER, "memory-test") }
-                    else -> runCatching { store.delete(path, MemoryStore.Actor.USER, "memory-test") }
-                }
-                assertMemoryMatchesSource(store, workspace, coordinator)
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                coordinator.search(workspace, "foreignlegacytoken", setOf("memory"), null)
             }
-
-            store.clearAll(MemoryStore.Actor.USER)
-            assertFalse(index.snapshot().any { it.zone == "memory" })
-            assertMemoryMatchesSource(store, workspace, coordinator)
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                coordinator.refreshDocument(workspace, "/memory/private.md")
+            }
+            assertFalse(coordinator.snapshot().any { it.zone == "memory" })
+            assertTrue(coordinator.search(workspace, "foreignlegacytoken", setOf("workspace", "skills"), null).isEmpty())
         } finally { coordinator.disposeForTests() }
     }
-
     @Test
-    fun memoryChangesStayInOwningChatAndNeverEnterAnotherPersistedIndex() {
-        val owner = MemoryStore(temporaryFolder.newFolder("isolated-memory"), true, testMemorySeedProvider())
-        val first = owner.forConversation("chat-a").bindAutomaticWritesForToolset().also { it.ensureInitialized() }
-        val second = owner.forConversation("chat-b").bindAutomaticWritesForToolset().also { it.ensureInitialized() }
-        val workspaces = temporaryFolder.newFolder("isolated-workspaces")
-        val workspaceA = WorkspaceStore(workspaces, WorkspaceStore.projectIdForSession("chat-a"),
-            null, null, first, "chat-a")
-        val workspaceB = WorkspaceStore(workspaces, WorkspaceStore.projectIdForSession("chat-b"),
-            null, null, second, "chat-b")
-        val indexA = FileMemorySearchIndex(File(temporaryFolder.root, "chat-a-index.bin"))
-        val indexB = FileMemorySearchIndex(File(temporaryFolder.root, "chat-b-index.bin"))
-        // A stale pre-v64 derived payload must never be used, even before its file is rebuilt.
-        indexB.replaceAll(listOf(SearchDocument("memory", "legacy.md", "foreignlegacytoken", 0L)))
-        val coordinatorA = MemorySearchIndexCoordinator(indexA, true)
-        val coordinatorB = MemorySearchIndexCoordinator(indexB, true)
+    fun currentWorkspaceRefreshAndSeparateIndexesNeverMixOwnership() {
+        val roots = temporaryFolder.newFolder("owners")
+        val a = WorkspaceStore(roots, WorkspaceStore.projectIdForSession("owner-a"))
+        val b = WorkspaceStore(roots, WorkspaceStore.projectIdForSession("owner-b"))
+        val indexA = FileMemorySearchIndex(File(temporaryFolder.root, "a.bin"))
+        val indexB = FileMemorySearchIndex(File(temporaryFolder.root, "b.bin"))
+        val ca = MemorySearchIndexCoordinator(indexA)
+        val cb = MemorySearchIndexCoordinator(indexB)
         try {
-            assertTrue(coordinatorB.search(workspaceB, "foreignlegacytoken", setOf("memory"), null).isEmpty())
-            first.write("private.md", note("Private", "firstchattoken"), MemoryStore.Actor.USER, "chat-a")
-            second.write("private.md", note("Private", "secondchattoken"), MemoryStore.Actor.USER, "chat-b")
-            assertEquals("private.md", coordinatorA.search(workspaceA, "firstchattoken", setOf("memory"), null)
-                .single().document.path)
-            assertEquals("private.md", coordinatorB.search(workspaceB, "secondchattoken", setOf("memory"), null)
-                .single().document.path)
-            assertTrue(coordinatorB.search(workspaceB, "firstchattoken", setOf("memory"), null).isEmpty())
-            assertTrue(coordinatorA.search(workspaceA, "secondchattoken", setOf("memory"), null).isEmpty())
-
-            first.edit("private.md", "firstchattoken", "updatedfirsttoken", MemoryStore.Actor.USER, "chat-a")
-            assertTrue(coordinatorA.search(workspaceA, "firstchattoken", setOf("memory"), null).isEmpty())
-            assertEquals("private.md", coordinatorA.search(workspaceA, "updatedfirsttoken", setOf("memory"), null)
-                .single().document.path)
-            assertTrue(coordinatorB.search(workspaceB, "updatedfirsttoken", setOf("memory"), null).isEmpty())
-            first.clearAll(MemoryStore.Actor.USER)
-            assertTrue(coordinatorA.search(workspaceA, "updatedfirsttoken", setOf("memory"), null).isEmpty())
-            assertEquals("private.md", coordinatorB.search(workspaceB, "secondchattoken", setOf("memory"), null)
-                .single().document.path)
-            assertFalse(coordinatorA.snapshot().any { it.zone == "memory" })
-            assertFalse(coordinatorB.snapshot().any { it.zone == "memory" })
-            assertFalse(indexA.snapshot().any { it.zone == "memory" })
-            assertFalse(indexB.snapshot().any { it.zone == "memory" })
-        } finally {
-            coordinatorA.disposeForTests()
-            coordinatorB.disposeForTests()
-        }
+            a.write("private.md", "firsttoken")
+            b.write("private.md", "secondtoken")
+            assertEquals("private.md", ca.search(a, "firsttoken", setOf("workspace"), null).single().document.path)
+            assertEquals("private.md", cb.search(b, "secondtoken", setOf("workspace"), null).single().document.path)
+            assertTrue(ca.search(a, "secondtoken", setOf("workspace"), null).isEmpty())
+            assertTrue(cb.search(b, "firsttoken", setOf("workspace"), null).isEmpty())
+            a.write("private.md", "updatedtoken")
+            ca.refreshDocument(a, "private.md")
+            assertTrue(ca.search(a, "firsttoken", setOf("workspace"), null).isEmpty())
+            assertEquals("private.md", ca.search(a, "updatedtoken", setOf("workspace"), null).single().document.path)
+            assertTrue(cb.search(b, "updatedtoken", setOf("workspace"), null).isEmpty())
+            assertFalse(ca.snapshot().any { it.zone == "memory" })
+            assertFalse(cb.snapshot().any { it.zone == "memory" })
+        } finally { ca.disposeForTests(); cb.disposeForTests() }
     }
 
-    private fun assertMemoryMatchesSource(
-        store: MemoryStore,
-        workspace: WorkspaceStore,
-        coordinator: MemorySearchIndexCoordinator,
-    ) {
-        val expected = store.searchDocuments().associateBy { it.path }
-        val query = (expected.values.flatMap { SearchTokenizer.tokens(it.content) } +
-            listOf("concise", "brief", "fixedseed", "changed", "token", "step")).distinct().joinToString(" ")
-        val actual = coordinator.search(workspace, query, setOf("memory"), null).associateBy { it.document.path }
-        assertEquals(expected.keys, actual.keys)
-        expected.forEach { (path, document) -> assertEquals(document, actual.getValue(path).document) }
-        assertFalse(coordinator.snapshot().any { it.zone == "memory" })
-    }
-
-    private fun note(name: String, body: String) = "---\nname: $name\ndescription: Search test note\n---\n$body\n"
 }

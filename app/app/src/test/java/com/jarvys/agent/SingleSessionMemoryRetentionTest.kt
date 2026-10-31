@@ -140,8 +140,8 @@ class SingleSessionMemoryRetentionTest {
 
     @Test fun B1_savingListsOverlappingEntriesAndSupersedesLinksTheReplacement() {
         val f = open()
-        val old = f.bridge.personalAgentSaveMemory("The preferred editor is vim", "curated", null, 0.6, "m1")
-        val receipt = f.bridge.personalAgentSaveMemory("The preferred editor is helix", "curated", null, 0.6, "m2")
+        val old = f.bridge.personalAgentSaveMemory("The preferred editor is vim", "curated", null, 0.6, "m1", com.jarvys.agent.chatdb.MemorySaveOptions())
+        val receipt = f.bridge.personalAgentSaveMemory("The preferred editor is helix", "curated", null, 0.6, "m2", com.jarvys.agent.chatdb.MemorySaveOptions())
         // Nothing replaced the old entry yet, but the receipt names it so the next call can.
         assertTrue(receipt.candidates.any { it.id == old.id })
         val replaced = f.bridge.personalAgentSaveMemory("The preferred editor is zed", "curated", null, 0.6, "m3",
@@ -156,15 +156,15 @@ class SingleSessionMemoryRetentionTest {
         val kept = f.read { sql -> sql.query("SELECT COUNT(*) FROM memory_entries WHERE id=?", arrayOf(receipt.id)).use { it.moveToFirst(); it.getInt(0) } }
         assertEquals(1, kept)
         // Correcting creates the same supersedes link and moves nothing else.
-        val corrected = f.bridge.personalAgentCorrect(replaced.id, "The preferred editor is neovim")
+        val corrected = f.bridge.personalAgentSaveMemory("The preferred editor is neovim", "curated", null, 0.6, "explicit-correction", MemorySaveOptions(supersedesId = replaced.id))
         assertTrue(f.bridge.personalAgentGet(listOf(corrected.id)).single().links.any { it.relation == "supersedes" && it.id == replaced.id })
     }
 
     @Test fun B1_repeatingDuplicateTextAppliesSupersedesAndRelatedLinks() {
         val f = open()
-        val replaced = f.bridge.personalAgentSaveMemory("The old deployment target is staging", "curated", null, 0.6, "old")
-        val duplicate = f.bridge.personalAgentSaveMemory("The deployment target is production", "curated", null, 0.6, "first")
-        val related = f.bridge.personalAgentSaveMemory("Production deploys require approval", "curated", null, 0.6, "related")
+        val replaced = f.bridge.personalAgentSaveMemory("The old deployment target is staging", "curated", null, 0.6, "old", com.jarvys.agent.chatdb.MemorySaveOptions())
+        val duplicate = f.bridge.personalAgentSaveMemory("The deployment target is production", "curated", null, 0.6, "first", com.jarvys.agent.chatdb.MemorySaveOptions())
+        val related = f.bridge.personalAgentSaveMemory("Production deploys require approval", "curated", null, 0.6, "related", com.jarvys.agent.chatdb.MemorySaveOptions())
         val repeated = f.bridge.personalAgentSaveMemory("The deployment target is production", "curated", null, 0.6, "repeat",
             MemorySaveOptions(null, null, null, null, replaced.id, listOf(related.id), "related", null, null, "agent"))
         assertEquals(duplicate.id, repeated.id)
@@ -177,7 +177,7 @@ class SingleSessionMemoryRetentionTest {
 
     @Test fun B1_unchangedTopicStillLinksTheSupersededEntry() {
         val f = open()
-        val target = f.bridge.personalAgentSaveMemory("Old architecture decision", "curated", null, 0.6, "old")
+        val target = f.bridge.personalAgentSaveMemory("Old architecture decision", "curated", null, 0.6, "old", com.jarvys.agent.chatdb.MemorySaveOptions())
         val current = f.bridge.personalAgentSaveMemory("Current architecture decision", "curated", null, 0.6, "current",
             MemorySaveOptions("decision", "architecture/current", null, null, null, emptyList(), "related", null, null, "agent"))
         val same = f.bridge.personalAgentSaveMemory("Current architecture decision", "curated", null, 0.6, "current-2",
@@ -214,12 +214,12 @@ class SingleSessionMemoryRetentionTest {
 
     @Test fun B1_correctReceiptRevisionMatchesMemoryGetForTheReplacementId() {
         val f = open()
-        val original = f.bridge.personalAgentSaveMemory("The preferred shell is bash", "curated", null, 0.6, "test")
+        val original = f.bridge.personalAgentSaveMemory("The preferred shell is bash", "curated", null, 0.6, "test", com.jarvys.agent.chatdb.MemorySaveOptions())
 
-        val corrected = f.bridge.personalAgentCorrect(original.id, "The preferred shell is fish")
+        val corrected = f.bridge.personalAgentSaveMemory("The preferred shell is fish", "curated", null, 0.6, "explicit-correction", MemorySaveOptions(supersedesId = original.id))
         val loaded = f.bridge.personalAgentGet(listOf(corrected.id)).single()
 
-        assertEquals("corrected", corrected.status)
+        assertEquals("saved", corrected.status)
         assertEquals(corrected.id, loaded.id)
         assertEquals(loaded.revision, corrected.revision)
         assertEquals(1L, corrected.revision)
@@ -227,9 +227,9 @@ class SingleSessionMemoryRetentionTest {
 
     @Test fun B1_longOverlapUsesNormalizedTermsWithoutExceedingSqliteBindLimit() {
         val f = open()
-        val old = f.bridge.personalAgentSaveMemory("The established policy is term509", "curated", null, 0.6, "old")
+        val old = f.bridge.personalAgentSaveMemory("The established policy is term509", "curated", null, 0.6, "old", com.jarvys.agent.chatdb.MemorySaveOptions())
         val longText = (0..509).joinToString(" ") { "term$it" }
-        val saved = f.bridge.personalAgentSaveMemory(longText, "curated", null, 0.6, "long")
+        val saved = f.bridge.personalAgentSaveMemory(longText, "curated", null, 0.6, "long", com.jarvys.agent.chatdb.MemorySaveOptions())
         assertTrue(saved.candidates.any { it.id == old.id })
     }
 
@@ -395,7 +395,7 @@ class SingleSessionMemoryRetentionTest {
         f.bridge.ensureConversationSync(central)
         f.episode("ep-gmail", ms("2026-09-29"), "pending", null, "", "gmail", "gmail", "ok", 3)
         f.episode("ep-sms", ms("2026-10-02"), "failed", null, "", "sms_cleanup", null, "ok", 1)
-        f.bridge.personalAgentSaveMemory("The user likes short answers", "curated", null, 0.5, "m1")
+        f.bridge.personalAgentSaveMemory("The user likes short answers", "curated", null, 0.5, "m1", com.jarvys.agent.chatdb.MemorySaveOptions())
 
         val byTool = f.bridge.personalAgentSearch("", 8, MemorySearchFilter.parse(null, null, null, "gmail", null, null, null))
         assertEquals(listOf("ep-gmail"), byTool.map { it.id })
@@ -433,7 +433,7 @@ class SingleSessionMemoryRetentionTest {
     @Test fun B5_searchAnswersWithExcerptsAndGetReturnsTheCompleteText() {
         val f = open()
         val long = "First line about orchids.\nSecond line says the watering schedule is every nine days.\n" + "padding ".repeat(2_000)
-        val saved = f.bridge.personalAgentSaveMemory(long, "curated", null, 0.5, "m1")
+        val saved = f.bridge.personalAgentSaveMemory(long, "curated", null, 0.5, "m1", com.jarvys.agent.chatdb.MemorySaveOptions())
         val searched = parse(f.call("memory_search", "query" to "watering"))
         val excerpt = searched.getJSONArray("results").getJSONObject(0).getString("excerpt")
         assertEquals("Second line says the watering schedule is every nine days.", excerpt)
