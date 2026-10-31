@@ -1,0 +1,138 @@
+--- a/p2-reconstruction-work/integration/WorkspaceMutationContext.java
++++ b/p2-reconstruction-work/integration/WorkspaceMutationContext.java
+@@ -44,6 +44,20 @@
+         decision = new EffectInvocation.Admission(EffectInvocation.Authorization.ALLOW,
+                 "native_contract", "workspaces:" + action + ":" + (workspaceId == null ? "central" : workspaceId),
+                 null, "central_workspace");
++    }
++
++    private String controlArguments;
++    /** Called exactly once by the native execute4 adapter, never from model-supplied metadata. */
++    void bindControlArguments(String canonicalArguments) {
++        if (closed || controlArguments != null) throw new IllegalStateException("Arguments already bound");
++        controlArguments = Objects.requireNonNull(canonicalArguments);
++    }
++    public String requireControlArguments() {
++        checkAccess.run();
++        requireTreeAdmission();
++        if (!("reply".equals(action) || "cancel".equals(action)) || controlArguments == null)
++            throw new IllegalStateException("No exact USER target control");
++        return controlArguments;
+     }
+ 
+     public void requireTreeAdmission() {
+--- a/p2-reconstruction-work/integration/CentralWorkspaceTool.kt
++++ b/p2-reconstruction-work/integration/CentralWorkspaceTool.kt
+@@ -135,6 +135,7 @@
+             "Reply retry identity includes its original runtime central turn; another turn must inspect the saved inbox state instead of resending. " +
+             "delegate needs workspace_id, a stable key, role and mission. Reuse the same key and payload on retries. " +
+             "Optional tools restrict the worker; standard grants no extra authority and read_only restricts mutations. " +
++            "For reply/cancel select the exact owned target from current evidence. If the user target is ambiguous, ask for clarification; do not guess. " +
+             "list and read are bounded; continue pages with returned IDs. read with assignment_id selects one assignment " +
+             "and cannot use pagination fields. Runtime binds the actual user request; tool arguments cannot author user instructions. " +
+             "inspect_file needs workspace_id and path and returns the current source SHA-256 and byte size. " +
+@@ -260,7 +261,11 @@
+                 admission.run()
+                 val mutation = if (payload.isMutation && invocation != null)
+                     WorkspaceMutationContext(payload.action, payload.optionalString("workspace_id"),
+-                        sourceWitness, invocation, admission, treeAdmission, token).also { holder?.set(it) }
++                        sourceWitness, invocation, admission, treeAdmission, token).also {
++                            if(payload.action in setOf("reply","cancel"))
++                                it.bindControlArguments(WorkspaceTreeEvidenceStore.canonical(JSONObject(requireNotNull(arguments))))
++                            holder?.set(it)
++                        }
+                     else null
+                 val data = when (payload.action) {
+                     "create" -> if (mutation == null) backend.create(payload.string("key"), payload.string("title"),
+--- a/p2-reconstruction-work/integration/WorkspaceTreeCentralAnswers.kt
++++ b/p2-reconstruction-work/integration/WorkspaceTreeCentralAnswers.kt
+@@ -16,20 +16,17 @@
+         val target=WorkspaceRegistry(app).use { db -> WorkspaceTreeStore(db).findAssignment(workspace,reference.assignmentId) } ?: return null
+         if(target.state!=TreeNodeState.NEEDS_INPUT)return null // Existing ordinary coordination semantics are preserved.
+         context.requireTreeAdmission()
+-        check(target.rootId==requireNotNull(context.treeAdmission).rootId()) { "Formal question belongs to another original request" }
+-        check(reference.contentSha256==hash && reference.assignmentRevision==revision && target.assignmentRevision==revision &&
++
++        check(reference.contentSha256==hash && reference.observedAssignmentRevision==revision && target.assignmentRevision==revision &&
+             reference.botId==target.botId && reference.cycleId==target.cycleId && reference.evidenceId==target.terminalRef)
+         val evidence=requireNotNull(ledger.readCrewCoordinationEvidence(session,reference.evidenceId))
+         check(evidence.contentSha256==hash && evidence.botId==target.botId && evidence.cycleId==target.cycleId)
++        val payload=context.requireControlArguments()
++        val grant=TreeUserTargetControl.capture(app,context,target,"reply",payload)
+         context.admitMutation()
+-        val answer=context.withCurrentWorkspaceTransaction {
+-            WorkspaceRegistry(app).use { db ->
+-                admission.run();context.requireInsideCurrentLease();context.requireTreeAdmission()
+-                val tree=WorkspaceTreeStore(db);val parent=requireNotNull(tree.getNode(target.rootId,requireNotNull(target.parentNodeId)))
+-                check(parent.mode==TreeMode.CENTRAL) { "Only the actual parent may answer this formal request" }
+-                WorkspaceTreeAnswerStore(tree).prepare(TreeNodeFence.of(parent),TreeNodeFence.of(target),text,
+-                    WorkspaceTreeStore.centralReceipt(requireNotNull(context.rootSource)))
+-            }
++        val answer=WorkspaceRegistry(app).use { db ->
++            admission.run()
++            WorkspaceTreeAnswerStore(WorkspaceTreeStore(db)).prepareUser(grant,payload)
+         }
+         context.acceptedInput(workspace,answer.eventKey)
+         return JSONObject().put("answer_id",answer.eventKey).put("state","PREPARED").put("requires_explicit_resume",true)
+--- a/p2-reconstruction-work/integration/cancelTree.kt.fragment
++++ b/p2-reconstruction-work/integration/cancelTree.kt.fragment
+@@ -1,21 +1,22 @@
+     override fun cancel(workspaceId:String,assignmentId:String,botId:String?,revision:Long,key:String,token:CancellationToken,
+         admission:Runnable,context:WorkspaceMutationContext):JSONObject {
+         check(WorkspaceTreePolicy.admissionEnabled());context.requireTreeAdmission();admission.run()
+-        val rootId=requireNotNull(context.treeAdmission).rootId()
+-        val requestKey=WorkspaceTreeStore.identity("native-user-subtree-cancel",rootId,key)
+-        context.admitMutation()
+-        val targets=context.withCurrentWorkspaceTransaction {
+-            registry().use { db ->
+-                context.requireInsideCurrentLease();context.requireTreeAdmission();admission.run()
+-                val tree=WorkspaceTreeStore(db);val target=requireNotNull(tree.findAssignment(workspaceId,assignmentId))
+-                check(target.rootId==rootId) { "Cancellation target belongs to another original request" }
+-                check(target.botId==botId && target.assignmentRevision==revision)
+-                tree.cancelSubtree(TreeNodeFence.of(target),"CANCELLED",requestKey) { captured -> captured.forEach {
++        val targets=registry().use { db ->
++            val tree=WorkspaceTreeStore(db);val target=requireNotNull(tree.findAssignment(workspaceId,assignmentId))
++            check(target.botId==botId && target.assignmentRevision==revision)
++            val payload=context.requireControlArguments()
++            check(JSONObject(payload).getString("key")==key)
++            val grant=TreeUserTargetControl.capture(app,context,target,"cancel",payload)
++            val requestKey=WorkspaceTreeStore.identity("native-user-subtree-cancel",target.rootId,key)
++            context.admitMutation()
++            grant.transact(tree,"cancel",payload) { _,current,_ ->
++                admission.run()
++                tree.cancelSubtree(TreeNodeFence.of(current),"CANCELLED",requestKey) { captured -> captured.forEach {
+                     WorkspaceTreeStops.latchExact(db.treeStorageIdentity,it.rootId,it.nodeId,it.cycleId)
+                 } }
+             }
+         }
+-        targets.forEach { target ->
++        performCapturedCancellationStops(targets) { target ->
+             if(target.botId!=null && target.workspaceId!=null) {
+                 val manager=managerFor(WorkspaceIdentity.executionSessionId(target.workspaceId))
+                 manager.bot(target.botId)?.let { current ->
+--- a/p2-reconstruction-work/storage/WorkspaceTreeAnswerStore.kt
++++ b/p2-reconstruction-work/storage/WorkspaceTreeAnswerStore.kt
+@@ -24,6 +24,23 @@
+         val receipt=WorkspaceTreeEvidenceStore.canonical(JSONObject().put("root",child.rootId).put("child",child.nodeId)
+             .put("question",question).put("questionHash",questionHash).put("cycle",child.cycleId).put("text",text).put("source",source))
+         core.appendEvent(db,child,key,"ANSWER_PREPARED",receipt,source,identity(receipt),question)
++        decode(receipt,key)
++    }
++    /** USER-only retention; a stopped worker parent does not gain new authority. The root must remain open. */
++    fun prepareUser(grant:TreeUserTargetControl,payload:String):TreeAnswer = grant.transact(core,"reply",payload) { db,child,auth ->
++        val text=JSONObject(payload).getString("text");nonempty(text)
++        eligible(child.reply==TreeReply.AWAIT && child.state==TreeNodeState.NEEDS_INPUT && child.reportReceipt!=null,"No formal question")
++        val question=requireNotNull(child.terminalRef);val questionHash=requireNotNull(child.terminalHash)
++        val key=identity("answer-prepared",child.nodeId,question)
++        // Exact repeat is idempotent; a new invocation must not replace already-retained text/source.
++        core.event(db,child.rootId,key)?.let { old ->
++            val existing=decode(old,key)
++            integrity(existing.questionCycle==child.cycleId && existing.questionHash==questionHash && existing.text==text,"Answer cannot be replaced")
++            return@transact existing
++        }
++        val receipt=WorkspaceTreeEvidenceStore.canonical(JSONObject().put("root",child.rootId).put("child",child.nodeId)
++            .put("question",question).put("questionHash",questionHash).put("cycle",child.cycleId).put("text",text).put("source",auth))
++        core.appendEvent(db,child,key,"ANSWER_PREPARED",receipt,auth,identity(receipt),question)
+         decode(receipt,key)
+     }
+     fun pending(rootId:String,childId:String):TreeAnswer?=core.registry.treeRead { db ->

@@ -13,6 +13,16 @@
       "bytes": 73856
     },
     {
+      "path": "reconstruction-drafts/central-withdrawal/explicit-withdrawal.patch",
+      "sha256": "d9b4881ffc7e9f3ecbcf278d1682e632d74401d6901b80bd681ba5973dbc9e9a",
+      "bytes": 26983
+    },
+    {
+      "path": "reconstruction-drafts/central-withdrawal/later-user-queued-withdrawal-service-test.patch",
+      "sha256": "b623cf5ac58318f2f7bbe559e0e1b0958918674faa23c0f8c83d7cd0109c6c36",
+      "bytes": 5936
+    },
+    {
       "path": "reconstruction-drafts/checkpoint/CentralContinuationRecord.java",
       "sha256": "713a25f59f4f46375b8f1a2061f36ab1e45a3741b4b340513830efbe558e78e1",
       "bytes": 21165
@@ -221,6 +231,71 @@
       "path": "reconstruction-drafts/storage/WorkspaceTreeWaitStore.kt",
       "sha256": "a0126166e94311a1334d51f4e80504726b327678aef2fb51bf45d16baaa31471",
       "bytes": 20061
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/CentralTargetControlSource.kt",
+      "sha256": "5a4fa03c556b3a9cf22a490ff41ec4570cd7189e19b857a8ccba595e973ea2b2",
+      "bytes": 1231
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/CentralUserTargetControlToolTest.kt",
+      "sha256": "045961d1c187cdaa853de2e9f0346725de9875678c9b607e7567080dd01a2851",
+      "bytes": 14148
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/CentralWorkspaceTool.kt",
+      "sha256": "f9d328ee3fa6361f22050820879d3064e6807db3a2662b74ad0dd97d5533da7c",
+      "bytes": 47788
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/DELTA.md",
+      "sha256": "6ed9a891b6dae3cdaab3c9ea726fe1fff59508c66f0f2488382b03f3f15e7254",
+      "bytes": 5891
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/INTEGRATION.patch",
+      "sha256": "8f199768293d51363cb1a7d7319b620840611d8000a38546d991263993c3de01",
+      "bytes": 10240
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/MANIFEST.sha256",
+      "sha256": "22ed17d5dd0585edfba6cc54664f1b81cc635ef70f74b0978e92f85e715ee300",
+      "bytes": 1121
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/TreeUserTargetControl.kt",
+      "sha256": "856363068b19d3fee37856afaf94bfba55552a900019a2193790f6f812e5bb4f",
+      "bytes": 10400
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/TreeUserTargetControlAssertions.kt",
+      "sha256": "73169d9ed46603022040befa953913ff6fa63739e16d2980f9274f2c21afa636",
+      "bytes": 1013
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/WorkspaceMutationContext.java",
+      "sha256": "6818656c598b9dd771e38f946a750b3315decfcb9bc88d9ae4ed4725493d3f6e",
+      "bytes": 8787
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/WorkspaceTreeAnswerStore.kt",
+      "sha256": "9e44e58ded68aa45c42fe4b1d3daf1759c878469c5ce94f63d1c2fdc55c28e71",
+      "bytes": 7214
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/WorkspaceTreeCentralAnswers.kt",
+      "sha256": "f0600a9123749414acab80b00c2914c99a9db0e35088cf25007c9c7bf623d13f",
+      "bytes": 2084
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/cancelTree.kt.fragment",
+      "sha256": "bb7d3e301a7a4adda8ef1a2287e91248e22fd218bc5528c017cfa788706b968b",
+      "bytes": 2082
+    },
+    {
+      "path": "reconstruction-drafts/user-target-control/later-user-answer-service-test.fragment",
+      "sha256": "c4fc7b9f67179fa867bfa5cc3a33731a8d5c7ee2608552271a67d0ace2bf5a93",
+      "bytes": 6470
     },
     {
       "path": "reconstruction-drafts/worker/CrewTreeSupport.java",

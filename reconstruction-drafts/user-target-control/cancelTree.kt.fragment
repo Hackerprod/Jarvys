@@ -1,0 +1,31 @@
+    override fun cancel(workspaceId:String,assignmentId:String,botId:String?,revision:Long,key:String,token:CancellationToken,
+        admission:Runnable,context:WorkspaceMutationContext):JSONObject {
+        check(WorkspaceTreePolicy.admissionEnabled());context.requireTreeAdmission();admission.run()
+        val targets=registry().use { db ->
+            val tree=WorkspaceTreeStore(db);val target=requireNotNull(tree.findAssignment(workspaceId,assignmentId))
+            check(target.botId==botId && target.assignmentRevision==revision)
+            val payload=context.requireControlArguments()
+            check(JSONObject(payload).getString("key")==key)
+            val grant=TreeUserTargetControl.capture(app,context,target,"cancel",payload)
+            val requestKey=WorkspaceTreeStore.identity("native-user-subtree-cancel",target.rootId,key)
+            context.admitMutation()
+            grant.transact(tree,"cancel",payload) { _,current,_ ->
+                admission.run()
+                tree.cancelSubtree(TreeNodeFence.of(current),"CANCELLED",requestKey) { captured -> captured.forEach {
+                    WorkspaceTreeStops.latchExact(db.treeStorageIdentity,it.rootId,it.nodeId,it.cycleId)
+                } }
+            }
+        }
+        performCapturedCancellationStops(targets) { target ->
+            if(target.botId!=null && target.workspaceId!=null) {
+                val manager=managerFor(WorkspaceIdentity.executionSessionId(target.workspaceId))
+                manager.bot(target.botId)?.let { current ->
+                    val expected=current.token
+                    if(current.cycleId()==target.cycleId && current.assignmentId()==target.assignmentId) manager.stopForUserControl(current.id,expected)
+                }
+            }
+        }
+        context.acceptedAssignment(workspaceId,assignmentId)
+        return JSONObject().put("assignment_id",assignmentId).put("state","CANCELLED").put("captured_targets",targets.size)
+            .put("result","Cancellation recorded; this does not prove uncertain external effects were undone.")
+    }
