@@ -1107,7 +1107,10 @@ public final class CrewCheckpointStore {
         final char[] hex = "0123456789abcdef".toCharArray();
         for (int i = 0; i < json.length(); i++) {
             char c = json.charAt(i);
-            if (Character.isSurrogate(c)) {
+            if (Character.isHighSurrogate(c) && i + 1 < json.length() && Character.isLowSurrogate(json.charAt(i + 1))) {
+                // Keep valid Unicode's original UTF-8 bytes and materialization cost unchanged.
+                escaped.append(c).append(json.charAt(++i));
+            } else if (Character.isSurrogate(c)) {
                 escaped.append('\\').append('u').append(hex[(c >>> 12) & 15]).append(hex[(c >>> 8) & 15])
                         .append(hex[(c >>> 4) & 15]).append(hex[c & 15]);
             } else escaped.append(c);

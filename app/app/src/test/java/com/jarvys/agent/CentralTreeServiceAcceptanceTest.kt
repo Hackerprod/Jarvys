@@ -375,6 +375,7 @@ class CentralTreeServiceAcceptanceTest {
     @Test fun naturalLaterUserAnswerRetainsOldQuestionThenNativeResumeConsumesOnce()=laterUserFormalAnswer("none")
     @Test fun laterUserReplyCannotRacePendingNativePause()=laterUserFormalAnswer("pending")
     @Test fun laterUserReplyCannotRaceStartedNativePause()=laterUserFormalAnswer("started")
+    @Test fun closedOriginalRootDeniesAnswerAndNativeResume()=laterUserFormalAnswer("closed")
     private fun laterUserFormalAnswer(controlState:String) {
         val childCalls=AtomicInteger();val answerSeen=java.util.concurrent.atomic.AtomicBoolean()
         val (scope,profile)=storage.onDatabaseWorker {
@@ -403,7 +404,10 @@ class CentralTreeServiceAcceptanceTest {
             assertEquals(TreeNodeState.NEEDS_INPUT,node.state);assertNotNull(node.reportReceipt)
             LocalRunStore(context).listWorkspaceCoordinationReferences(scope.executionSessionId,100,null).single { it.evidenceId==node.terminalRef } to node
         }
-        if(controlState!="none") storage.onDatabaseWorker {
+        if(controlState=="closed") storage.onDatabaseWorker { WorkspaceRegistry(context).use { db ->
+            val tree=WorkspaceTreeStore(db);tree.stopRequester(TreeNodeFence.of(tree.getNode(node.rootId,node.rootId)!!))
+        } }
+        if(controlState in setOf("pending","started")) storage.onDatabaseWorker {
             // Stage the actual native USER control row without executing it; test the pre-dispatch/claimed window.
             val control=WorkspaceCoordinator(context,{ manager!! },{}).submitNativeControl(scope.workspaceId,node.assignmentId!!,
                 node.assignmentRevision,WorkspaceControlType.PAUSE,"Pause the planner")
@@ -429,6 +433,15 @@ class CentralTreeServiceAcceptanceTest {
                     assertTrue(c.moveToFirst());assertEquals(0,c.getInt(0))
                 } }
             } }
+            if(controlState=="closed") {
+                val denied=CountDownLatch(1);val resumeFailure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
+                WorkspaceCoordinator(context,{ manager!! },{}).enqueueNativeControl(scope.workspaceId,node.assignmentId!!,
+                    node.assignmentRevision,WorkspaceControlType.RESUME,"Resume planner") { result ->
+                        resumeFailure.set(result.exceptionOrNull());denied.countDown()
+                    }
+                assertTrue(denied.await(20,TimeUnit.SECONDS));assertNotNull(resumeFailure.get())
+                assertEquals(1,childCalls.get());assertEquals(oldRoot,root(original))
+            }
             return
         }
         storage.onDatabaseWorker { WorkspaceRegistry(context).use { db ->
@@ -446,6 +459,77 @@ class CentralTreeServiceAcceptanceTest {
         storage.onDatabaseWorker { WorkspaceRegistry(context).use { db -> db.treeRead { sql ->
             sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND node_id=? AND kind='ANSWER_STARTED'",arrayOf(node.rootId,node.nodeId)).use { c ->
                 assertTrue(c.moveToFirst());assertEquals(1,c.getInt(0))
+            }
+        } } }
+    }
+
+    /** Real reply=none children keep running after Central completion/requester STOP; later USER cancels one. */
+    @Test fun laterUserCancelsDetachedWorkerAfterCompletedRootWithoutReopening()=cancelDetachedAfterRootClosed(false)
+    @Test fun laterUserCancelsDetachedWorkerAfterRequesterStopWithoutReopening()=cancelDetachedAfterRootClosed(true)
+    private fun cancelDetachedAfterRootClosed(requesterStop:Boolean) {
+        val entered=CountDownLatch(2)
+        val (scope,profile)=storage.onDatabaseWorker {
+            val scope=WorkspaceRegistry(context).use { it.createWorkspace(UUID.randomUUID().toString(),"Detached cancellation") }
+            ChatDatabaseBridge.getInstance(context).ensureConversationSync(scope.executionSessionId,"workspace")
+            val profile=CrewProfileRepository(context).create(CrewProfile(CrewProfileRepository.newCustomId(),1,"Generalist","General purpose",
+                "Keep scope exact",emptyList(),emptyList(),CrewProfile.WorkspaceMode.LEGACY_CHAT),emptyList(),emptyList())
+            val runtime=CoreAgentRuntime(context,scope.executionSessionId,emptyList(),CorePromptBudget.standard())
+            val childProvider=object:ModelProviderClient {
+                override fun complete(systemPrompt:String,userPrompt:String,images:List<ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=error("Conversation required")
+                override fun completeConversation(systemPrompt:String,history:List<ConversationTurn>,userPrompt:String,images:List<ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply {
+                    entered.countDown()
+                    while(!releaseChild.await(20,TimeUnit.MILLISECONDS)) token.throwIfCancelled()
+                    token.throwIfCancelled();return ModelReply("Retained detached sibling evidence",emptyList())
+                }
+            }
+            manager=runtime.configureCrewManager(runtime.createTools(),CoreAgentModel(context,childProvider,scope.executionSessionId),null)
+            scope to profile
+        }
+        val original=user("Start two independent background planners");var step=0
+        reply={ history ->
+            if(step++<2) ModelReply("",listOf(ModelReply.Call("detached-$step",CentralWorkspaceTool.NAME,mapOf(
+                "action" to "delegate","workspace_id" to scope.workspaceId,"key" to "detached-$step","role" to profile.id,
+                "mission" to "Independent planner $step","tools" to emptyList<String>(),"continue_result" to false))))
+            else {
+                assertTrue(entered.await(10,TimeUnit.SECONDS))
+                if(requesterStop) assertTrue(StopController.getInstance().stopRunAsync())
+                ModelReply("The independent planners remain running",emptyList())
+            }
+        }
+        runStored(original)
+        waitUntil("Original root closed") { root(original).admissionsClosed }
+        val closed=root(original)
+        if(!requesterStop) assertEquals("COMPLETED",closed.closeReason) else assertNotEquals("COMPLETED",closed.closeReason)
+        val children=storage.onDatabaseWorker { WorkspaceRegistry(context).use { WorkspaceTreeStore(it).children(closed.rootId,closed.rootId) } }
+        assertEquals(2,children.size);assertTrue(children.all { it.reply==TreeReply.NONE })
+        val target=children.first();val sibling=children.last()
+        val stopped=manager!!.bot(target.botId)!!;val running=manager!!.bot(sibling.botId)!!
+        assertFalse(stopped.token.isCancellationRequested);assertFalse(running.token.isCancellationRequested)
+        fun cancelTurn(text:String) {
+            val input=user(text);var calls=0
+            reply={ history -> if(calls++==0) ModelReply("",listOf(ModelReply.Call("cancel-detached",CentralWorkspaceTool.NAME,mapOf(
+                "action" to "cancel","workspace_id" to scope.workspaceId,"assignment_id" to target.assignmentId!!,"bot_id" to target.botId!!,
+                "expected_assignment_revision" to target.assignmentRevision,"key" to "exact-detached-cancel"))))
+                else { assertEquals("workspace_data",JSONObject(history.single { it.toolCallId=="cancel-detached" && it.kind==ConversationTurn.Kind.TOOL_RESULT }.content).getString("kind"))
+                    ModelReply("Only that planner was cancelled",emptyList()) } }
+            runStored(input)
+        }
+        cancelTurn("Cancel the first independent planner, not the other one")
+        waitUntil("Detached exact target stopped") { stopped.isQuiescent }
+        assertTrue(stopped.token.isCancellationRequested);assertFalse(running.token.isCancellationRequested)
+        assertEquals(closed,root(original))
+        storage.onDatabaseWorker { WorkspaceRegistry(context).use { db ->
+            val tree=WorkspaceTreeStore(db);assertTrue(tree.getNode(target.rootId,target.nodeId)!!.admissionsClosed)
+            assertEquals(sibling,tree.getNode(sibling.rootId,sibling.nodeId))
+        } }
+        cancelTurn("Cancel that same first planner again")
+        assertEquals(closed,root(original));assertFalse(running.token.isCancellationRequested)
+        storage.onDatabaseWorker { WorkspaceRegistry(context).use { db -> db.treeRead { sql ->
+            sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind='CANCEL_REQUEST'",arrayOf(target.rootId)).use { c ->
+                assertTrue(c.moveToFirst());assertEquals(1,c.getInt(0))
+            }
+            sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind='CENTRAL_CLAIM'",arrayOf(target.rootId)).use { c ->
+                assertTrue(c.moveToFirst());assertEquals(0,c.getInt(0))
             }
         } } }
     }

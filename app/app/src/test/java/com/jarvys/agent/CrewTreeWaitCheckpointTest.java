@@ -193,6 +193,10 @@ public class CrewTreeWaitCheckpointTest {
  @Test public void jsonEscapingRoundTripsEverySurrogateWithoutChangingJsonOrRedaction()throws Exception {
   String exact="NUL\u0000 lone high\ud800 lone low\udfff pair\ud83d\ude00 literal\\ud800";
   JSONObject original=new JSONObject().put("text",exact);
+  String ordinary=new JSONObject().put("text","ASCII café 漢字 \ud83d\ude00").toString();
+  assertEquals(ordinary,CrewCheckpointStore.escapeJsonSurrogates(ordinary));
+  assertArrayEquals(ordinary.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+    CrewCheckpointStore.escapeJsonSurrogates(ordinary).getBytes(java.nio.charset.StandardCharsets.UTF_8));
   String escaped=CrewCheckpointStore.escapeJsonSurrogates(original.toString());
   assertEquals(exact,new JSONObject(new String(escaped.getBytes(java.nio.charset.StandardCharsets.UTF_8),java.nio.charset.StandardCharsets.UTF_8)).getString("text"));
   assertEquals(escaped,CrewCheckpointStore.escapeJsonSurrogates(escaped));

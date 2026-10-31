@@ -35,9 +35,14 @@ internal class TreeUserTargetControl private constructor(
             invocation.requireInsideCurrentLease();check(invocation.requireControlArguments()==arguments)
             core.registry.treeTransaction { db ->
                 val root=core.requireRoot(db,target.rootId)
-                check(root.origin==origin && !root.admissionsClosed && !root.wakesClosed)
-                val central=core.requireNode(db,root.rootId,root.rootId)
-                WorkspaceTreeStops.requireAllowed(core.registry.treeStorageIdentity,root.rootId,root.rootId,central.cycleId)
+                check(root.origin==origin)
+                // Cancellation is denial only, including after normal completion/requester STOP.
+                // Never apply this exception to reply, Resume, admission or execution.
+                if(action!="cancel") {
+                    check(!root.admissionsClosed && !root.wakesClosed)
+                    val central=core.requireNode(db,root.rootId,root.rootId)
+                    WorkspaceTreeStops.requireAllowed(core.registry.treeStorageIdentity,root.rootId,root.rootId,central.cycleId)
+                }
                 val current=core.current(db,TreeNodeFence.of(target))
                 check(current==target && current.state!=TreeNodeState.UNCERTAIN)
                 core.requireNativeAssignment(current,if(current.botId==null) WorkspaceAssignmentState.PREPARED else WorkspaceAssignmentState.BOUND)

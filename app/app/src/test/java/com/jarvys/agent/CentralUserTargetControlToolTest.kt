@@ -177,14 +177,19 @@ class CentralUserTargetControlToolTest {
             }
         } }
     }
-    @Test fun originalRootStopCannotBecomeFreshControlAuthority() {
+    @Test fun originalRootStopAllowsOnlyExactDenialWithoutReopeningRoot() {
         WorkspaceMemoryFixture(storage).use { f -> Session(f).use { old ->
             val target=old.queued("selected")
             old.core.stopRequester(TreeNodeFence.of(old.root))
+            val stopped=old.core.getRoot(target.rootId)!!
+            val retained=old.node(target)
             Session(f).use { later ->
-                later.run(listOf(later.args(old.node(target))))
-                assertFalse(later.results.single().success)
-                assertTrue(old.core.getRoot(target.rootId)!!.admissionsClosed)
+                later.run(listOf(later.args(retained)))
+                assertTrue(later.results.single().success)
+                assertEquals(stopped,old.core.getRoot(target.rootId))
+                assertEquals(retained,old.node(target))
+                assertTrue(runCatching { old.core.reserveFirstExecution(TreeNodeFence.of(retained),com.jarvys.agent.crew.CrewProcessIdentity.ID) }.isFailure)
+                assertEquals(stopped,old.core.getRoot(target.rootId))
             }
         } }
     }
