@@ -1,0 +1,66 @@
+{
+  "status": "UNCOMPILED/OFF/NO_IMPLEMENTATION_PASS",
+  "design_sha256": "8422696642d2d1a353ee99f50432b031407f24702f1dd5f68843cf7c8b35cd88",
+  "files": [
+    {
+      "path": "reconstruction-drafts/central/CENTRAL_RECONSTRUCTION.patch",
+      "sha256": "082069347958956773fe4ad758dd570330b3c4ce83fa01e24bd81a82e726ef0f",
+      "bytes": 70899
+    },
+    {
+      "path": "reconstruction-drafts/d3/WorkspaceTreeSchemaCompatibilityTest.kt",
+      "sha256": "907208a28958f0e57981826277cfa7be278a2bcb09ff54cef28489fc3caf630e",
+      "bytes": 10201
+    },
+    {
+      "path": "reconstruction-drafts/d3/registry-d3.patch",
+      "sha256": "d18ca33dbb4ce0dc79a14ebb45fbff77aa241ed0bbd636df5b3e30282942fbcf",
+      "bytes": 9334
+    },
+    {
+      "path": "reconstruction-drafts/d3/registry-preserved-ui.patch",
+      "sha256": "c1ae2f6cae127487a98ae1575d6bc8835abbbe016c510716196119ddd76a7e28",
+      "bytes": 4524
+    },
+    {
+      "path": "reconstruction-drafts/d3/workspace_registry_v98_v1.json",
+      "sha256": "9a1c5a86153c45bea201507be2032cbc36c8cd1bb159d8234ba2a9a455a10bec",
+      "bytes": 3194
+    },
+    {
+      "path": "reconstruction-drafts/d3/workspace_tree_schema_v2.json",
+      "sha256": "ac72a7055bc5bcbb4d455562fd67d7239fa11dd1c933c6acde2d30f073f9038e",
+      "bytes": 4533
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreePolicy.kt",
+      "sha256": "387503d14ad1747314fd56fe1f316b53bd123527f3708a3dc5c0bf971f85a5f9",
+      "bytes": 451
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreeRecords.kt",
+      "sha256": "d727bd3c0e02fad57f8097f67b9c92988a5c688b36ac8f2eeedec974445a8904",
+      "bytes": 3436
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreeSchema.kt",
+      "sha256": "063ae3704b8ada233a5a648c8fe3d775a4e44ebd35fd20565d0d54f293c04d9d",
+      "bytes": 4570
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreeStops.kt",
+      "sha256": "82a8f88e9d307002048ea61bc77803080b89e17bc7ece9075e5227320cfd2908",
+      "bytes": 1606
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreeStore.kt",
+      "sha256": "2cddfc7873fe1ba0ba042ae7928b247a299ffdeb42a41ebcd317d9c631f76920",
+      "bytes": 30768
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreeStoreTest.kt",
+      "sha256": "dae4ec140bbc9353b5cf04fce47f7bdee20a249fecf1d375ea191e53565ea78c",
+      "bytes": 14476
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+--- a/app/app/src/main/java/com/jarvys/agent/MainActivity.kt
++++ b/app/app/src/main/java/com/jarvys/agent/MainActivity.kt
+@@ -435,7 +435,9 @@
+     }
+ 
+     private fun showStorageStartupFailure(failure: Exception) {
+-        if (generateSequence<Throwable>(failure) { it.cause }.none { it is CleanInstallRequiredException }) {
++        val registryPreserved = generateSequence<Throwable>(failure) { it.cause }
++            .any { it is com.jarvys.agent.workspaces.WorkspaceRegistryCorruptException }
++        if (!registryPreserved && generateSequence<Throwable>(failure) { it.cause }.none { it is CleanInstallRequiredException }) {
+             reportChatDatabaseFailure(failure)
+             return
+         }
+@@ -447,9 +449,9 @@
+                     Column(modifier = Modifier.fillMaxSize().padding(24.dp),
+                         verticalArrangement = Arrangement.Center,
+                         horizontalAlignment = Alignment.CenterHorizontally) {
+-                        Text(stringResource(R.string.clean_install_required_title), style = MaterialTheme.typography.headlineSmall)
++                        Text(stringResource(if (registryPreserved) R.string.workspace_registry_preserved_title else R.string.clean_install_required_title), style = MaterialTheme.typography.headlineSmall)
+                         Spacer(Modifier.height(16.dp))
+-                        Text(stringResource(R.string.clean_install_required_body), style = MaterialTheme.typography.bodyLarge)
++                        Text(stringResource(if (registryPreserved) R.string.workspace_registry_preserved_body else R.string.clean_install_required_body), style = MaterialTheme.typography.bodyLarge)
+                     }
+                 }
+             }
+--- a/app/app/src/main/res/values/strings.xml
++++ b/app/app/src/main/res/values/strings.xml
+@@ -1994,4 +1994,6 @@
+     <string name="memory_orphan_backup_warning">Before reclassification, this operation creates and verifies a private copy of the WHOLE shared SQLite database, even with zero candidates. It includes conversations/transcripts, bindings, historical and soft-deleted data, and OTHER PROJECTS, beyond the authorized repair scope. The copy stays in app-private storage; nothing is uploaded or exported. It is not JSON export, automatic restore, or guaranteed forensic recovery.</string>
+     <string name="memory_orphan_consent">I authorize this whole-database private copy even with zero changes, and terminal orphaned reclassification of the current matching relations. I understand the preview can change and the indefinite retention policy.</string>
+     <string name="memory_orphan_preview">Preview pending relation categories</string>
++    <string name="workspace_registry_preserved_title">Workspace storage unavailable</string>
++    <string name="workspace_registry_preserved_body">The workspace registry could not be safely opened. Existing data was preserved; no repair, import, or deletion was attempted. Do not clear storage or reinstall. Preserve this installation and request support.</string>
+ </resources>
+--- a/app/app/src/main/res/values-es/strings.xml
++++ b/app/app/src/main/res/values-es/strings.xml
+@@ -1996,4 +1996,6 @@
+     <string name="memory_orphan_backup_warning">Antes de reclasificar, esta operación crea y verifica una copia privada de TODA la base SQLite compartida, incluso con cero candidatas. Incluye conversaciones/transcripciones, bindings, datos históricos y borrados lógicamente, y OTROS PROYECTOS, más allá del alcance autorizado de reparación. La copia permanece en almacenamiento privado de la aplicación; no se sube ni exporta nada. No es una exportación JSON, restauración automática ni recuperación forense garantizada.</string>
+     <string name="memory_orphan_consent">Autorizo esta copia privada integral incluso con cero cambios y la reclasificación terminal orphaned de las relaciones que cumplan el predicado actual. Entiendo que la vista previa puede cambiar y la política de retención indefinida.</string>
+     <string name="memory_orphan_preview">Ver categorías de relaciones pending</string>
++    <string name="workspace_registry_preserved_title">Almacenamiento de espacios no disponible</string>
++    <string name="workspace_registry_preserved_body">No se pudo abrir de forma segura el registro de espacios. Se conservaron los datos; no se intentó repararlos, importarlos ni borrarlos. No borres el almacenamiento ni reinstales la app. Conserva esta instalación y solicita asistencia.</string>
+ </resources>

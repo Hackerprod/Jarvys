@@ -1,0 +1,173 @@
+--- a/app/app/src/main/java/com/jarvys/agent/workspaces/WorkspaceRegistry.kt
++++ b/app/app/src/main/java/com/jarvys/agent/workspaces/WorkspaceRegistry.kt
+@@ -67,7 +67,7 @@
+         )
+ 
+         /** Read-only identity check before any current store is created. SQLite may maintain SHM coordination. */
+-        internal fun preflightFreshStorage(context: Context) {
++        internal fun preflightFreshStorage(context: Context): Int {
+             val file = context.applicationContext.getDatabasePath(DATABASE_NAME).absoluteFile
+             // Context supplies trusted higher ancestors (which may include Android system aliases).
+             // This boundary checks the immediate database directory and leaves, not an entire tree fence.
+@@ -84,22 +84,39 @@
+             if (main == null || main.st_size == 0L) {
+                 if (main != null && !android.system.OsConstants.S_ISREG(main.st_mode)) incompatible()
+                 if (sidecars.any { it != null }) incompatible()
+-                return
++                return 1
+             }
+             if (!android.system.OsConstants.S_ISREG(main.st_mode)) incompatible()
+             try {
+                 SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY,
+                     DatabaseErrorHandler { incompatible() }).use { actual ->
+-                    if (actual.version != 1) incompatible()
++                    val version = actual.version
++                    if (version !in 1..2) incompatible()
+                     SQLiteDatabase.create(null).use { expected ->
+-                        CREATE_SQL.forEach(expected::execSQL)
++                        statements(version).forEach(expected::execSQL)
+                         if (schema(actual) != schema(expected)) incompatible()
+                     }
++                    return version
+                 }
+             } catch (_: android.database.sqlite.SQLiteDatabaseCorruptException) {
+                 incompatible()
+             }
+         }
++
++        private fun statements(version: Int): List<String> = when (version) {
++            1 -> CREATE_SQL
++            2 -> CREATE_SQL + WorkspaceTreeSchema.CREATE_SQL
++            else -> incompatible()
++        }
++
++        private fun expectedSchema(version: Int): List<List<String>> = statements(version).map { statement ->
++            val match = Regex("CREATE (TABLE|INDEX) ([A-Za-z0-9_]+)").find(statement) ?: incompatible()
++            val kind = match.groupValues[1]
++            val name = match.groupValues[2]
++            val table = if (kind == "TABLE") name else
++                Regex("ON ([A-Za-z0-9_]+)").find(statement)?.groupValues?.get(1) ?: incompatible()
++            listOf(kind.lowercase(), name, table, statement)
++        }.sortedWith(compareBy<List<String>> { it[0] }.thenBy { it[1] })
+ 
+         private fun schema(db: SQLiteDatabase): List<List<String?>> =
+             db.rawQuery("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name", null).use { cursor ->
+@@ -211,14 +228,11 @@
+             }
+             fun validateSchema() {
+                 requireCurrent()
+-                sql.query("PRAGMA user_version").use { c ->
+-                    check(c.moveToFirst() && c.getType(0) == Cursor.FIELD_TYPE_INTEGER && c.getLong(0) == 1L) { "doctor_registry_schema_invalid" }
+-                }
+-                val names = listOf("workspace", "assignment", "assignment_request", "user_control", "control_workspace", "control_active", "central_read_receipt")
+-                val tables = listOf("workspace", "assignment", "assignment", "user_control", "user_control", "user_control", "central_read_receipt")
+-                val expected = CREATE_SQL.mapIndexed { index, statement ->
+-                    listOf(if (statement.startsWith("CREATE INDEX")) "index" else "table", names[index], tables[index], statement)
+-                }.sortedWith(compareBy<List<String>> { it[0] }.thenBy { it[1] })
++                val version = sql.query("PRAGMA user_version").use { c ->
++                    check(c.moveToFirst() && c.getType(0) == Cursor.FIELD_TYPE_INTEGER && c.getLong(0) in 1L..2L) { "doctor_registry_schema_invalid" }
++                    c.getLong(0).toInt()
++                }
++                val expected = expectedSchema(version)
+                 val actual = sql.query("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").use { c ->
+                     buildList { while (c.moveToNext()) {
+                         val name = c.getString(1)
+@@ -246,11 +260,33 @@
+             }
+         }
+ 
+-        private fun incompatible(): Nothing = throw com.jarvys.agent.CleanInstallRequiredException()
++        private fun incompatible(): Nothing = throw WorkspaceRegistryCorruptException("Workspace registry schema is incompatible; storage preserved without repair or deletion")
+     }
+ 
+     init { com.jarvys.agent.FreshStorageBootstrap.requireFreshInstall(context.applicationContext ?: context) }
+     private val helper = Helper(context.applicationContext ?: context)
++
++    fun schemaVersion(): Int = synchronized(TRANSACTION_LOCK) { helper.readableDatabase.version }
++
++    /** Explicit additive current-generation upgrade; never called by an ordinary open/read. */
++    fun upgradeTreeSchema() = transaction { db ->
++        when (db.version) {
++            1 -> {
++                WorkspaceTreeSchema.CREATE_SQL.forEach(db::execSQL)
++                db.version = 2
++            }
++            2 -> Unit
++            else -> incompatible()
++        }
++    }
++
++    internal fun <T> treeRead(block: (SQLiteDatabase) -> T): T = synchronized(TRANSACTION_LOCK) {
++        block(helper.readableDatabase)
++    }
++    internal fun <T> treeTransaction(block: (SQLiteDatabase) -> T): T = transaction { db ->
++        check(db.version == 2) { "Tree schema has not been explicitly enabled" }
++        block(db)
++    }
+ 
+     data class Creation(val record: WorkspaceRecord, val created: Boolean)
+ 
+@@ -782,8 +818,8 @@
+             Collections.unmodifiableList(result)
+         }
+     private fun <T> transaction(block: (SQLiteDatabase) -> T): T {
+-        val db = helper.writableDatabase
+         return synchronized(TRANSACTION_LOCK) {
++            val db = helper.writableDatabase
+             db.beginTransaction()
+             try {
+                 val result = block(db)
+@@ -793,29 +829,32 @@
+         }
+     }
+ 
+-    private class Helper(private val context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 1,
++    private class Helper(private val context: Context) {
++        private var delegate: VersionedHelper? = null
++        private var selectedVersion = 0
++        val readableDatabase: SQLiteDatabase get() = open(false)
++        val writableDatabase: SQLiteDatabase get() = open(true)
++        private fun open(write: Boolean): SQLiteDatabase = synchronized(TRANSACTION_LOCK) {
++            com.jarvys.agent.FreshStorageBootstrap.awaitReadyBlocking(context.filesDir)
++            val version = preflightFreshStorage(context)
++            if (delegate == null || selectedVersion != version) {
++                delegate?.close()
++                delegate = VersionedHelper(context, version)
++                selectedVersion = version
++            }
++            if (write) delegate!!.writableDatabase else delegate!!.readableDatabase
++        }
++        fun close() = synchronized(TRANSACTION_LOCK) {
++            delegate?.close()
++            delegate = null
++            selectedVersion = 0
++        }
++    }
++    private class VersionedHelper(context: Context, version: Int) : SQLiteOpenHelper(context, DATABASE_NAME, null, version,
+         DatabaseErrorHandler { throw WorkspaceRegistryCorruptException("Workspace database is corrupt; preserved without deletion") }) {
+-        private var preflightComplete = false
+-        @Synchronized override fun getReadableDatabase(): SQLiteDatabase {
+-            com.jarvys.agent.FreshStorageBootstrap.awaitReadyBlocking(context.filesDir)
+-            if (!preflightComplete) preflightFreshStorage(context)
+-            return super.getReadableDatabase().also { preflightComplete = true }
+-        }
+-        @Synchronized override fun getWritableDatabase(): SQLiteDatabase {
+-            com.jarvys.agent.FreshStorageBootstrap.awaitReadyBlocking(context.filesDir)
+-            if (!preflightComplete) preflightFreshStorage(context)
+-            return super.getWritableDatabase().also { preflightComplete = true }
+-        }
+-        @Synchronized override fun close() {
+-            try { super.close() } finally { preflightComplete = false }
+-        }
+         override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
+         override fun onCreate(db: SQLiteDatabase) { CREATE_SQL.forEach(db::execSQL) }
+-        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+-            throw com.jarvys.agent.CleanInstallRequiredException()
+-        }
+-        override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+-            throw com.jarvys.agent.CleanInstallRequiredException()
+-        }
++        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { incompatible() }
++        override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { incompatible() }
+     }
+ }

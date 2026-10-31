@@ -1,0 +1,976 @@
+--- a/app/app/src/main/java/com/jarvys/agent/AgentForegroundService.java
++++ b/app/app/src/main/java/com/jarvys/agent/AgentForegroundService.java
+@@ -1674,6 +1674,8 @@
+         new AtomicReference<>(existingUserMessageId == null ? "" : existingUserMessageId);
+     final AtomicBoolean assistantOwnerInternal = new AtomicBoolean(internalInput);
+     MainChatTurnContextProvider steeringProvider = null;
++    CentralTreeAdmission treeAdmission=null;
++    final boolean exactUserOrigin=!userMessageAlreadyRecorded || (existingUserMessageId!=null && !existingUserMessageId.isEmpty());
+     try {
+       token.throwIfCancelled();
+       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
+@@ -1732,7 +1734,13 @@
+               : skills.selectedForRun(selectedSkillIds);
+       List<String> usedSkillIds = new ArrayList<>();
+       for (SkillEntry skill : enabledSkills) usedSkillIds.add(skill.getMetadata().getId());
++      if(com.jarvys.agent.workspaces.WorkspaceTreePolicy.admissionEnabled()
++          && WorkspaceIdentity.isCentral(sessionId) && !internalInput && !regeneration && exactUserOrigin)
++        treeAdmission=CentralTreeAdmission.beginUser(this,conversationStore,sessionId,userMessageId,token);
++      if(storedInput!=null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance))
++        treeAdmission=CentralTreeAdmission.captureClaimed(this,conversationStore,storedInput,token);
+       CoreAgentRuntime runtime = runtimeFactory.create(this, sessionId, enabledSkills);
++      if(treeAdmission!=null)runtime.bindCentralTreeAdmission(treeAdmission,token);
+       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance))
+         runtime.bindClaimedContinuation(storedInput, token);
+       runtime.withMemorySessionRegeneration(regeneration, memoryResumeAdmission);
+@@ -1744,6 +1752,7 @@
+       skills.markUsed(usedSkillIds);
+       final String reflectionUserMessageId = userMessageId == null ? "" : userMessageId;
+       assistantOwnerMessageId.set(reflectionUserMessageId);
++      final CentralTreeAdmission runTreeAdmission=treeAdmission;
+       CoreAgentLoop.ProgressListener progress =
+           new CoreAgentLoop.ProgressListener() {
+             @Override
+@@ -1765,6 +1774,8 @@
+               if (incorporatedIds.isEmpty()) return;
+               CentralAgentInputCatalog.acknowledge(conversationStore, sessionId, incorporatedIds, agentIds);
+               WorkspaceContinuationDelivery.acknowledge(AgentForegroundService.this, storedInput);
++              if(runTreeAdmission!=null && storedInput!=null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance))
++                runTreeAdmission.acknowledgeClaimed(AgentForegroundService.this,storedInput);
+               if (internalInput) {
+                 assistantOwnerInternal.set(true);
+                 AgentRunUiState.markInternalConversationInput(sessionId, token.generation());
+@@ -1797,6 +1808,7 @@
+               }
+               if (incorporatedIds.isEmpty()) return;
+               CentralAgentInputCatalog.acknowledge(conversationStore, sessionId, incorporatedIds, agentIds);
++              if(runTreeAdmission!=null)runTreeAdmission.bindIncomingOwner(AgentForegroundService.this,messages,token);
+               assistantOwnerMessageId.set(latestId);
+               assistantOwnerInternal.set(latestInternal);
+               if (latestInternal) AgentRunUiState.markInternalConversationInput(sessionId, token.generation());
+@@ -1932,6 +1944,7 @@
+               timedOut ? "PARTIAL" : result.outcome,
+               proactiveThreadKey);
+       String responseOutcome = timedOut ? "PARTIAL" : result.outcome;
++      if(treeAdmission!=null && "COMPLETED".equals(responseOutcome))treeAdmission.finishSuccessful(this,assistantMessageId);
+       if (isTerminalFailure(responseOutcome) && !assistantOwnerInternal.get()) {
+         conversationStore.markConversationMessagesResolved(sessionId,
+             java.util.Collections.singletonList(assistantOwnerMessageId.get()));
+@@ -2004,6 +2017,10 @@
+           enqueueStoredMessageFollowUp(sessionId, steeringProvider.latestUnincorporatedSteeringMessageId());
+       }
+     } finally {
++      if(treeAdmission!=null) {
++        try {treeAdmission.stopOwnedRoot(this);} catch(RuntimeException failure){reportStopPersistenceFailure(failure);}
++        finally {treeAdmission.close();}
++      }
+       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
+         try {
+           if (token.wasStoppedByUser()) WorkspaceContinuationDelivery.cancelPendingInput(this, storedInput);
+--- /dev/null
++++ b/app/app/src/main/java/com/jarvys/agent/CentralTreeAdmission.java
+@@ -0,0 +1,167 @@
++package com.jarvys.agent;
++
++import android.content.Context;
++import com.jarvys.agent.chatdb.CentralUserRootCheckpoint;
++import com.jarvys.agent.chatdb.ChatDatabaseBridge;
++import com.jarvys.agent.crew.CrewProcessIdentity;
++import com.jarvys.agent.workspaces.*;
++import java.util.*;
++import java.util.concurrent.Callable;
++import java.util.concurrent.atomic.AtomicBoolean;
++import java.util.concurrent.locks.ReentrantLock;
++
++/** Native service capability. Root DTOs/source strings alone cannot authorize dispatch. */
++public final class CentralTreeAdmission implements AutoCloseable {
++    private final LocalRunStore store;
++    private final CentralUserRootCheckpoint origin;
++    private final CancellationToken token;
++    private final String processId=CrewProcessIdentity.ID;
++    private final Thread ownerThread=Thread.currentThread();
++    private final AtomicBoolean closed=new AtomicBoolean();
++    private final boolean freshDelegation;
++    private String rootId;
++    private MainChatTranscriptStore.TreeExitReceipt exitReceipt;
++    private Runnable unregisterStop=()->{};
++    private final List<IncomingOwner> incomingOwners=new ArrayList<>();
++    private static final class IncomingOwner {
++        final CoreAgentLoop.IncomingMessage message; final String digest;
++        IncomingOwner(CoreAgentLoop.IncomingMessage message,String digest) { this.message=message;this.digest=digest; }
++    }
++    private CentralTreeAdmission(LocalRunStore store,CentralUserRootCheckpoint origin,CancellationToken token,boolean fresh) {
++        this.store=Objects.requireNonNull(store);this.origin=Objects.requireNonNull(origin);
++        this.token=Objects.requireNonNull(token);this.freshDelegation=fresh;requireCurrent(token);
++    }
++    static CentralTreeAdmission captureUser(LocalRunStore store,String session,String id,CancellationToken token) {
++        return new CentralTreeAdmission(store,store.captureCentralUserRoot(session,id),token,true);
++    }
++    public String storageGeneration(){return origin.getStorageGeneration();}
++    public String ownerCentralSessionId(){return origin.getOwnerCentralSessionId();}
++    public String originUserMessageId(){return origin.getOriginUserMessageId();}
++    public String originDigest(){return origin.getOriginDigest();}
++    public String cycleId(){return processId+":"+token.generation();}
++    public String rootId(){return Objects.requireNonNull(rootId,"Tree root is not bound");}
++    public String sourceReceipt(){return "user-root:"+UUID.nameUUIDFromBytes((storageGeneration()+"\u0000"+originUserMessageId()+"\u0000"+cycleId()).getBytes(java.nio.charset.StandardCharsets.UTF_8));}
++    public void requireInvocationCurrent(CancellationToken expected) {
++        if(expected!=token || closed.get() || !processId.equals(CrewProcessIdentity.ID))
++            throw new IllegalStateException("Central source owner changed");
++        token.throwIfCancelled();
++    }
++    private void requireInsideLease(CancellationToken expected) {
++        requireInvocationCurrent(expected);
++        if(!origin.getLifecycle().fenceIdentity().isHeldByCurrentThread() || !origin.getLifecycle().isCurrentPure())
++            throw new IllegalStateException("Tree origin database lifecycle changed");
++    }
++    public void requireCurrent(CancellationToken expected) {
++        ReentrantLock fence=origin.getLifecycle().fenceIdentity();fence.lock();
++        try {requireInsideLease(expected);} finally {fence.unlock();}
++    }
++    public <T> T withCurrentWorkspaceTransaction(CancellationToken expected,Callable<T> work) {
++        ReentrantLock fence=origin.getLifecycle().fenceIdentity();fence.lock();
++        try {requireInsideLease(expected);return work.call();}
++        catch(RuntimeException failure){throw failure;}catch(Exception failure){throw new IllegalStateException(failure);}
++        finally {fence.unlock();}
++    }
++    public void revalidateSource(CancellationToken expected) {
++        requireCurrent(expected);
++        CentralUserRootCheckpoint current=store.captureCentralUserRoot(ownerCentralSessionId(),originUserMessageId());
++        if(!storageGeneration().equals(current.getStorageGeneration()) || !originDigest().equals(current.getOriginDigest()))
++            throw new IllegalStateException("Original USER source changed");
++        requireCurrent(expected);
++    }
++    public void requireFreshDelegation(CancellationToken expected) {
++        requireCurrent(expected);
++        if(!freshDelegation || Thread.currentThread()!=ownerThread)
++            throw new IllegalStateException("Fresh native USER execution is required for delegation");
++    }
++    private void bindRoot(String id) {if(rootId!=null)throw new IllegalStateException("Root cannot be rebound");rootId=Objects.requireNonNull(id);}
++    private void registerStop(Context context) {
++        unregisterStop=token.registerCancelAction(()->{if(token.wasStoppedByUser())WorkspaceTreeStops.latchRoot(context,rootId(),cycleId());});
++    }
++    static CentralTreeAdmission beginUser(Context context,LocalRunStore store,String session,String id,CancellationToken token) {
++        CentralTreeAdmission authority=captureUser(store,session,id,token);
++        try(WorkspaceRegistry registry=WorkspaceTreeAdmissionGateway.openForNewAdmission(context,authority,token)) {
++            WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);
++            TreeOrigin origin=new TreeOrigin(authority.storageGeneration(),authority.ownerCentralSessionId(),authority.originUserMessageId(),authority.originDigest());
++            TreeRoot root=authority.withCurrentWorkspaceTransaction(token,()->trees.beginRoot(origin,authority.sourceReceipt(),authority.cycleId()));
++            TreeNode node=trees.getNode(root.getRootId(),root.getRootId());
++            if(root.getAdmissionsClosed() || node==null || !node.getCycleId().equals(authority.cycleId()))
++                throw new IllegalStateException("Existing root requires an exact native continuation; closed roots never reopen");
++            authority.bindRoot(root.getRootId());authority.registerStop(context);authority.requireCurrent(token);return authority;
++        } catch(RuntimeException failure){authority.close();throw failure;}
++    }
++    static CentralTreeAdmission captureClaimed(Context context,LocalRunStore store,ConversationInput input,CancellationToken token) {
++        String claim=WorkspaceContinuationDelivery.claimedRunId(context,input,token);
++        ConversationInput.Provenance source=Objects.requireNonNull(input.provenance);
++        TreeRoot root=WorkspaceTreeAdmissionGateway.findOriginalRoot(context,source.workspaceId,source.assignmentId);
++        if(root==null)return null; // Historical P1 is not silently enrolled.
++        if(root.getAdmissionsClosed())throw new IllegalStateException("Original root is closed");
++        TreeOrigin saved=root.getOrigin();
++        CentralTreeAdmission authority=new CentralTreeAdmission(store,store.captureCentralUserRoot(saved.getOwnerCentralSessionId(),saved.getOriginUserMessageId()),token,false);
++        try(WorkspaceRegistry registry=new WorkspaceRegistry(context)) {
++            if(!saved.getStorageGeneration().equals(authority.storageGeneration()) || !saved.getOriginDigest().equals(authority.originDigest()))
++                throw new IllegalStateException("Claimed continuation original source changed");
++            WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);
++            TreeNode node=Objects.requireNonNull(trees.getNode(root.getRootId(),root.getRootId()));
++            if(!claim.equals(WorkspaceContinuationDelivery.claimedRunId(context,input,token)))throw new IllegalStateException("P1 claim changed");
++            authority.withCurrentWorkspaceTransaction(token,()->trees.attachCentralExecution(TreeNodeFence.Companion.of(node),authority.cycleId(),authority.sourceReceipt(),claim,true,source.assignmentId));
++            authority.bindRoot(root.getRootId());authority.registerStop(context);authority.requireCurrent(token);return authority;
++        } catch(RuntimeException failure){authority.close();throw failure;}
++    }
++    void bindIncomingOwner(Context context,List<CoreAgentLoop.IncomingMessage> messages,CancellationToken expected) {
++        requireCurrent(expected);
++        if(Thread.currentThread()!=ownerThread || exitReceipt!=null)throw new IllegalStateException("Native owner callback is no longer current");
++        List<IncomingOwner> confirmed=new ArrayList<>();
++        for(CoreAgentLoop.IncomingMessage message:messages)if(message!=null && "main_chat".equals(message.sourceKind))
++            confirmed.add(new IncomingOwner(message,ChatDatabaseBridge.getInstance(context).confirmCentralTreeIncomingSync(ownerCentralSessionId(),message)));
++        requireCurrent(expected);incomingOwners.addAll(confirmed);
++    }
++    void confirmExit(MainChatTranscriptStore.TreeExitReceipt receipt,CancellationToken expected) {
++        requireCurrent(expected);
++        if(receipt==null || exitReceipt!=null)throw new IllegalStateException("Exit receipt cannot be replaced");
++        for(IncomingOwner owner:incomingOwners)if(!receipt.committedIncomingIds.contains(owner.message.id))
++            throw new IllegalStateException("Final owner absent from confirmed checkpoint");
++        exitReceipt=receipt;
++    }
++    void finishSuccessful(Context context,String assistantId) {
++        requireCurrent(token);
++        MainChatTranscriptStore.TreeExitReceipt receipt=Objects.requireNonNull(exitReceipt,"Confirmed native exit required");
++        String finalOwner=receipt.ownerMessageId;StringBuilder chain=new StringBuilder();
++        for(IncomingOwner owner:incomingOwners){
++            String current=ChatDatabaseBridge.getInstance(context).confirmCentralTreeIncomingSync(ownerCentralSessionId(),owner.message);
++            if(!current.equals(owner.digest) || !receipt.committedIncomingIds.contains(owner.message.id))throw new IllegalStateException("Final owner source changed");
++            finalOwner=owner.message.id;chain.append(':').append(finalOwner).append(':').append(current);
++        }
++        ChatDatabaseBridge.getInstance(context).confirmCentralTreeExitSync(ownerCentralSessionId(),assistantId,finalOwner,receipt.runId);
++        revalidateSource(token);
++        try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){
++            WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);TreeNode node=Objects.requireNonNull(trees.getNode(rootId(),rootId()));
++            if(!cycleId().equals(node.getCycleId()))throw new IllegalStateException("Exit cycle changed");
++            withCurrentWorkspaceTransaction(token,()->trees.finishCentral(TreeNodeFence.Companion.of(node),receipt.digest+":"+assistantId+chain,false));
++        }
++    }
++    void acknowledgeClaimed(Context context,ConversationInput input) {
++        requireCurrent(token);String claim=WorkspaceContinuationDelivery.claimedRunId(context,input,token);
++        ConversationInput.Provenance source=Objects.requireNonNull(input.provenance);
++        CrewCheckpointStore.ConfirmedSnapshot saved=Objects.requireNonNull(new CrewCheckpointStore(context.getFilesDir()).confirmDurable(
++                WorkspaceIdentity.executionSessionId(source.workspaceId),source.botId,"native-workspace:"+source.workspaceId));
++        if(!"ACKNOWLEDGED".equals(CrewCheckpointStore.continuation(saved).dispatchState()) || !"incorporated".equals(store.readConversationInputState(ownerCentralSessionId(),input.messageId)))
++            throw new IllegalStateException("Exact P1 incorporation is not durable");
++        if(!claim.equals(WorkspaceContinuationDelivery.claimedRunId(context,input,token)))throw new IllegalStateException("P1 claim changed");
++        try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){
++            WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);
++            withCurrentWorkspaceTransaction(token,()->{trees.recordCentralIncorporated(rootId(),source.assignmentId,claim,saved.payloadSha256);return null;});
++        }
++    }
++    void stopOwnedRoot(Context context) {
++        if(!token.wasStoppedByUser() || rootId==null || closed.get())return;
++        ReentrantLock fence=origin.getLifecycle().fenceIdentity();fence.lock();
++        try {
++            if(!origin.getLifecycle().isCurrentPure())throw new IllegalStateException("Stopped root lifecycle changed");
++            try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){
++                WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);TreeNode node=Objects.requireNonNull(trees.getNode(rootId(),rootId()));
++                if(cycleId().equals(node.getCycleId()))trees.finishCentral(TreeNodeFence.Companion.of(node),"stop:"+sourceReceipt(),true);
++            }
++        } finally {fence.unlock();}
++    }
++    @Override public void close(){if(closed.compareAndSet(false,true))unregisterStop.run();}
++}
+--- a/app/app/src/main/java/com/jarvys/agent/CoreAgentLoop.java
++++ b/app/app/src/main/java/com/jarvys/agent/CoreAgentLoop.java
+@@ -1814,6 +1814,9 @@
+             }
+             if (message.genuineUser) {
+                 ConversationTurn userTurn = new ConversationTurn("user", message.content);
++                // Only real chat steering owns a Room source; Crew USER corrections do not.
++                // Transcript writer binds the Source after confirmed checkpoint persistence.
++                if ("main_chat".equals(message.sourceKind)) userTurn=userTurn.withDurableMessageId(message.id);
+                 transcript.add(userTurn);
+                 protectedGenuineUser = userTurn;
+                 if (compactor != null) compactor.protectGenuineUser(userTurn);
+--- a/app/app/src/main/java/com/jarvys/agent/CoreAgentRuntime.java
++++ b/app/app/src/main/java/com/jarvys/agent/CoreAgentRuntime.java
+@@ -108,6 +108,12 @@
+   private volatile String mainChatSteeringCursor = "";
+   private volatile String currentUserMessageId = "";
+   private volatile String currentTurnOwnerMessageId = "";
++  private CentralTreeAdmission centralTreeAdmission;
++  synchronized void bindCentralTreeAdmission(CentralTreeAdmission authority,CancellationToken token) {
++    if(centralTreeAdmission!=null || context==null || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId))
++      throw new IllegalStateException("Invalid Central tree capability binding");
++    authority.requireCurrent(token);centralTreeAdmission=authority;
++  }
+   private ConversationInput claimedContinuationInput;
+   private CancellationToken claimedContinuationToken;
+   private boolean claimedContinuationUsed;
+@@ -356,6 +362,7 @@
+       final CancellationToken token,
+       CoreAgentLoop.ProgressListener listener) {
+     final String runId = nextRuntimeRunId(mainChat, token);
++    if(centralTreeAdmission!=null)centralTreeAdmission.revalidateSource(token);
+     CoreToolRegistry toolRegistry = createTools();
+     if (!mainChat) {
+       List<String> available = new ArrayList<>(toolRegistry.names());
+@@ -376,11 +383,16 @@
+       CoreTool workspace = new com.jarvys.agent.workspaces.CentralWorkspaceTool(context, sessionId,
+           com.jarvys.agent.crew.CrewProcessIdentity.ID + ":" + UUID.randomUUID(),
+           request,
+-          new com.jarvys.agent.workspaces.WorkspaceCoordinator(context));
++          new com.jarvys.agent.workspaces.WorkspaceCoordinator(context), centralTreeAdmission);
+       if (allowed(workspace)) toolRegistry = toolRegistry.with(Collections.singletonList(workspace));
+       List<String> centralTools = new ArrayList<>(toolRegistry.names());
+       centralTools.remove("delegate_subtask");
+       toolRegistry = toolRegistry.subset(centralTools);
++    }
++    if(centralTreeAdmission!=null) {
++      List<String> rootedTools=new ArrayList<>(toolRegistry.names());
++      rootedTools.remove("delegate_subtask");rootedTools.remove("crew_spawn");
++      toolRegistry=toolRegistry.subset(rootedTools);
+     }
+     final MainChatTranscriptStore transcriptStore = mainChat && context != null
+         ? new MainChatTranscriptStore(context.getFilesDir(), sessionId, new LocalRunStore(context)) : null;
+@@ -491,8 +503,12 @@
+           new CoreAgentLoop(
+               scopedModel, observedToolRegistry, runInstructions, sessionId, budget, compactor,
+               CoreAgentLoop.ToolResultBudget.BOUNDED, turnContextProvider, new ProviderRetryWaiter());
+-      if (transcriptStore != null) transcriptStore.attach(loop, history, currentTurnOwnerMessageId, runId);
++      if (transcriptStore != null) {
++        if(centralTreeAdmission!=null)transcriptStore.enableTreeExitReceipt();
++        transcriptStore.attach(loop, history, currentTurnOwnerMessageId, runId);
++      }
+       CoreAgentLoop.Result completed = loop.run(request, history, attachments, token, listener, currentUserMessageId, runId);
++      if(centralTreeAdmission!=null)centralTreeAdmission.confirmExit(transcriptStore.confirmTreeExit(loop.checkpointSnapshot(),runId),token);
+       if (runKind() == RunKind.PRINCIPAL && mainChat && depth == 0 && context != null
+           && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
+           && memorySessionBinding != null && memorySessionTicket != null && "COMPLETED".equals(completed.outcome)) {
+--- a/app/app/src/main/java/com/jarvys/agent/LocalRunStore.java
++++ b/app/app/src/main/java/com/jarvys/agent/LocalRunStore.java
+@@ -783,6 +783,12 @@
+                 System.currentTimeMillis() / 1000.0, conversationKindFor(sessionId), stableId)),
+                 "append mission reference");
+         return saved.getMessageId();
++    }
++
++    /** Exact canonical USER source; no latest-user or provenance override. */
++    com.jarvys.agent.chatdb.CentralUserRootCheckpoint captureCentralUserRoot(String sessionId,String messageId) {
++        if(chatDatabaseBridge==null)throw noChatDatabase();
++        return chatDatabaseBridge.captureCentralUserRootSync(sessionId,messageId);
+     }
+ 
+     /** Restores the typed input metadata stored with an AGENT/SYSTEM message row. */
+--- a/app/app/src/main/java/com/jarvys/agent/MainChatTranscriptStore.java
++++ b/app/app/src/main/java/com/jarvys/agent/MainChatTranscriptStore.java
+@@ -59,6 +59,29 @@
+     private final ThreadLocal<List<JSONObject>> pendingCheckpointRows = new ThreadLocal<>();
+     private boolean storageWarningChecked;
+     private final Map<String, CallBinding> committedCalls = new java.util.concurrent.ConcurrentHashMap<>();
++
++    /** Minted only after exact checkpoint Room commit and Source publication. */
++    static final class TreeExitReceipt {
++        final String runId,ownerMessageId,digest;
++        final Set<String> committedIncomingIds;
++        private TreeExitReceipt(String runId,String ownerMessageId,String digest,Set<String> incoming) {
++            this.runId=runId;this.ownerMessageId=ownerMessageId;this.digest=digest;
++            this.committedIncomingIds=Collections.unmodifiableSet(new java.util.LinkedHashSet<>(incoming));
++        }
++    }
++    private boolean captureTreeExit;
++    private CoreAgentLoop.Checkpoint confirmedTreeCheckpoint;
++    private TreeExitReceipt confirmedTreeReceipt;
++    void enableTreeExitReceipt(){captureTreeExit=true;}
++    TreeExitReceipt confirmTreeExit(CoreAgentLoop.Checkpoint checkpoint,String runId) {
++        synchronized(archiveLock) {
++            if(checkpoint!=confirmedTreeCheckpoint || confirmedTreeReceipt==null || !confirmedTreeReceipt.runId.equals(runId))
++                throw new IllegalStateException("Central exit checkpoint was not confirmed");
++            for(String state:checkpoint.toolLifecycle.values())if("STARTED".equals(state) || "INTERRUPTED_UNCERTAIN".equals(state))
++                throw new IllegalStateException("Central exit has uncertain effects");
++            return confirmedTreeReceipt;
++        }
++    }
+ 
+     private volatile Object attachmentIdentity = new Object();
+     private com.jarvys.agent.chatdb.MemorySessionBinding memorySessionBinding;
+@@ -326,6 +349,17 @@
+                                 if ("STARTED".equals(checkpoint.toolLifecycle.get(call.id))) binding.started = true;
+                             }
+                         }
++                        if(captureTreeExit) {
++                            java.security.MessageDigest sha=java.security.MessageDigest.getInstance("SHA-256");
++                            String receipt=new JSONObject().put("owner",userMessageId).put("run",runId)
++                                .put("rows",new JSONArray(checkpointRows)).put("applied",new JSONArray(checkpoint.appliedIncomingIds))
++                                .put("lifecycle",new JSONObject(checkpoint.toolLifecycle)).toString();
++                            for(int i=0;i<receipt.length();i++){char ch=receipt.charAt(i);sha.update((byte)(ch>>>8));sha.update((byte)ch);}
++                            StringBuilder digest=new StringBuilder();
++                            for(byte b:sha.digest())digest.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
++                            confirmedTreeReceipt=new TreeExitReceipt(runId,userMessageId,digest.toString(),checkpoint.appliedIncomingIds);
++                            confirmedTreeCheckpoint=checkpoint;
++                        }
+                     } finally {
+                         pendingCheckpointRows.remove();
+                     }
+--- /dev/null
++++ b/app/app/src/main/java/com/jarvys/agent/chatdb/CentralUserRootCheckpoint.kt
+@@ -0,0 +1,42 @@
++package com.jarvys.agent.chatdb
++
++import android.database.Cursor
++import com.jarvys.agent.ConversationInput
++import com.jarvys.agent.connectors.ConnectionStateCoordinator
++import com.jarvys.agent.workspaces.WorkspaceIdentity
++import java.security.MessageDigest
++
++/** Data plus exact database lifetime, never a serialized execution permission. */
++class CentralUserRootCheckpoint internal constructor(
++    val storageGeneration:String, val ownerCentralSessionId:String, val originUserMessageId:String,
++    val originDigest:String, val lifecycle:ConnectionStateCoordinator.DestinationEvidence,
++)
++
++internal suspend fun captureCentralUserRootDigest(database:JarvysChatDatabase,conversationId:String,messageId:String):String =
++    database.withChatReadTransaction {
++        check(WorkspaceIdentity.isCentral(conversationId) && messageId.isNotBlank())
++        val args=arrayOf(conversationId,messageId)
++        database.chatSql.query("SELECT m.role,m.hidden_kind FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.conversation_id=? AND m.message_id=?",args).use { c ->
++            check(c.moveToFirst() && c.getString(0)=="user" && c.isNull(1) && !c.moveToNext()) {
++                "Tree origin is not an exact visible USER row"
++            }
++        }
++        val digest=MessageDigest.getInstance("SHA-256")
++        fun field(value:String?) {
++            val size=value?.length ?: -1
++            for(shift in listOf(24,16,8,0)) digest.update((size ushr shift).toByte())
++            value?.forEach { ch -> digest.update((ch.code ushr 8).toByte());digest.update(ch.code.toByte()) }
++        }
++        field("jarvys-central-user-origin-v1")
++        database.chatSql.query("SELECT ordinal,kind,payload FROM message_parts WHERE conversation_id=? AND message_id=? ORDER BY ordinal",args).use { c ->
++            while(c.moveToNext()) {
++                check(c.getType(0)==Cursor.FIELD_TYPE_INTEGER && c.getType(1)==Cursor.FIELD_TYPE_STRING && c.getType(2)==Cursor.FIELD_TYPE_STRING)
++                check(c.getString(1)!=ConversationInput.PROVENANCE_PART_KIND) { "Internal provenance cannot create a USER root" }
++                field("part");field(c.getLong(0).toString());field(c.getString(1));field(c.getString(2))
++            }
++        }
++        database.chatSql.query("SELECT ordinal,attachment_id,name,mime_type,size_bytes,kind,relative_path,sha256,file_ref_id FROM message_attachments WHERE conversation_id=? AND message_id=? ORDER BY ordinal",args).use { c ->
++            while(c.moveToNext()) { field("attachment");for(i in 0 until c.columnCount) field(if(c.isNull(i)) null else c.getString(i)) }
++        }
++        digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
++    }
+--- a/app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt
++++ b/app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt
+@@ -1677,6 +1677,62 @@
+             CodingJobSemanticRepository(repos.database).source(entryId, jobId, maxChars)
+         } }
+ 
++    /** Exact source and lifecycle: neither latest USER nor decoded provenance may substitute. */
++    fun captureCentralUserRootSync(conversationId:String,messageId:String):CentralUserRootCheckpoint = executeOnWorker { repos ->
++        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
++        anchor.fenced {
++            val generation=runBlocking { ConnectionProjectionRepository(repos.database).generation() }
++            val digest=runBlocking { captureCentralUserRootDigest(repos.database,conversationId,messageId) }
++            CentralUserRootCheckpoint(generation,conversationId,messageId,digest,anchor.attest(repos.database,generation))
++        }
++    }
++
++    /** A successful exact assistant commit, never inferred from response text. */
++    fun confirmCentralTreeExitSync(conversationId:String,messageId:String,ownerId:String,runId:String):String = execute { repos ->
++        repos.database.withChatReadTransaction {
++            check(com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(conversationId))
++            repos.database.chatSql.query("SELECT role,owner_user_message_id,run_id,status,hidden_kind FROM messages WHERE conversation_id=? AND message_id=?",arrayOf(conversationId,messageId)).use { c ->
++                check(c.moveToFirst() && c.getString(0)=="assistant" && c.getString(1)==ownerId && c.getString(2)==runId &&
++                    c.getString(3)=="COMPLETED" && c.isNull(4) && !c.moveToNext()) { "Central exit assistant commit does not match exact run" }
++            }
++            messageId
++        }
++    }
++
++    /** Canonical source of the already-ACKed native steering callback, not authority to dispatch. */
++    fun confirmCentralTreeIncomingSync(conversationId:String,incoming:com.jarvys.agent.CoreAgentLoop.IncomingMessage):String = execute { repos ->
++        repos.database.withChatReadTransaction {
++            check(com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(conversationId) && incoming.sourceKind=="main_chat")
++            val role=incoming.origin.name.lowercase(java.util.Locale.ROOT)
++            check(role in setOf("user","agent","system"))
++            repos.database.chatSql.query("SELECT role,hidden_kind,input_state FROM messages WHERE conversation_id=? AND message_id=?",arrayOf(conversationId,incoming.id)).use { c ->
++                check(c.moveToFirst() && c.getString(0)==role && c.isNull(1) && c.getString(2)=="incorporated" && !c.moveToNext()) {
++                    "Central final owner is not an exact incorporated input"
++                }
++            }
++            val row=requireNotNull(repos.reader.readMessage(conversationId,incoming.id))
++            check(row.text==incoming.content) { "Central incorporated content changed" }
++            val parts=row.parts.filter { it.kind==com.jarvys.agent.ConversationInput.PROVENANCE_PART_KIND }
++            if(incoming.origin==com.jarvys.agent.ConversationInput.Origin.USER) {
++                check(incoming.genuineUser && incoming.provenance==null && parts.isEmpty())
++            } else {
++                check(!incoming.genuineUser && incoming.provenance!=null && parts.size==1)
++                val encoded=org.json.JSONObject(parts.single().payload)
++                check(encoded.getString("origin")==incoming.origin.name)
++                val canonical=requireNotNull(com.jarvys.agent.ConversationInput.Provenance.fromJson(encoded.getJSONObject("provenance")))
++                check(canonical.toJson().toString()==incoming.provenance.toJson().toString()) { "Central incorporated provenance changed" }
++            }
++            val digest=java.security.MessageDigest.getInstance("SHA-256")
++            fun field(value:String) {
++                for(shift in listOf(24,16,8,0))digest.update((value.length ushr shift).toByte())
++                value.forEach { ch -> digest.update((ch.code ushr 8).toByte());digest.update(ch.code.toByte()) }
++            }
++            field("central-incorporated-owner-v1");field(conversationId);field(incoming.id);field(role)
++            row.parts.forEach { field(it.kind);field(it.payload) }
++            digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
++        }
++    }
++
+     /** Capture exact Central-call provenance and the SAME database lifecycle; release before returning. */
+     fun captureCentralInvocationSync(conversationId: String, ownerMessageId: String, batchId: String,
+                                     callId: String, toolName: String, runId: String, processId: String): CentralInvocationCheckpoint =
+--- /dev/null
++++ b/app/app/src/test/java/com/jarvys/agent/CentralTreeAdmissionTest.kt
+@@ -0,0 +1,132 @@
++package com.jarvys.agent
++
++import android.app.Application
++import android.content.Context
++import android.content.ContextWrapper
++import androidx.test.core.app.ApplicationProvider
++import com.jarvys.agent.chatdb.*
++import com.jarvys.agent.workspaces.WorkspaceIdentity
++import kotlinx.coroutines.runBlocking
++import org.junit.Assert.*
++import org.junit.Rule
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.annotation.Config
++
++/** Fresh reconstructed source tests; prior unavailable results are not evidence for these bytes. */
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk=[34],application=Application::class,shadows=[ArtifactOsShadow::class])
++class CentralTreeAdmissionTest {
++    @get:Rule val fixture=ChatTestStore()
++    private val central=WorkspaceIdentity.CENTRAL_SESSION
++    private inner class Setup {
++        val files=fixture.newFilesDirectory()
++        val store=fixture.localRunStore(files)
++        val context=object:ContextWrapper(ApplicationProvider.getApplicationContext<Context>()) {
++            override fun getApplicationContext():Context=this
++            override fun getFilesDir()=files
++        }
++        val token=CancellationToken.cancellable()
++        val id=store.appendConversationMessage(central,"user","Exact original USER 🧭")
++        fun capture()=CentralTreeAdmission.captureUser(store,central,id,token)
++        fun sql(statement:String,vararg args:Any?)=runBlocking {
++            val db=JarvysChatDatabaseProvider.getInstance(context)
++            db.withChatWriteTransaction { db.chatSql.execSQL(statement,args) }
++        }
++        fun incoming():CoreAgentLoop.IncomingMessage {
++            val row=store.appendConversationMessage(central,"user","Exact incorporated steering")
++            store.markConversationMessagesIncorporated(central,listOf(row))
++            return CoreAgentLoop.IncomingMessage.mainChat(requireNotNull(store.readConversationInput(central,row)))
++        }
++    }
++    private fun denied(block:()->Unit) {
++        try {block();fail("Exact source must reject")}
++        catch(expected:IllegalStateException){}
++        catch(expected:IllegalArgumentException){}
++        catch(expected:java.util.concurrent.CancellationException){}
++    }
++    @Test fun exactOriginalSourceSurvivesNewerUserWithoutAdoptingIt() {
++        val f=Setup();val a=f.capture();f.store.appendConversationMessage(central,"user","Not a root selector")
++        val b=f.capture();assertEquals(f.id,a.originUserMessageId());assertEquals(a.originDigest(),b.originDigest())
++        a.revalidateSource(f.token);assertEquals("current",a.withCurrentWorkspaceTransaction(f.token){"current"})
++        a.close();b.close()
++    }
++    @Test fun absentAssistantAndCrossOwnerCannotCreateSource() {
++        val f=Setup();val assistant=f.store.appendConversationMessage(central,"assistant","not a USER")
++        denied {CentralTreeAdmission.captureUser(f.store,central,"missing",f.token)}
++        denied {CentralTreeAdmission.captureUser(f.store,central,assistant,f.token)}
++        denied {CentralTreeAdmission.captureUser(f.store,"other",f.id,f.token)}
++    }
++    @Test fun hiddenUserCannotCreateSource() {
++        val f=Setup();f.sql("UPDATE messages SET hidden_kind='fixture-hidden' WHERE conversation_id=? AND message_id=?",central,f.id)
++        denied {f.capture()}
++    }
++    @Test fun serializedProvenanceCannotOverrideUserRole() {
++        val f=Setup();f.sql("INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,?,?,?)",
++            central,f.id,99,ConversationInput.PROVENANCE_PART_KIND,"{\"origin\":\"USER\",\"provenance\":{}}")
++        denied {f.capture()}
++    }
++    @Test fun sourceMutationRevokesRatherThanAdoptsDigest() {
++        val f=Setup();val a=f.capture()
++        f.sql("UPDATE message_parts SET payload='changed' WHERE conversation_id=? AND message_id=? AND kind='text'",central,f.id)
++        denied {a.revalidateSource(f.token)};a.close()
++    }
++    @Test fun wrongTokenClosedAndCancelledCapabilitiesFail() {
++        val f=Setup();val a=f.capture();denied {a.requireCurrent(CancellationToken.cancellable())};a.close();denied {a.requireCurrent(f.token)}
++        val b=f.capture();f.token.cancel();denied {b.requireCurrent(f.token)};b.close()
++    }
++    @Test fun databaseReplacementRevokesOriginalLifecycle() {
++        val f=Setup();val a=f.capture();ChatDatabaseBridge.closeInstanceForTests(f.files)
++        denied {a.requireCurrent(f.token)};a.close()
++    }
++    private fun receipt(f:Setup,run:String):Pair<MainChatTranscriptStore,CoreAgentLoop> {
++        val writer=MainChatTranscriptStore(f.files,central,f.store)
++        val loop=CoreAgentLoop(CoreAgentLoop.Model { _,_,_,_ -> ModelReply("complete",emptyList()) },
++            CoreToolRegistry(emptyList()),"",central,CorePromptBudget.standard(),null)
++        writer.enableTreeExitReceipt();writer.attach(loop,emptyList(),f.id,run)
++        loop.run("Exact original USER 🧭",emptyList(),emptyList(),f.token,null,f.id,run)
++        return writer to loop
++    }
++    @Test fun exitReceiptRequiresExactConfirmedCheckpointAndRun() {
++        val f=Setup();val (writer,loop)=receipt(f,"exact-run")
++        val r=writer.confirmTreeExit(loop.checkpointSnapshot(),"exact-run")
++        assertEquals(f.id,r.ownerMessageId);assertTrue(r.digest.matches(Regex("[a-f0-9]{64}")))
++        denied {writer.confirmTreeExit(loop.checkpointSnapshot(),"other")}
++        denied {writer.confirmTreeExit(CoreAgentLoop.Checkpoint.empty(),"exact-run")}
++    }
++    @Test fun failedPersistenceCannotMintExit() {
++        val f=Setup();val writer=MainChatTranscriptStore(f.files,central,f.store)
++        val loop=CoreAgentLoop(CoreAgentLoop.Model { _,_,_,_ -> ModelReply("complete",emptyList()) },CoreToolRegistry(emptyList()),"",central,CorePromptBudget.standard(),null)
++        writer.enableTreeExitReceipt();writer.attach(loop,emptyList(),f.id,"failed")
++        MainChatTranscriptStore.checkpointStagedHookForTests=java.util.function.Consumer {throw IllegalStateException("fixture failure")}
++        try {
++            denied {loop.run("Exact original USER 🧭",emptyList(),emptyList(),f.token,null,f.id,"failed")}
++            denied {writer.confirmTreeExit(loop.checkpointSnapshot(),"failed")}
++        } finally {MainChatTranscriptStore.checkpointStagedHookForTests=null}
++    }
++    @Test fun finalOwnerWrongThreadTokenOrUncommittedCheckpointCannotBind() {
++        val f=Setup();val a=f.capture()
++        denied {a.bindIncomingOwner(f.context,emptyList(),CancellationToken.cancellable())}
++        val thread=java.util.concurrent.Executors.newSingleThreadExecutor()
++        try {assertTrue(thread.submit<Boolean> {
++            try {a.bindIncomingOwner(f.context,emptyList(),f.token);false}catch(expected:IllegalStateException){true}
++        }.get(5,java.util.concurrent.TimeUnit.SECONDS))}finally{thread.shutdownNow()}
++        val incoming=f.incoming();a.bindIncomingOwner(f.context,listOf(incoming),f.token)
++        val (writer,loop)=receipt(f,"omitted-owner")
++        val r=writer.confirmTreeExit(loop.checkpointSnapshot(),"omitted-owner")
++        assertFalse(r.committedIncomingIds.contains(incoming.id));denied {a.confirmExit(r,f.token)};a.close()
++    }
++    @Test fun canonicalIncomingGuardRejectsContentRoleAndProvenanceMutation() {
++        for(kind in listOf("content","role","provenance")) {
++            val f=Setup();val incoming=f.incoming();val bridge=ChatDatabaseBridge.getInstance(f.context)
++            assertTrue(bridge.confirmCentralTreeIncomingSync(central,incoming).matches(Regex("[a-f0-9]{64}")))
++            when(kind) {
++                "content" -> f.sql("UPDATE message_parts SET payload='changed' WHERE conversation_id=? AND message_id=? AND kind='text'",central,incoming.id)
++                "role" -> f.sql("UPDATE messages SET role='agent' WHERE conversation_id=? AND message_id=?",central,incoming.id)
++                else -> f.sql("INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,?,?,?)",central,incoming.id,99,ConversationInput.PROVENANCE_PART_KIND,"{\"origin\":\"USER\",\"provenance\":{}}")
++            }
++            denied {bridge.confirmCentralTreeIncomingSync(central,incoming)}
++        }
++    }
++}
+--- /dev/null
++++ b/app/app/src/test/java/com/jarvys/agent/CentralTreeServiceAcceptanceTest.kt
+@@ -0,0 +1,215 @@
++package com.jarvys.agent
++
++import android.content.Context
++import androidx.test.core.app.ApplicationProvider
++import com.jarvys.agent.chatdb.*
++import com.jarvys.agent.crew.*
++import com.jarvys.agent.device.ScreenData
++import com.jarvys.agent.workspaces.*
++import kotlinx.coroutines.runBlocking
++import org.json.JSONObject
++import org.junit.*
++import org.junit.Assert.*
++import org.junit.rules.RuleChain
++import org.junit.runner.RunWith
++import org.robolectric.Robolectric
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.annotation.Config
++import org.robolectric.annotation.LooperMode
++import java.util.UUID
++import java.util.concurrent.CountDownLatch
++import java.util.concurrent.TimeUnit
++import java.util.concurrent.atomic.AtomicInteger
++import java.util.concurrent.atomic.AtomicReference
++
++/** Fresh enabled-admission acceptance. Not selected before D3; no policy shadow or seeded authority. */
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk=[34],application=CentralFlowTestApplication::class,shadows=[ArtifactOsShadow::class])
++@LooperMode(LooperMode.Mode.PAUSED)
++class CentralTreeServiceAcceptanceTest {
++    private val storage=ChatTestStore(runTestOnWorker=false,registerApplicationFilesDirectory=true)
++    @get:Rule val rules:RuleChain=RuleChain.outerRule(storage).around(TestSecretStoreRule())
++    private val context get()=ApplicationProvider.getApplicationContext<Context>()
++    private val central=WorkspaceIdentity.CENTRAL_SESSION
++    private var controller:org.robolectric.android.controller.ServiceController<AgentForegroundService>?=null
++    private lateinit var service:AgentForegroundService
++    private val actualRuntime=AtomicReference<CoreAgentRuntime>()
++    private val failure=AtomicReference<Throwable>()
++    private val calls=AtomicInteger()
++    private var manager:CrewManager?=null
++    private val releaseChild=CountDownLatch(1)
++    @Volatile private var reply:(List<ConversationTurn>)->ModelReply={ModelReply("Completed",emptyList())}
++    private fun provider(block:(List<ConversationTurn>)->ModelReply)=object:ModelProviderClient {
++        override fun complete(systemPrompt:String,userPrompt:String,images:List<ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=error("Conversation expected")
++        override fun completeConversation(systemPrompt:String,history:List<ConversationTurn>,userPrompt:String,images:List<ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=block(history)
++    }
++    @Before fun setup() {
++        check(WorkspaceTreePolicy.admissionEnabled()) {"Requires separately approved post-D3 enabled candidate"}
++        storage.localRunStore(context.filesDir)
++        ProviderSettings(context).apply {setProvider(ProviderSettings.Provider.OPENROUTER);setOpenRouterModel("offline/tree-service")}
++        check(context.getSharedPreferences("provider_context_metadata",0).edit().putInt("model_offline/tree-service",32768)
++            .putLong("fetched_offline/tree-service",System.currentTimeMillis()).commit())
++        storage.onDatabaseWorker {FreshStorageBootstrap.ensure(context);ChatDatabaseBridge.getInstance(context).ensureConversationSync(central,"chat")}
++        AgentRunUiState.resetSession(central)
++        controller=Robolectric.buildService(AgentForegroundService::class.java).create();service=controller!!.get()
++        val scripted=provider {history -> calls.incrementAndGet();reply(history)}
++        service.runtimeFactory=AgentForegroundService.RuntimeFactory {c,id,skills ->
++            CoreAgentRuntime(c,id,skills,CorePromptBudget.standard(),scripted).also {actualRuntime.set(it)}
++        }
++        service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->
++            try {runtime.runMainChat(goal,history,attachments,token,progress)}
++            catch(problem:Throwable){failure.set(problem);throw AssertionError("Actual Central runtime failed",problem)}
++        }
++    }
++    @After fun cleanup() {
++        releaseChild.countDown();StopController.stopAllRuns();StopController.getInstance().stopRun()
++        controller?.let {runCatching {it.destroy()}};manager?.let {runCatching {it.close()}}
++        context.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
++    }
++    private fun user(text:String)=storage.onDatabaseWorker {LocalRunStore(context).appendConversationMessage(central,"user",text)}
++    private fun runStored(id:String,goal:String="") {
++        val method=AgentForegroundService::class.java.getDeclaredMethod("runRealAgent",CancellationToken::class.java,
++            String::class.java,List::class.java,String::class.java,String::class.java,Boolean::class.javaPrimitiveType,
++            Boolean::class.javaPrimitiveType,String::class.java).apply {isAccessible=true}
++        storage.onDatabaseWorker {
++            val token=StopController.getInstance().beginRun()
++            try {method.invoke(service,token,goal,emptyList<String>(),central,goal,true,false,id)}finally{token.completeRun()}
++        }
++    }
++    private fun root(origin:String):TreeRoot=storage.onDatabaseWorker {WorkspaceRegistry(context).use {registry ->
++        val id=registry.treeRead {db -> db.rawQuery("SELECT root_id FROM bot_tree_root WHERE origin_user_message_id=?",arrayOf(origin)).use {rows ->
++            check(rows.moveToFirst());val id=rows.getString(0);check(!rows.moveToNext());id
++        }}
++        requireNotNull(WorkspaceTreeStore(registry).getRoot(id))
++    }}
++    private fun waitUntil(description:String,test:()->Boolean) {
++        val end=System.nanoTime()+TimeUnit.SECONDS.toNanos(20)
++        while(!test()) {failure.get()?.let {throw AssertionError(description,it)};check(System.nanoTime()<end){description};Thread.sleep(20)}
++    }
++    private fun steer(text:String) {
++        val id=storage.onDatabaseWorker {LocalRunStore(context).appendInterruptRequest(central,text,emptyList())}
++        assertTrue(actualRuntime.get().mainChatSteeringProvider()!!.dispatchPendingRequest(id))
++    }
++    private fun nextWake(id:String):android.content.Intent {
++        val shadow=org.robolectric.Shadows.shadowOf(context as android.app.Application)
++        var found:android.content.Intent?=null
++        waitUntil("Exact native service request") {
++            var item=shadow.nextStartedService
++            while(item!=null) {
++                if(item.action==AgentForegroundService.ACTION_REAL_AGENT && item.getStringExtra("chat_user_message_id")==id && found==null)found=item
++                item=shadow.nextStartedService
++            }
++            found!=null
++        }
++        return requireNotNull(found)
++    }
++    @Test fun realSteeringChangesFinalOwnerButNotOriginalRootOrCounters() {
++        val original=user("Original root request");val observed=mutableListOf<TreeRoot>();var step=0
++        reply={history -> observed.add(root(original));if(step++==0){steer("Exact steering");ModelReply("A1",emptyList())}
++            else {assertTrue(history.any {it.role=="user" && it.content=="Exact steering"});ModelReply("A2",emptyList())}}
++        runStored(original);assertEquals(2,step);assertEquals(observed[0],observed[1])
++        val done=root(original);assertEquals(observed[0].origin,done.origin);assertEquals("COMPLETED",done.closeReason)
++        assertEquals(observed[0].requests,done.requests);assertEquals(observed[0].executions,done.executions);assertEquals(observed[0].wakes,done.wakes)
++        val rows=storage.onDatabaseWorker {LocalRunStore(context).readConversationMessages(central)}
++        val steering=rows.single {it.optString("role")=="user" && it.optString("content")=="Exact steering"}.getString("messageId")
++        val answers=rows.filter {it.optString("role")=="assistant"}
++        assertEquals(listOf("A1","A2"),answers.map {it.getString("content")})
++        assertEquals(original,answers[0].getString("userMessageId"));assertEquals(steering,answers[1].getString("userMessageId"))
++    }
++    @Test fun finalOwnerRejectsChangedCanonicalContent()=mutatedOwner("content")
++    @Test fun finalOwnerRejectsChangedCanonicalRole()=mutatedOwner("role")
++    @Test fun finalOwnerRejectsInjectedCanonicalProvenance()=mutatedOwner("provenance")
++    private fun mutatedOwner(kind:String) {
++        val original=user("Do not adopt corrupted steering");var step=0;var changed=false
++        reply={if(step++==0){steer("Exact steering");ModelReply("A1",emptyList())}else{
++            storage.onDatabaseWorker {
++                val ledger=LocalRunStore(context)
++                val id=ledger.readConversationMessages(central).single {it.optString("role")=="user" && it.optString("content")=="Exact steering"}.getString("messageId")
++                val incoming=CoreAgentLoop.IncomingMessage.mainChat(requireNotNull(ledger.readConversationInput(central,id)))
++                assertEquals("incorporated",ledger.readConversationInputState(central,id))
++                val bridge=ChatDatabaseBridge.getInstance(context);assertTrue(bridge.confirmCentralTreeIncomingSync(central,incoming).length==64)
++                runBlocking {val db=JarvysChatDatabaseProvider.getInstance(context);db.withChatWriteTransaction {
++                    when(kind){
++                        "content"->db.chatSql.execSQL("UPDATE message_parts SET payload='changed' WHERE conversation_id=? AND message_id=? AND kind='text'",arrayOf(central,id))
++                        "role"->db.chatSql.execSQL("UPDATE messages SET role='agent' WHERE conversation_id=? AND message_id=?",arrayOf(central,id))
++                        else->db.chatSql.execSQL("INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,?,?,?)",arrayOf(central,id,99,ConversationInput.PROVENANCE_PART_KIND,"{\"origin\":\"USER\",\"provenance\":{}}"))
++                    }
++                }}
++                assertThrows(IllegalStateException::class.java){bridge.confirmCentralTreeIncomingSync(central,incoming)};changed=true
++            };ModelReply("A2",emptyList())}}
++        runStored(original);assertEquals(2,step);assertTrue(changed)
++        val retained=root(original);assertEquals(original,retained.origin.originUserMessageId);assertNull(retained.closeReason);assertFalse(retained.admissionsClosed)
++    }
++    @Test fun nativeRegenerationRemainsPlainChatWithoutNewRootAuthority() {
++        val original=user("Original plain request");runStored(original);val before=root(original)
++        val event=storage.onDatabaseWorker {val ledger=LocalRunStore(context);val assistant=ledger.readConversationMessages(central).single {it.optString("role")=="assistant"}.getString("messageId");requireNotNull(ledger.regenerateAssistantIfLatest(central,assistant))}
++        val workspace=storage.onDatabaseWorker {WorkspaceRegistry(context).use {it.createWorkspace(UUID.randomUUID().toString(),"No regeneration grant")}}
++        var regenerated=0
++        reply={history -> if(regenerated++==0)ModelReply("",listOf(ModelReply.Call("denied-regeneration-delegate",CentralWorkspaceTool.NAME,
++            mapOf("action" to "delegate","workspace_id" to workspace.workspaceId,"key" to "not-authorized","role" to "analyst","mission" to "Must not start","tools" to emptyList<String>()))))
++            else {assertTrue(history.single {it.toolCallId=="denied-regeneration-delegate" && it.kind==ConversationTurn.Kind.TOOL_RESULT}.content.contains("Workspace request could not complete"));ModelReply("Regenerated answer",emptyList())}}
++        AgentForegroundService.startRegenerateAssistant(context,event.text,arrayListOf(),central,event.userMessageId,event.resumeReceipt)
++        service.onStartCommand(nextWake(original),0,1)
++        waitUntil("Plain regenerated completion") {storage.onDatabaseWorker {LocalRunStore(context).readConversationMessages(central).any {it.optString("role")=="assistant" && it.optString("content")=="Regenerated answer" && it.optString("status")=="COMPLETED"}}}
++        assertEquals(before,root(original));assertEquals(3,calls.get());assertEquals(2,regenerated)
++        storage.onDatabaseWorker {WorkspaceRegistry(context).use {assertTrue(it.listAssignments(workspace.workspaceId).isEmpty())}}
++    }
++    @Test fun sameOriginalUserNewRuntimeCannotRenewClosedRootOrInvokeProvider() {
++        val original=user("Retained exact request");runStored(original)
++        val before=root(original);val invoked=calls.get()
++        reply={throw AssertionError("No new provider/tree authority for repeated origin")}
++        runStored(original)
++        assertEquals(invoked,calls.get());assertEquals(before,root(original))
++    }
++    @Test fun ordinaryAgentAndLatestUserFallbackCannotCreateTree() {
++        user("Unrelated latest USER")
++        val workspace=storage.onDatabaseWorker {WorkspaceRegistry(context).use {it.createWorkspace(UUID.randomUUID().toString(),"No inferred root")}}
++        val input=storage.onDatabaseWorker {
++            val id=UUID.randomUUID().toString()
++            LocalRunStore(context).appendConversationInput(ConversationInput(central,id,"Ordinary agent update",ConversationInput.Origin.AGENT,
++                ConversationInput.Provenance("worker","","","",id,ConversationInput.Kind.MESSAGE)))
++        }
++        for(mode in listOf("agent","fallback")) {
++            var step=0;val call="denied-$mode"
++            reply={history -> if(step++==0)ModelReply("",listOf(ModelReply.Call(call,CentralWorkspaceTool.NAME,
++                mapOf("action" to "delegate","workspace_id" to workspace.workspaceId,"key" to "no-root-$mode","role" to "analyst","mission" to "Must not run","tools" to emptyList<String>()))))
++                else {val result=history.single {it.toolCallId==call && it.kind==ConversationTurn.Kind.TOOL_RESULT}.content
++                    if(mode=="agent")assertEquals("Tool error: Central invocation source is absent, hidden or does not match the committed call",result)
++                    else assertTrue(result,result.contains("Workspace request could not complete"))
++                    ModelReply("No inferred permission",emptyList())}}
++            if(mode=="agent")runStored(input)else runStored("","Legacy fallback request")
++            assertEquals(2,step)
++            storage.onDatabaseWorker {WorkspaceRegistry(context).use {registry ->
++                assertEquals(1,registry.schemaVersion());assertTrue(registry.listAssignments(workspace.workspaceId).isEmpty())
++            }}
++        }
++    }
++    @Test fun actualGeneralistResultReturnsThroughP1SerialContinuationOnSameRoot() {
++        val entered=CountDownLatch(1);val childCalls=AtomicInteger()
++        val (scope,profile)=storage.onDatabaseWorker {
++            val scope=WorkspaceRegistry(context).use {it.createWorkspace(UUID.randomUUID().toString(),"Generalist workspace")}
++            ChatDatabaseBridge.getInstance(context).ensureConversationSync(scope.executionSessionId,"workspace")
++            val profile=CrewProfileRepository(context).create(CrewProfile(CrewProfileRepository.newCustomId(),1,"Generalist","General-purpose planning","Use retained evidence",emptyList(),emptyList(),CrewProfile.WorkspaceMode.LEGACY_CHAT),emptyList(),emptyList())
++            val runtime=CoreAgentRuntime(context,scope.executionSessionId,emptyList(),CorePromptBudget.standard())
++            manager=runtime.configureCrewManager(runtime.createTools(),CoreAgentModel(context,provider {childCalls.incrementAndGet();entered.countDown();check(releaseChild.await(20,TimeUnit.SECONDS));ModelReply("Native itinerary evidence",emptyList())},scope.executionSessionId),null)
++            scope to profile
++        }
++        val original=user("Plan a general itinerary");var step=0
++        reply={history -> if(step++==0)ModelReply("",listOf(ModelReply.Call("native-delegate",CentralWorkspaceTool.NAME,mapOf("action" to "delegate","workspace_id" to scope.workspaceId,"key" to "native-generalist","role" to profile.id,"mission" to "Plan itinerary","tools" to emptyList<String>(),"continue_result" to true))))
++            else {assertEquals("workspace_data",JSONObject(history.single {it.toolCallId=="native-delegate" && it.kind==ConversationTurn.Kind.TOOL_RESULT}.content).getString("kind"));ModelReply("Awaiting generalist",emptyList())}}
++        runStored(original);assertTrue(entered.await(10,TimeUnit.SECONDS));val before=root(original)
++        storage.onDatabaseWorker {WorkspaceRegistry(context).use {assertEquals(TreeNodeState.WAITING,WorkspaceTreeStore(it).getNode(before.rootId,before.rootId)!!.state)}}
++        val bot=manager!!.bots().single();assertEquals(CrewProfile.WorkspaceMode.LEGACY_CHAT,bot.role.workspaceMode)
++        releaseChild.countDown();waitUntil("Native DONE"){bot.isQuiescent};assertEquals(CrewManager.Status.DONE,bot.status())
++        fun record()=storage.onDatabaseWorker {requireNotNull(CrewCheckpointStore(context.filesDir).load(scope.executionSessionId,bot.id)).metadata.getJSONObject(CentralContinuationRecord.FIELD)}
++        waitUntil("Durable selected P1 result"){record().optString("dispatchState")=="PREPARED"}
++        val selected=record().getJSONObject("selectedResult");val stable=record().getString("inputStableId")
++        val input=storage.onDatabaseWorker {LocalRunStore(context).readConversationMessageByStableId(central,stable)!!.getString("messageId")}
++        var synthesis=0
++        reply={history -> if(synthesis++==0)ModelReply("",listOf(ModelReply.Call("exact-read",CentralWorkspaceTool.NAME,mapOf("action" to "read_result","workspace_id" to scope.workspaceId,"result_id" to selected.getString("resultReferenceId"),"expected_sha256" to selected.getString("contentSha256")))))
++            else {assertTrue(history.single {it.toolCallId=="exact-read" && it.kind==ConversationTurn.Kind.TOOL_RESULT}.content.contains("Native itinerary evidence"));ModelReply("Exact synthesis",emptyList())}}
++        service.onStartCommand(nextWake(input),0,2);waitUntil("Original root completion"){root(original).closeReason=="COMPLETED"}
++        assertEquals(before.origin,root(original).origin);assertEquals(2,synthesis);assertEquals(1,childCalls.get());assertEquals("ACKNOWLEDGED",record().getString("dispatchState"))
++        val count=calls.get();runStored(input);assertEquals(count,calls.get())
++    }
++}
+--- a/app/app/src/test/java/com/jarvys/agent/CoreIntermediateAssistantSourceTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CoreIntermediateAssistantSourceTest.java
+@@ -21,7 +21,10 @@
+     @Test public void ordinaryPersistenceFailureStopsBeforeNextProviderAndInputAck() { verify(false, true); }
+     @Test public void terminalPersistenceFailureStopsBeforeNextProviderAndInputAck() { verify(true, true); }
+ 
+-    private void verify(boolean terminal, boolean failWrite) {
++    @Test public void ordinaryUserSteeringPreservesExactDurableIdentity() { verify(false,false,true); }
++    @Test public void terminalUserSteeringPreservesExactDurableIdentity() { verify(true,false,true); }
++    private void verify(boolean terminal, boolean failWrite) {verify(terminal,failWrite,false);}
++    private void verify(boolean terminal, boolean failWrite, boolean genuineUser) {
+         AtomicInteger calls = new AtomicInteger(), writes = new AtomicInteger(), acknowledged = new AtomicInteger();
+         AtomicBoolean ready = new AtomicBoolean(), delivered = new AtomicBoolean();
+         ConversationTurn old = ConversationTurn.assistantReply(TEXT, Collections.emptyList());
+@@ -65,6 +68,7 @@
+                     @Override public List<CoreAgentLoop.IncomingMessage> takeDurableMessages() { return Collections.emptyList(); }
+                     @Override public List<CoreAgentLoop.IncomingMessage> takeDurableMessagesAtFinalCheckpoint() {
+                         if (!ready.get() || delivered.getAndSet(true)) return Collections.emptyList();
++                        if(genuineUser)return Collections.singletonList(CoreAgentLoop.IncomingMessage.mainChat("next-input","new request"));
+                         return Collections.singletonList(CoreAgentLoop.IncomingMessage.mainChat(new ConversationInput("chat", "next-input", "new request",
+                                 ConversationInput.Origin.AGENT, new ConversationInput.Provenance("worker", "", "", "bot",
+                                     "source", ConversationInput.Kind.BLOCKER))));
+@@ -96,6 +100,27 @@
+         }
+     }
+ 
++    @Test public void ordinaryUserPersistenceFailureStopsBeforeNextProvider() {verify(false,true,true);}
++    @Test public void terminalUserPersistenceFailureStopsBeforeNextProvider() {verify(true,true,true);}
++    @Test public void nonMainChatUserCorrectionCannotAcquireRoomIdentity() {
++        AtomicInteger calls=new AtomicInteger();AtomicBoolean ready=new AtomicBoolean(),delivered=new AtomicBoolean();
++        CoreAgentLoop loop=new CoreAgentLoop((CoreAgentLoop.Model)(history,prompt,tools,token)->{
++            if(calls.incrementAndGet()==1){ready.set(true);return new ModelReply("first",Collections.emptyList());}
++            ConversationTurn turn=history.stream().filter(t->"native correction".equals(t.content)).findFirst().orElseThrow();
++            assertEquals("user",turn.role);assertEquals("",turn.durableMessageId);assertNull(turn.source());
++            return new ModelReply("done",Collections.emptyList());
++        },new CoreToolRegistry(Collections.emptyList()),"","chat",CorePromptBudget.standard(),null,
++            CoreAgentLoop.ToolResultBudget.UNBOUNDED,new CoreAgentLoop.TurnContextProvider(){
++                @Override public List<CoreAgentLoop.IncomingMessage> takeDurableMessages(){return Collections.emptyList();}
++                @Override public List<CoreAgentLoop.IncomingMessage> takeDurableMessagesAtFinalCheckpoint(){
++                    if(!ready.get() || delivered.getAndSet(true))return Collections.emptyList();
++                    return Collections.singletonList(new CoreAgentLoop.IncomingMessage("crew-correct","captain","native correction",true));
++                }
++            },null);
++        assertEquals("COMPLETED",loop.run("initial",Collections.emptyList(),CancellationToken.uncancellable(),null).outcome);
++        assertEquals(2,calls.get());
++    }
++
+     @Test public void typedCallbackPreservesLegacyVoidConsumer() {
+         AtomicInteger legacy = new AtomicInteger();
+         CoreAgentLoop.ProgressListener progress = new CoreAgentLoop.ProgressListener() {
+--- a/app/app/src/test/java/com/jarvys/agent/MainAgentInteractionTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/MainAgentInteractionTest.kt
+@@ -246,6 +246,23 @@
+         }
+     }
+ 
++    /** Offline provider only; retain native runtime checkpoint/source/exit receipt path. */
++    private fun installRealTreeRuntime(context:Context,service:AgentForegroundService,
++        reply:(List<ConversationTurn>,CoreAgentRuntime)->ModelReply) {
++        ProviderSettings(context).apply {setProvider(ProviderSettings.Provider.OPENROUTER);setOpenRouterModel("offline/interaction-tree")}
++        check(context.getSharedPreferences("provider_context_metadata",0).edit().putInt("model_offline/interaction-tree",32768)
++            .putLong("fetched_offline/interaction-tree",System.currentTimeMillis()).commit())
++        service.runtimeFactory=AgentForegroundService.RuntimeFactory {c,id,skills ->
++            val runtime=AtomicReference<CoreAgentRuntime>()
++            val provider=object:ModelProviderClient {
++                override fun complete(systemPrompt:String,userPrompt:String,images:List<com.jarvys.agent.device.ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=error("Conversation expected")
++                override fun completeConversation(systemPrompt:String,history:List<ConversationTurn>,userPrompt:String,images:List<com.jarvys.agent.device.ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=reply(history,runtime.get())
++            }
++            CoreAgentRuntime(c,id,skills,CorePromptBudget.standard(),provider).also {runtime.set(it)}
++        }
++        service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->runtime.runMainChat(goal,history,attachments,token,progress)}
++    }
++
+     @Test fun steeringAdmittedAfterRunExitIsPickedUpExactlyOnce() {
+         StopController.getInstance().stopRun()
+         val context = ApplicationProvider.getApplicationContext<Context>()
+@@ -264,20 +281,12 @@
+         val calls = AtomicInteger()
+         val accepted = AtomicReference<Boolean>()
+         val senderFailure = AtomicReference<Throwable?>()
+-        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, progress ->
+-            if (calls.incrementAndGet() == 1) {
++        installRealTreeRuntime(context,service) {_,_ ->
++            if(calls.incrementAndGet()==1){
+                 initialEntered.countDown()
+-                while (releaseInitial.count > 0) {
+-                    try { releaseInitial.await() } catch (_: InterruptedException) { }
+-                }
+-                initialResultReady.set(true)
+-                progress.onInitialUserMessageIncorporated()
+-                CoreAgentLoop.Result("initial-race-run", "initial done", 1, "COMPLETED")
+-            } else {
+-                followUpEntered.countDown()
+-                progress.onInitialUserMessageIncorporated()
+-                CoreAgentLoop.Result("follow-up-race-run", "follow-up done", 1, "COMPLETED")
+-            }
++                while(releaseInitial.count>0){try{releaseInitial.await()}catch(_:InterruptedException){}}
++                initialResultReady.set(true);ModelReply("initial done",emptyList())
++            }else{followUpEntered.countDown();ModelReply("follow-up done",emptyList())}
+         }
+         service.beforeInterruptAdmissionForTesting = Runnable {
+             admissionReached.countDown()
+@@ -708,30 +717,15 @@
+         val modelCalls = AtomicInteger()
+         val finalAnswer = CountDownLatch(1)
+         val secondModelMessages = AtomicReference<List<String>>(emptyList())
+-        service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills ->
+-            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard())
+-        }
+-        service.mainChatRunner = AgentForegroundService.MainChatRunner { runtime, goal, history, attachments, token, progress ->
+-            val provider = runtime.mainChatSteeringProvider()!!
+-            val loop = CoreAgentLoop(object : CoreAgentLoop.Model {
+-                override fun complete(transcript: List<ConversationTurn>, prompt: String,
+-                    declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
+-                    if (modelCalls.incrementAndGet() == 1) {
+-                        val requestId = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(
+-                            session, "steering request", emptyList()) }
+-                        assertTrue(provider.dispatchPendingRequest(requestId))
+-                        return ModelReply("A1", emptyList())
+-                    }
+-                    val messages = transcript.filter { it.kind == ConversationTurn.Kind.MESSAGE }
+-                        .map { "${it.role}:${it.content}" }
+-                    secondModelMessages.set(messages)
+-                    finalAnswer.countDown()
+-                    return ModelReply("A2", emptyList())
+-                }
+-            }, CoreToolRegistry(emptyList()), "", session, CorePromptBudget.standard(), null,
+-                CoreAgentLoop.ToolResultBudget.BOUNDED, provider, null)
+-            MainChatTranscriptStore(context.filesDir, session, store).attach(loop, history)
+-            loop.run(goal, history, attachments, token, progress, initialId)
++        installRealTreeRuntime(context,service) {transcript,runtime ->
++            val provider=runtime.mainChatSteeringProvider()!!
++            if(modelCalls.incrementAndGet()==1){
++                val requestId=chatTestStore.onDatabaseWorker {store.appendInterruptRequest(session,"steering request",emptyList())}
++                assertTrue(provider.dispatchPendingRequest(requestId));ModelReply("A1",emptyList())
++            }else{
++                secondModelMessages.set(transcript.filter {it.kind==ConversationTurn.Kind.MESSAGE}.map {"${it.role}:${it.content}"})
++                finalAnswer.countDown();ModelReply("A2",emptyList())
++            }
+         }
+         try {
+             AgentRunUiState.resetSession(session)
