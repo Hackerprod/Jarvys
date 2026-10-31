@@ -1,6 +1,6 @@
-## Estado vigente — revisión P2 R1: FAIL; reparación conservativa y gate OFF — 31-10-2026
+## Estado vigente — P2 R1 FAIL conservado; compatibilidad132/132 y aceptación local pendiente — 31-10-2026
 
-La revisión independiente encontró dos negativos no cubiertos por1090/0: salida fallida de Central dejaba la raíz abierta y datos tree sin provenance podían decodificarse como SUPERVISOR. La reparación focal conserva el FAIL; no hay PASS P2 ni APK nuevo. El decoder estricto expuso además pérdida real de provenance en snapshots Room normalizados. Se prepara una extensión aditiva actual Room v1→v2, sin inventar campos de filas antiguas, borrar datos ni debilitar los guards. Admisión local OFF hasta prueba de compatibilidad por ambos sabores; [plan y gate](docs/BOT_PORTABILITY_P2_ROOM_PROVENANCE_GATE.md). Los resultados inferiores corresponden al candidato previo y no validan este cambio.
+La revisión independiente encontró dos negativos no cubiertos por1090/0: salida fallida de Central dejaba la raíz abierta y datos tree sin provenance podían decodificarse como SUPERVISOR. La reparación focal conserva el FAIL; no hay PASS P2 ni APK nuevo. El decoder estricto expuso además pérdida real de provenance en snapshots Room normalizados. La extensión aditiva actual Room v1→v2 pasó Full132/Play132 con fuentes idénticas, sin inventar campos de filas antiguas, borrar datos ni debilitar los guards. Flags habilitados sólo para aceptación local; falta repetir Full/Play119 clases y obtener revisión independiente PASS; [plan y gate](docs/BOT_PORTABILITY_P2_ROOM_PROVENANCE_GATE.md). Los resultados inferiores corresponden al candidato previo y no validan este cambio.
 
 ## Estado vigente — candidato P2: Full/Play 1.090 casos; revisión independiente pendiente — 31-10-2026
 
