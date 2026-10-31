@@ -1,3 +1,7 @@
+## Estado vigente — revisión P2 R1: FAIL; reparación conservativa y gate OFF — 31-10-2026
+
+La revisión independiente encontró dos negativos no cubiertos por1090/0: salida fallida de Central dejaba la raíz abierta y datos tree sin provenance podían decodificarse como SUPERVISOR. La reparación focal conserva el FAIL; no hay PASS P2 ni APK nuevo. El decoder estricto expuso además pérdida real de provenance en snapshots Room normalizados. Se prepara una extensión aditiva actual Room v1→v2, sin inventar campos de filas antiguas, borrar datos ni debilitar los guards. Admisión local OFF hasta prueba de compatibilidad por ambos sabores; [plan y gate](docs/BOT_PORTABILITY_P2_ROOM_PROVENANCE_GATE.md). Los resultados inferiores corresponden al candidato previo y no validan este cambio.
+
 ## Estado vigente — candidato P2: Full/Play 1.090 casos; revisión independiente pendiente — 31-10-2026
 
 Fuente `dd2a629671c7e9584a6d4df18ee16f4b4fd2102e`: 117 clases y 1.090 pruebas por sabor, cero fallos/errores/omisiones; incluye D3 105 por sabor, no se suman. **No es todavía PASS independiente P2 ni autorización de entrega.** [Candidato, evidencia y límites](docs/BOT_PORTABILITY_P2_CANDIDATE.md).

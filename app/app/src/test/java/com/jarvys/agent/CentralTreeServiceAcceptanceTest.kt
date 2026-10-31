@@ -144,7 +144,15 @@ class CentralTreeServiceAcceptanceTest {
                 assertThrows(IllegalStateException::class.java){bridge.confirmCentralTreeIncomingSync(central,incoming)};changed=true
             };ModelReply("A2",emptyList())}}
         runStored(original);assertEquals(2,step);assertTrue(changed)
-        val retained=root(original);assertEquals(original,retained.origin.originUserMessageId);assertNull(retained.closeReason);assertFalse(retained.admissionsClosed)
+        val retained=root(original);assertEquals(original,retained.origin.originUserMessageId)
+        // Corrupted final ownership cannot authorize success; the exact failed execution now closes denial-only.
+        assertEquals("FAILED",retained.closeReason);assertTrue(retained.admissionsClosed);assertTrue(retained.wakesClosed)
+        assertEquals(1L,retained.executions);assertEquals(0L,retained.requests)
+        storage.onDatabaseWorker {WorkspaceRegistry(context).use { db ->
+            val tree=WorkspaceTreeStore(db);val node=tree.getNode(retained.rootId,retained.rootId)!!
+            assertEquals(TreeNodeState.TERMINAL,node.state);assertEquals("FAILED",node.terminalOutcome)
+            assertEquals(0L,db.treeRead { sql -> sql.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind='CENTRAL_EXIT'",arrayOf(retained.rootId)).use {it.moveToFirst();it.getLong(0)} })
+        }}
     }
     @Test fun nativeRegenerationRemainsPlainChatWithoutNewRootAuthority() {
         val original=user("Original plain request");runStored(original);val before=root(original)

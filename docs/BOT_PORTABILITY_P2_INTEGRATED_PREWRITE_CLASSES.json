@@ -8,5 +8,7 @@
   "com.jarvys.agent.ContinuationGenerationReceiptTest",
   "com.jarvys.agent.CrewTreeInputCodecTest",
   "com.jarvys.agent.CrewTreeWaitCheckpointTest",
-  "com.jarvys.agent.crew.CrewTreeMessageRoutingTest"
+  "com.jarvys.agent.crew.CrewTreeMessageRoutingTest",
+  "com.jarvys.agent.chatdb.RoomTreeProvenanceCompatibilityTest",
+  "com.jarvys.agent.chatdb.CrewSnapshotProvenanceConservationTest"
 ]

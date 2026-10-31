@@ -7,7 +7,7 @@ internal object WorkspaceTreePolicy {
     const val MAX_REQUESTS=64L
     const val MAX_EXECUTIONS=96L
     const val MAX_WAKES=48L
-    // Matching Full/Play pre-write105 passed for the additive TREE_TASK codec.
-    // Final-source acceptance and independent implementation PASS remain mandatory.
-    @JvmStatic fun admissionEnabled():Boolean=true
+    // Prior Registry/codec proof is retained, but the Room provenance extension needs fresh matching proof.
+    // Local admission stays OFF until the additive Room migration/conservation gate passes.
+    @JvmStatic fun admissionEnabled():Boolean=false
 }
