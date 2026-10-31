@@ -6,7 +6,8 @@ import java.security.MessageDigest
 
 /** Current-data additive upgrade only. Never accepts pre-current storage or synthesizes provenance. */
 internal object RoomTreeProvenanceSchema {
-    const val UPGRADE_ENABLED = false
+    // Matching Full132/Play132 pre-write proof; local acceptance only, independent review pending.
+    const val UPGRADE_ENABLED = true
     const val V1_IDENTITY = "1ad574a6ba44dd5117e182c835f4f670"
     const val CREATE_SQL = "CREATE TABLE IF NOT EXISTS `crew_message_input_provenance` (`conversation_id` TEXT NOT NULL, `mission_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `source_session_id` BLOB NOT NULL, `workspace_id` BLOB NOT NULL, `assignment_id` BLOB NOT NULL, `bot_id` BLOB NOT NULL, `source_message_id` BLOB NOT NULL, `kind` TEXT NOT NULL, `principal_role` TEXT NOT NULL, `correlation_message_id` BLOB NOT NULL, `reference_id` BLOB NOT NULL, `content_sha256` BLOB NOT NULL, `assignment_revision` INTEGER NOT NULL, `request_id` BLOB NOT NULL, `input_mission_id` BLOB NOT NULL, `cycle_id` BLOB NOT NULL, PRIMARY KEY(`conversation_id`, `mission_id`, `message_id`), FOREIGN KEY(`conversation_id`, `mission_id`, `message_id`) REFERENCES `crew_messages`(`conversation_id`, `mission_id`, `message_id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
 

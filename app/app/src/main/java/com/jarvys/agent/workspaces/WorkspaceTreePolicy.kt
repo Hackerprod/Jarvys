@@ -7,7 +7,7 @@ internal object WorkspaceTreePolicy {
     const val MAX_REQUESTS=64L
     const val MAX_EXECUTIONS=96L
     const val MAX_WAKES=48L
-    // Prior Registry/codec proof is retained, but the Room provenance extension needs fresh matching proof.
-    // Local admission stays OFF until the additive Room migration/conservation gate passes.
-    @JvmStatic fun admissionEnabled():Boolean=false
+    // Matching Full132/Play132 proves Registry/codec and additive Room compatibility.
+    // Local acceptance only; final-source repetition and independent implementation PASS remain required.
+    @JvmStatic fun admissionEnabled():Boolean=true
 }
