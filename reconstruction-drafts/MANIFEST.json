@@ -3,9 +3,69 @@
   "design_sha256": "8422696642d2d1a353ee99f50432b031407f24702f1dd5f68843cf7c8b35cd88",
   "files": [
     {
+      "path": "reconstruction-drafts/README.md",
+      "sha256": "1cc456b405bea3a9f1629a16b985897401bd279705eae753c6dae5f603ee9991",
+      "bytes": 964
+    },
+    {
       "path": "reconstruction-drafts/central/CENTRAL_RECONSTRUCTION.patch",
       "sha256": "082069347958956773fe4ad758dd570330b3c4ce83fa01e24bd81a82e726ef0f",
       "bytes": 70899
+    },
+    {
+      "path": "reconstruction-drafts/checkpoint/CentralContinuationRecord.java",
+      "sha256": "713a25f59f4f46375b8f1a2061f36ab1e45a3741b4b340513830efbe558e78e1",
+      "bytes": 21165
+    },
+    {
+      "path": "reconstruction-drafts/checkpoint/CrewCheckpointCoordinator.java",
+      "sha256": "29430c09a4a7cf7f282f8e83892da25746961a3cb33f2b464db89acd7ffe6b60",
+      "bytes": 41989
+    },
+    {
+      "path": "reconstruction-drafts/checkpoint/CrewCheckpointStore.java",
+      "sha256": "5dc7c5ff25e7d3d568d1eb0cb3398739045ede4389f773e272aa370030ea456d",
+      "bytes": 63969
+    },
+    {
+      "path": "reconstruction-drafts/checkpoint/CrewTreeInputCodecTest.java",
+      "sha256": "28a41e1870fc55a3d4ac4d0cc5f7909ed0d393e1171be3e05466a9827b850be7",
+      "bytes": 4510
+    },
+    {
+      "path": "reconstruction-drafts/checkpoint/CrewTreeWaitCheckpointTest.java",
+      "sha256": "ae2cc0013700f8b1d365798f2876a714df51aa104ad56d3ccc7bf421c03920aa",
+      "bytes": 12215
+    },
+    {
+      "path": "reconstruction-drafts/checkpoint/TreeSuccessorCertificate.java",
+      "sha256": "2aa93658278e872014179be9a6c50fe809657fdbe28c4c62c984840c2b41d656",
+      "bytes": 2749
+    },
+    {
+      "path": "reconstruction-drafts/checkpoint/TreeUserControlCertificate.java",
+      "sha256": "e3595a402624caea68644fc096ae2bb67a76773468f2f1f433f4b5bbd8609c5d",
+      "bytes": 1355
+    },
+    {
+      "path": "reconstruction-drafts/checkpoint/WorkerTreeWaitRecord.java",
+      "sha256": "3ce46ce7c87335602a1f4ae58674813ee5dd71f01542ec6343af872bb8d4d877",
+      "bytes": 5343
+    },
+    {
+      "path": "reconstruction-drafts/checkpoint/crew/CrewInputBinding.java",
+      "sha256": "14d0c13f744688de79d9bf305fa1a3c12730f37acc0a6fbd84e940f36b943f3a",
+      "bytes": 11195
+    },
+    {
+      "path": "reconstruction-drafts/checkpoint/crew/CrewInputIncorporation.java",
+      "sha256": "a8c2b1032ec69698bf2032ea378c1d160079baa0e7e550b0d21aac69239d8062",
+      "bytes": 3143
+    },
+    {
+      "path": "reconstruction-drafts/checkpoint/crew/CrewMessage.java",
+      "sha256": "7ca1c046dbae4dfeff337aed515422209d85c94e12ec4a858b9b9239b2571346",
+      "bytes": 12950
     },
     {
       "path": "reconstruction-drafts/d3/WorkspaceTreeSchemaCompatibilityTest.kt",
@@ -39,8 +99,8 @@
     },
     {
       "path": "reconstruction-drafts/storage/WorkspaceTreeRecords.kt",
-      "sha256": "d727bd3c0e02fad57f8097f67b9c92988a5c688b36ac8f2eeedec974445a8904",
-      "bytes": 3436
+      "sha256": "6e8d88a4ade0e4c30611859c8cd6b400d8f36cd72c121ddae10e232e1ceb5d06",
+      "bytes": 3511
     },
     {
       "path": "reconstruction-drafts/storage/WorkspaceTreeSchema.kt",
@@ -61,6 +121,11 @@
       "path": "reconstruction-drafts/storage/WorkspaceTreeStoreTest.kt",
       "sha256": "dae4ec140bbc9353b5cf04fce47f7bdee20a249fecf1d375ea191e53565ea78c",
       "bytes": 14476
+    },
+    {
+      "path": "reconstruction-drafts/storage/WorkspaceTreeWaitStore.kt",
+      "sha256": "d34908fb321093045f7954dfd27df9a5c07919961dc19a01dd491a54e536f796",
+      "bytes": 16524
     }
   ]
 }
