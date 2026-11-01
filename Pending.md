@@ -1,3 +1,7 @@
+## Estado vigente — P2 R4: pareja final Full/Play 1.134; revisión funcional acotada pendiente — 01-11-2026
+
+Fuente final `23b1cd06d1308b25f1e036079836c5f89d895d99`: una pareja predeclarada,119 clases/1.134 pruebas por sabor sin fallos/errores/omisiones. Código productivo sin cambios; sólo diagnóstico automático antes del cleanup si reaparece la espera fallida. **R3 conserva un timeout histórico de preparación del fixture, causa no clasificada; no se certifica fiabilidad temporal.** [Candidato R4 y límites](docs/BOT_PORTABILITY_P2_CANDIDATE_R4.md). No PASS independiente P2 ni APK nuevo todavía; los apartados siguientes son históricos.
+
 ## Estado vigente — P2 R3 FAIL por espera de fixture; diagnóstico acotado — 01-11-2026
 
 Los ocho negativos previos y compatibilidad139 pasaron en ambos sabores; una espera de entrada del hijo agotó15s en la revisión Play. Causa histórica no establecida, FAIL conservado. Sin cambio productivo ni aumento del timeout: se añade captura automática de hilos/locks en ese límite y se predeclara una pareja final Full/Play. [Alcance y criterios](docs/BOT_PORTABILITY_P2_STARTUP_DIAGNOSTIC.md). No PASS P2 ni APK nuevo.
