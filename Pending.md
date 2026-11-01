@@ -1,3 +1,7 @@
+## Estado vigente — candidato P2 R3: Full/Play 1.134; revisión independiente pendiente — 01-11-2026
+
+Fuente `d7dc2b63cb4eb2e25565300b25f32e6a873e7051`: 119 clases y 1.134 pruebas por sabor, cero fallos/errores/omisiones, incluye139 de compatibilidad sin sumarlos. Reparados los filtros de esquema y la familia FTS incompleta señalados en R2; sus FAIL se conservan. Gates habilitados sólo para aceptación local tras Full139/Play139 con fuentes idénticas. **No PASS independiente P2 ni APK nuevo.** [Candidato R3 y límites](docs/BOT_PORTABILITY_P2_CANDIDATE_R3.md). Los apartados siguientes son históricos.
+
 ## Estado vigente — P2 R2 FAIL; reparación de conservación con gates OFF — 01-11-2026
 
 La revisión independiente confirmó corregidos los cinco negativos originales, pero encontró tres fallos nativos de validación de esquema: dos triggers ocultos por filtros de nombre y familia message_fts incompleta. Se conserva la evidencia roja; flags OFF mientras se repara y repite compatibilidad antes de aceptación. No PASS P2 ni APK nuevo. [Cronología y alcance](docs/BOT_PORTABILITY_P2_ROOM_PROVENANCE_GATE.md). Los resultados siguientes son históricos de sus fuentes.

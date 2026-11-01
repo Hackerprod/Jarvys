@@ -1,3 +1,5 @@
+> Latest status: repaired OFF gate Full139/Play139 followed by final enabled-source Full/Play1,134. [R3 independent review pending](BOT_PORTABILITY_P2_CANDIDATE_R3.md); prior FAIL records below remain unchanged.
+
 > Current status: matching pre-write Full132/Play132 passed before local enablement. Final changed-source Full/Play1,127 passed; [R2 independent review is pending](BOT_PORTABILITY_P2_CANDIDATE_R2.md). The sections below preserve chronology, including OFF drafts and failures.
 
 # B2 native snapshot conservation — second additive current-generation upgrade
