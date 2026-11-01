@@ -1,3 +1,7 @@
+## Estado vigente — P2 R2 FAIL; reparación de conservación con gates OFF — 01-11-2026
+
+La revisión independiente confirmó corregidos los cinco negativos originales, pero encontró tres fallos nativos de validación de esquema: dos triggers ocultos por filtros de nombre y familia message_fts incompleta. Se conserva la evidencia roja; flags OFF mientras se repara y repite compatibilidad antes de aceptación. No PASS P2 ni APK nuevo. [Cronología y alcance](docs/BOT_PORTABILITY_P2_ROOM_PROVENANCE_GATE.md). Los resultados siguientes son históricos de sus fuentes.
+
 ## Estado vigente — candidato P2 R2: Full/Play 1.127; revisión independiente pendiente — 01-11-2026
 
 Fuente `7295a39a78d9d096b1299a875dcc4aa44baa7cf2`: 119 clases y 1.127 pruebas por sabor, cero fallos/errores/omisiones, incluye132 casos de compatibilidad sin sumarlos. R1 sigue FAIL histórico; se repararon cierre de raíz fallida, provenance tipada y su conservación Room mediante extensión actual v1→v2 aditiva, sin inferir autoridad ni borrar datos. **No hay PASS independiente P2 ni APK nuevo.** [Candidato R2 y límites](docs/BOT_PORTABILITY_P2_CANDIDATE_R2.md). Downgrade binario tras nuevas escrituras no soportado; v98 intacto. Los apartados siguientes son históricos.

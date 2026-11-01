@@ -1,3 +1,5 @@
+> Independent R2 verdict: **FAIL**. Original B1/B2 negatives pass, but new native schema exclusion/partial-FTS conservation negatives block migration. Both gates returned OFF for repair; see [chronology](BOT_PORTABILITY_P2_ROOM_PROVENANCE_GATE.md). The acceptance below is retained for its stated source, not independent approval.
+
 # P2 R2 candidate — repair acceptance; independent review pending
 
 2026-11-01. Application/test source **`7295a39a78d9d096b1299a875dcc4aa44baa7cf2`**. Full and Play each pass **119 classes / 1,127 cases**, zero failures, errors or skips. The included twelve-class pre-write cohort is132 cases per flavor, not extra tests. Separate focused Full155/0 is not added. **Independent P2 R1 remains FAIL; this candidate requires fresh independent review. No APK or delivery approval.**

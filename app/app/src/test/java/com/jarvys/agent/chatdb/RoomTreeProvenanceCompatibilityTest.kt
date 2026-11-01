@@ -269,6 +269,147 @@ class RoomTreeProvenanceCompatibilityTest {
             assertArrayEquals(before,file.readBytes())
         }
     }
+    /** Rejection is not enough: none of the old typed bytes or schema may be repaired/deleted. */
+    private fun rejectUpgradeWithoutMutation(file:File) {
+        val bytes=file.readBytes()
+        open(file).use { db ->
+            val before=rows(db)
+            fun schema()=raw(db).query("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").use { c ->
+                buildList { while(c.moveToNext())add((0 until c.columnCount).map { if(c.isNull(it)) null else c.getString(it) }) }
+            }
+            val beforeSchema=schema()
+            assertThrows(RoomCurrentSchemaUnavailable::class.java){upgrade(db)}
+            assertEquals(before,rows(db));assertEquals(beforeSchema,schema())
+            assertEquals(1L,scalar(db,"PRAGMA user_version"))
+            raw(db).query("SELECT typeof(identity_hash),identity_hash FROM room_master_table WHERE id=42").use {
+                assertTrue(it.moveToFirst());assertEquals("text",it.getString(0))
+                assertEquals(RoomTreeProvenanceSchema.V1_IDENTITY,it.getString(1));assertFalse(it.moveToNext())
+            }
+        }
+        assertArrayEquals(bytes,file.readBytes())
+    }
+
+    @Test fun hiddenTriggerNamesAndLiteralPrefixCaseLookalikesCannotDeleteRetainedRows() {
+        // '_' in LIKE is a wildcard. None of these legal names is SQLite's reserved literal prefix.
+        val names=listOf("sqliteXreview","SQLITEXreview","SqliteXReview","sqlite-review",
+            "sqliteReview","android_metadata","ANDROID_METADATA","Android_Metadata")
+        names.forEachIndexed { index,name ->
+            val file=file("room-hidden-trigger-$index");createV1(file)
+            open(file).use { db ->
+                db.execSQL("CREATE TRIGGER `$name` AFTER UPDATE ON room_master_table BEGIN DELETE FROM storage_meta; END")
+                assertEquals(1L,scalar(db,"SELECT COUNT(*) FROM storage_meta"))
+            }
+            rejectUpgradeWithoutMutation(file)
+        }
+    }
+
+    @Test fun ignoredNameLookalikesInEveryOtherObjectTypeAreRejectedWithoutRepair() {
+        var index=0
+        for(name in listOf("sqliteXreview","SQLITEXreview","android_metadata","ANDROID_METADATA")) {
+            for(ddl in listOf("CREATE VIEW `$name` AS SELECT * FROM storage_meta",
+                "CREATE INDEX `$name` ON storage_meta(value)",
+                "CREATE TABLE `$name`(unexpected BLOB)")) {
+                val file=file("room-hidden-object-${index++}");createV1(file)
+                open(file).use { it.execSQL(ddl) }
+                rejectUpgradeWithoutMutation(file)
+            }
+        }
+    }
+
+    @Test fun malformedAndroidMetadataTableAndNonTextLocaleAreNotExemptFromValidation() {
+        val mutations=listOf(
+            "CREATE TABLE android_metadata(locale BLOB)",
+            "CREATE TABLE android_metadata(locale TEXT,unexpected INTEGER)",
+            "CREATE TABLE android_metadata(other TEXT)",
+            "CREATE TABLE android_metadata(locale TEXT);INSERT INTO android_metadata VALUES(X'656E5F5553')",
+            "CREATE TABLE android_metadata(locale TEXT);INSERT INTO android_metadata VALUES(NULL)")
+        mutations.forEachIndexed { index,mutation ->
+            val file=file("room-malformed-android-metadata-$index");createV1(file)
+            open(file).use { db ->mutation.split(';').forEach { db.execSQL(it) } }
+            rejectUpgradeWithoutMutation(file)
+        }
+    }
+
+    @Test fun exactAndroidLocaleMetadataRemainsOptionalAndConserved() {
+        for(populated in listOf(false,true)) {
+            val file=file("room-android-metadata-valid-$populated");createV1(file)
+            open(file).use { db ->
+                db.execSQL("CREATE TABLE android_metadata (locale TEXT)")
+                if(populated)db.execSQL("INSERT INTO android_metadata(locale) VALUES('es_MX')")
+                fun metadata()=raw(db).query("SELECT typeof(locale),hex(locale) FROM android_metadata").use { c ->
+                    buildList { while(c.moveToNext())add(listOf(c.getString(0),c.getString(1))) }
+                }
+                val beforeRows=rows(db);val beforeMetadata=metadata()
+                assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true))
+                upgrade(db)
+                assertEquals(2,RoomTreeProvenanceSchema.validate(db,v2Identity,false))
+                assertEquals(beforeRows,rows(db));assertEquals(beforeMetadata,metadata())
+                assertEquals("CREATE TABLE android_metadata (locale TEXT)",raw(db).query("SELECT sql FROM sqlite_master WHERE type='table' AND name='android_metadata'").use { assertTrue(it.moveToFirst());it.getString(0) })
+            }
+        }
+    }
+
+    @Test fun eachMissingMessageSearchFamilyMemberRejectsBeforeAnyUpgradeWrite() {
+        val members=listOf("VIEW message_search_content","TABLE message_fts",
+            "TRIGGER trg_message_fts_insert","TRIGGER trg_message_fts_delete","TRIGGER trg_message_fts_update",
+            "TABLE message_fts_config","TABLE message_fts_data","TABLE message_fts_docsize","TABLE message_fts_idx")
+        members.forEachIndexed { index,member ->
+            val file=file("room-message-fts-missing-$index");createV1(file,false)
+            open(file).use { db ->
+                JarvysChatDatabaseProvider.DatabaseTriggers.create(db,context,false)
+                assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true))
+                db.execSQL("INSERT INTO storage_meta(key,value) VALUES('retained','unchanged')")
+                db.execSQL("DROP $member")
+            }
+            rejectUpgradeWithoutMutation(file)
+        }
+    }
+
+    @Test fun mixedAndIncompatibleMessageSearchVariantsCannotBeRebuiltByUpgrade() {
+        val mutations=listOf<(SQLiteConnection)->Unit>(
+            { db ->db.execSQL("DROP VIEW message_search_content");db.execSQL("CREATE VIEW message_search_content AS SELECT rowid,payload AS text,kind AS role,conversation_id FROM message_parts") },
+            { db ->db.execSQL("DROP TRIGGER trg_message_fts_insert");db.execSQL("CREATE TRIGGER trg_message_fts_insert AFTER INSERT ON message_parts BEGIN SELECT 1; END") },
+            { db ->db.execSQL("DROP TABLE message_fts");db.execSQL("CREATE VIRTUAL TABLE message_fts USING fts4(text,role,conversation_id)") },
+            { db ->db.execSQL("DROP TABLE message_fts");db.execSQL("CREATE VIRTUAL TABLE message_fts USING fts5(text,role,conversation_id,content='message_search_content',content_rowid='rowid',tokenize='porter')") },
+            { db ->db.execSQL("DROP TABLE message_fts");db.execSQL("DROP TRIGGER trg_message_fts_delete");db.execSQL("DROP TRIGGER trg_message_fts_update") }
+        )
+        mutations.forEachIndexed { index,mutate ->
+            val file=file("room-message-fts-mixed-$index");createV1(file,false)
+            open(file).use { db ->
+                JarvysChatDatabaseProvider.DatabaseTriggers.create(db,context,false)
+                db.execSQL("INSERT INTO storage_meta(key,value) VALUES('retained','unchanged')")
+                mutate(db)
+            }
+            rejectUpgradeWithoutMutation(file)
+        }
+    }
+
+    @Test fun nativeMessageSearchCompleteAbsentAndFailedInstallViewOnlyStatesConserveTheirExactObjects() {
+        // MessageSearchIndex.install creates its view before try; its catch/drop removes only
+        // the three triggers and virtual table. Thus view-only is a real native failure state.
+        for(state in listOf("complete","absent","view-only")) {
+            val file=file("room-message-fts-supported-$state");createV1(file,false)
+            open(file).use { db ->
+                JarvysChatDatabaseProvider.DatabaseTriggers.create(db,context,false)
+                if(state!="complete") {
+                    for(name in listOf("insert","delete","update"))db.execSQL("DROP TRIGGER trg_message_fts_$name")
+                    db.execSQL("DROP TABLE message_fts")
+                    if(state=="absent")db.execSQL("DROP VIEW message_search_content")
+                }
+                db.execSQL("INSERT INTO storage_meta(key,value) VALUES('retained','unchanged')")
+                fun objects()=raw(db).query("SELECT type,name,sql FROM sqlite_master WHERE name IN ('message_search_content','message_fts','trg_message_fts_insert','trg_message_fts_delete','trg_message_fts_update','message_fts_config','message_fts_data','message_fts_docsize','message_fts_idx') ORDER BY type,name").use { c ->
+                    buildList { while(c.moveToNext())add(listOf(c.getString(0),c.getString(1),c.getString(2))) }
+                }
+                val before=objects();val beforeRows=rows(db)
+                assertEquals(if(state=="complete")9 else if(state=="view-only")1 else 0,before.size)
+                assertEquals(1,RoomTreeProvenanceSchema.validate(db,v2Identity,true))
+                upgrade(db)
+                assertEquals(2,RoomTreeProvenanceSchema.validate(db,v2Identity,false))
+                assertEquals(before,objects());assertEquals(beforeRows,rows(db))
+            }
+        }
+    }
+
     @Test fun moduleShadowClassificationDoesNotCertifyReplacedTableDdl() {
         for(parent in listOf("memory_fts","memory_prompts_fts","message_fts")) {
             val file=file("room-shadow-replaced-$parent");createV1(file,false)

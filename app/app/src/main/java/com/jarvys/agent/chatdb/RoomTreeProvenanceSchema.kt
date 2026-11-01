@@ -6,8 +6,8 @@ import java.security.MessageDigest
 
 /** Current-data additive upgrade only. Never accepts pre-current storage or synthesizes provenance. */
 internal object RoomTreeProvenanceSchema {
-    // Matching Full132/Play132 pre-write proof; local acceptance only, independent review pending.
-    const val UPGRADE_ENABLED = true
+    // R2 independent native schema negatives: OFF until repaired matching pre-write proof.
+    const val UPGRADE_ENABLED = false
     const val V1_IDENTITY = "1ad574a6ba44dd5117e182c835f4f670"
     const val CREATE_SQL = "CREATE TABLE IF NOT EXISTS `crew_message_input_provenance` (`conversation_id` TEXT NOT NULL, `mission_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `source_session_id` BLOB NOT NULL, `workspace_id` BLOB NOT NULL, `assignment_id` BLOB NOT NULL, `bot_id` BLOB NOT NULL, `source_message_id` BLOB NOT NULL, `kind` TEXT NOT NULL, `principal_role` TEXT NOT NULL, `correlation_message_id` BLOB NOT NULL, `reference_id` BLOB NOT NULL, `content_sha256` BLOB NOT NULL, `assignment_revision` INTEGER NOT NULL, `request_id` BLOB NOT NULL, `input_mission_id` BLOB NOT NULL, `cycle_id` BLOB NOT NULL, PRIMARY KEY(`conversation_id`, `mission_id`, `message_id`), FOREIGN KEY(`conversation_id`, `mission_id`, `message_id`) REFERENCES `crew_messages`(`conversation_id`, `mission_id`, `message_id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
 
@@ -344,11 +344,54 @@ internal object RoomTreeProvenanceSchema {
             }
         } } catch (failure: Exception) { throw RoomCurrentSchemaUnavailable("Current database identity unavailable; data preserved", failure) }
         if (identity != expectedIdentity) throw RoomCurrentSchemaUnavailable("Current database identity mismatch; data preserved")
-        val actual = sql.query("SELECT type,name,sql FROM sqlite_master WHERE type IN ('table','index','trigger','view') AND name NOT LIKE 'sqlite_%' AND name <> 'android_metadata' ORDER BY type,name").use { c ->
-            buildMap<String,String> { while(c.moveToNext()) {
-                if (c.isNull(2)) throw RoomCurrentSchemaUnavailable("Unexpected implicit database object; data preserved")
-                put(c.getString(0)+":"+c.getString(1),digest(c.getString(2)))
-            } }
+        // Enumerate everything: SQL LIKE's underscore and name-only exceptions hid executable
+        // triggers. Only positively identified native objects may be excluded from the DDL map.
+        data class SchemaObject(val type:String,val name:String,val owner:String,val ddl:String?)
+        val objects = sql.query("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").use { c ->
+            buildList { while(c.moveToNext()) add(SchemaObject(c.getString(0),c.getString(1),
+                c.getString(2),if(c.isNull(3)) null else c.getString(3))) }
+        }
+        val nativeTables = mapOf(
+            "sqlite_sequence" to "CREATE TABLE sqlite_sequence(name,seq)",
+            "android_metadata" to "CREATE TABLE android_metadata(locale TEXT)"
+        )
+        val implicitIndexes = mutableListOf<SchemaObject>()
+        val actual = buildMap<String,String> {
+            for(obj in objects) {
+                val native = nativeTables[obj.name]
+                if(native != null && obj.type == "table" && obj.owner == obj.name &&
+                    obj.ddl != null && digest(obj.ddl) == digest(native)) {
+                    if(obj.name == "android_metadata") {
+                        sql.query("SELECT typeof(locale) FROM android_metadata").use { c ->
+                            while(c.moveToNext()) if(c.getString(0) != "text")
+                                throw RoomCurrentSchemaUnavailable("Malformed Android locale metadata; data preserved")
+                        }
+                    }
+                    continue
+                }
+                if(obj.type == "index" && obj.ddl == null &&
+                    obj.name.startsWith("sqlite_autoindex_"+obj.owner+"_") &&
+                    obj.name.removePrefix("sqlite_autoindex_"+obj.owner+"_").matches(Regex("[1-9][0-9]*"))) {
+                    implicitIndexes.add(obj)
+                    continue
+                }
+                if(obj.ddl == null) throw RoomCurrentSchemaUnavailable("Unexpected implicit database object; data preserved")
+                put(obj.type+":"+obj.name,digest(obj.ddl))
+            }
+        }
+        // An autoindex must belong to an actual, subsequently exact-validated table and be a
+        // native UNIQUE/PRIMARY KEY index, not an explicit index with a reserved-looking name.
+        for(obj in implicitIndexes) {
+            if("table:"+obj.owner !in actual)
+                throw RoomCurrentSchemaUnavailable("Implicit index owner unavailable; data preserved")
+            val quotedOwner=obj.owner.replace("\"","\"\"")
+            val native = sql.query("PRAGMA index_list(\"$quotedOwner\")").use { c ->
+                var matches=0
+                while(c.moveToNext()) if(c.getString(1)==obj.name && c.getInt(2)==1 &&
+                    c.getString(3) in setOf("pk","u") && c.getInt(4)==0) matches++
+                matches == 1
+            }
+            if(!native) throw RoomCurrentSchemaUnavailable("Implicit index ownership mismatch; data preserved")
         }
         val expected = if((prospectiveVersion ?: version) == 1) v1Objects else v1Objects + ("table:crew_message_input_provenance" to digest(CREATE_SQL))
         if(expected.any { (key,value) -> actual[key] != value })
@@ -391,6 +434,15 @@ internal object RoomTreeProvenanceSchema {
             "trigger:trg_memory_prompts_fts_insert" to MemoryPromptSearchIndex.INSERT,
             "trigger:trg_memory_prompts_fts_delete" to MemoryPromptSearchIndex.DELETE,
             "trigger:trg_memory_prompts_fts_update" to MemoryPromptSearchIndex.UPDATE))
+        // Native installation may leave no family or the exact view alone on FTS failure.
+        // Once any index/trigger exists, every member is required; never let onOpen repair a
+        // partial family by dropping/rebuilding retained search data during this upgrade.
+        val messageMembers = setOf("table:message_fts", "trigger:trg_message_fts_insert",
+            "trigger:trg_message_fts_delete", "trigger:trg_message_fts_update")
+        if(messageMembers.any { it in actual }) {
+            if(messageMembers.any { it !in actual } || "view:message_search_content" !in actual)
+                throw RoomCurrentSchemaUnavailable("Partial native message search schema; data preserved")
+        }
         if(version == 1 && !allowV1) throw RoomCurrentSchemaUnavailable("Current database additive upgrade validation pending; data preserved")
         return version
     }
