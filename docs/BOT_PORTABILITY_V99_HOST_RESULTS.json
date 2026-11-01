@@ -1,0 +1,1800 @@
+{
+  "status": "exact-version-host-pass-independent-packaging-review-pending",
+  "sourceCommit": "8847012c69e9226de86608b33e7d1a932b36a866",
+  "sourceBindingSha256": "a86c7fa3405d08d73f3fd1555b1add2565597aeb42cc40979d14b598fe794796",
+  "boundFiles": 1994,
+  "classes": [
+    {
+      "class": "com.jarvys.agent.AgentForegroundServiceMainThreadAdmissionTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.AgentMessagingPipelineTest",
+      "full": {
+        "tests": 14,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 14,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.AgentModelTurnLimitTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralAgentInputCatalogTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralInvocationSourceTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralPreparedContextTest",
+      "full": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralRuntimeSourceIntegrationTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralTreeAdmissionTest",
+      "full": {
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralTreeServiceAcceptanceTest",
+      "full": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralUserTargetControlToolTest",
+      "full": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralWorkspaceCancelToolTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.ContinuationGenerationReceiptTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.ContinuationServiceRunTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.ContinuousMissionServiceTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoordinationRefEncodingCompatibilityTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopArchitectureTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopBatchSemanticsTest",
+      "full": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopCheckpointRecoveryTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopCompactionBehaviorTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopExclusiveYieldTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopFailureRecoveryTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopProviderCompactionRecoveryTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopProviderRetryTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopProviderUnavailableTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopTest",
+      "full": {
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopToolAdmissionTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreInputIncorporationTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreIntermediateAssistantSourceTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewC0Test",
+      "full": {
+        "tests": 23,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 23,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewC1ComposeTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewC1cTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewC2Test",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewCheckpointDurabilityTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewCheckpointIncorporationCodecTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewCheckpointRecoveryTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewContextArtifactsRecoveryTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewContinuationStoreTest",
+      "full": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewConversationCompactionRecoveryTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewConversationReplayTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewCoordinationCheckpointTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewInputContextExtractorTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewInputContextTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewInvocationRuntimeIntegrationTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewInvocationSourceTest",
+      "full": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewMissionPersistenceTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewMissionTitleCheckpointTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewMissionTitleRuntimeTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewModelPhaseComposeTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewModelPhaseTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewPartialPresentationUx38Test",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewTerminalPublicationTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewTreeInputCodecTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewTreeWaitCheckpointTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.ExactRunCancellationTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.MainActivityWorkspaceRoutingTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.MainAgentInteractionTest",
+      "full": {
+        "tests": 54,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 54,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.MainChatTurnContextProviderTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.NativeContinuationLivePermitTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.NativeContinuationStopTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.NativeMemoryActionRuntimeTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.NativeMemoryViewGuardTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.NativeWorkspaceCheckpointRecoveryTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceArtifactDeliveryTest",
+      "full": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceAttachmentRecoveryTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceContinuationAnswersTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceContinuationDeliveryTest",
+      "full": {
+        "tests": 15,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 15,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceCoordinationDeliveryTest",
+      "full": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceCoordinationLedgerTest",
+      "full": {
+        "tests": 29,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 29,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceEffectReceiptTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceFactoryPromptTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceInputIncorporationDeliveryTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceInputIncorporationLedgerTest",
+      "full": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceMemoryContinuityTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspacePreviewTouchPolicyTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceResultDeliveryTest",
+      "full": {
+        "tests": 22,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 22,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceResultLedgerTest",
+      "full": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceStoreTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceSupervisorMessagePipelineTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceTreeNativeRuntimeTest",
+      "full": {
+        "tests": 39,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 39,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceTreeP1PreclaimTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.chatdb.WorkspaceLedgerIndependenceTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewAvatarContrastRecoveryTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewBotAvatarComposeTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewCodingProfileComposeTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewCoordinationCaptureTest",
+      "full": {
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewCoordinationEvidenceTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewInputBindingTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewInputCheckpointManagerTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewManagerRecoveryTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewMissionTitleManagerTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewMissionTitleTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewProfileRecoveryTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewProviderUnavailableRecoveryTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewResultCaptureTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewResultEvidenceTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewResumePanelComposeTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewTaskPresentationTest",
+      "full": {
+        "tests": 39,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 39,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewWorkspaceCycleOwnershipTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewWorkspaceMissionAdmissionTest",
+      "full": {
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.ui.chat.PreservedCentralDrawerComposeTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.CentralMascotScaleComposeTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.CentralWorkspaceContinueResultToolTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.CentralWorkspaceCoordinationToolTest",
+      "full": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.CentralWorkspaceToolTest",
+      "full": {
+        "tests": 35,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 35,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceCentralTopBarComposeTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceChangesTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceControlStopOwnershipTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceCoordinatorIntegrationTest",
+      "full": {
+        "tests": 25,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 25,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceMutationContextTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceMutationSourceTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspacePendingProjectionQueryTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceRegistryTest",
+      "full": {
+        "tests": 32,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 32,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceResultNoticeComposeTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceTreeEvidenceStoreTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceTreeSchemaCompatibilityTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceTreeStoreTest",
+      "full": {
+        "tests": 26,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 26,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewTreeMessageRoutingTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.chatdb.RoomTreeProvenanceCompatibilityTest",
+      "full": {
+        "tests": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "class": "com.jarvys.agent.chatdb.CrewSnapshotProvenanceConservationTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "separateFullSupplement": {
+    "class": "com.jarvys.agent.linux.ProotLauncherProbeTest",
+    "tests": 5,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "status": "independent-packaging-r1-fail-testOnly-not-for-delivery",
+  "sourceCommit": "8847012c69e9226de86608b33e7d1a932b36a866",
+  "artifact": "Jarvys-v99-full-arm64-bot-trees-debug.apk",
+  "bytes": 40996795,
+  "sha256": "8992ce92e247bfce8733287781a60933cb58277d43b90fcad9a38e8cfa56c227",
+  "package": "com.jarvys.agent",
+  "versionCode": 99,
+  "versionName": "1.2.92-BOT-TREES",
+  "flavor": "full",
+  "abi": "arm64-v8a",
+  "debugCertificateSha256": "d2de47ccf48e02f58ecf4633392ff3f119e925aad1abaa7921c7ce163cfcec4e",
+  "unsignedBytes": 40955463,
+  "unsignedSha256": "666310e93be267938f3c8497d5d525e930152c15780dc2c0083394535859ef94",
+  "sameCacheForcedRebuildsByteIdentical": true,
+  "baselineV98Sha256": "d70949e04935964d61ab6b7e9d352308c1ef7e1ed602fa6d8bb4b36e9676dd54",
+  "assetsExactBaselineCount": 139,
+  "nativeExactBaselineCount": 8,
+  "nativeElf": [
+    {
+      "entry": "lib/arm64-v8a/libandroid-shmem.so",
+      "sha256": "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731",
+      "loadAlignments": [
+        16384,
+        16384,
+        16384
+      ]
+    },
+    {
+      "entry": "lib/arm64-v8a/libandroidx.graphics.path.so",
+      "sha256": "41e9a793c43a0f4fddb19e33f346bace464f30f888ba7b9eaf96294ea115bfb6",
+      "loadAlignments": [
+        16384,
+        16384,
+        16384
+      ]
+    },
+    {
+      "entry": "lib/arm64-v8a/libc++_shared.so",
+      "sha256": "4397241b4bd20a8e579bfb41d21107857e12985f6a01ca0c2a5f83380d1270b4",
+      "loadAlignments": [
+        16384,
+        16384,
+        16384,
+        16384
+      ]
+    },
+    {
+      "entry": "lib/arm64-v8a/libproot_exec.so",
+      "sha256": "1545b85b312505db6eb6908ff8b2ded0a77a3bd689c50ae85aa7c1d8445dd717",
+      "loadAlignments": [
+        16384,
+        16384,
+        16384
+      ]
+    },
+    {
+      "entry": "lib/arm64-v8a/libproot_loader.so",
+      "sha256": "cbdef0e652c2b78af25d867e1719fdebbb0915e25aae2dd35b3b5c1835f6b551",
+      "loadAlignments": [
+        16384,
+        16384
+      ]
+    },
+    {
+      "entry": "lib/arm64-v8a/librive-android.so",
+      "sha256": "cadf33d25a357ad37336d246216b183c46913cde1218c182102b98eca18b5bc8",
+      "loadAlignments": [
+        16384,
+        16384,
+        16384
+      ]
+    },
+    {
+      "entry": "lib/arm64-v8a/libsqliteJni.so",
+      "sha256": "1943442f87160799d004e44f39083b54a1aa899ccb26b163630dbb8045826846",
+      "loadAlignments": [
+        16384,
+        16384,
+        16384
+      ]
+    },
+    {
+      "entry": "lib/arm64-v8a/libtalloc.so",
+      "sha256": "742b438c4d09e276985a61d44164c9de207b6d8cc268f3018cb3001961bcb309",
+      "loadAlignments": [
+        16384,
+        16384,
+        16384
+      ]
+    }
+  ],
+  "blocker": "Actual manifest android:testOnly=true; ordinary-install packaging correction required."
+}

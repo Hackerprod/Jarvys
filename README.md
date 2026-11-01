@@ -1,3 +1,11 @@
+## Estado vigente — P3 v99 R1 FAIL de packaging; corrección de entrada de build — 01-11-2026
+
+El APK8992ce92… conserva firma/payload y host PASS, pero la revisión detectó `android:testOnly=true`: no es apto para entrega mediante instalador normal. Se conserva como FAIL, sin usar adb como bypass. P2 sigue PASS funcional acotado. La corrección declara explícitamente `-Pandroid.injected.testOnly=false` junto al ABI ARM64, sin cambiar código de app, y exige reconstrucción/firma/revisión del nuevo hash.
+
+## Estado vigente — v99 candidato firmado; revisión P3 independiente pendiente — 01-11-2026
+
+P2 mantiene PASS funcional acotado y su limitación temporal. v99 Full ARM64, firma DEBUG original, fuente `8847012c69e9226de86608b33e7d1a932b36a866`: Full/Play119 clases/1.134 pruebas por sabor sin fallos; suplemento Full5 separado. APK SHA256 `8992ce92e247bfce8733287781a60933cb58277d43b90fcad9a38e8cfa56c227`; payload nativo/assets conserva v98 exacto. **No entrega ni PASS de packaging todavía.** [Candidato, reproducción y límites](docs/BOT_PORTABILITY_V99_CANDIDATE.md). Sin validación física/proveedor vivo ni garantía de downgrade.
+
 ## Estado vigente — P2 PASS funcional acotado; P3 packaging pendiente — 01-11-2026
 
 Revisión independiente R4: **PASS de implementación funcional en host**, fuente `23b1cd06d1308b25f1e036079836c5f89d895d99`; Full/Play119 clases/1.134 pruebas por sabor, sin fallos/errores/omisiones. Se conserva el timeout histórico de preparación del fixture, causa no clasificada: no es certificación de fiabilidad temporal, dispositivo o proveedor vivo. [Checkpoint público y límites](docs/BOT_PORTABILITY_P2_CHECKPOINT.md). P3 prepara v99 con firma DEBUG original; no APK nuevo aprobado/entregado todavía.
