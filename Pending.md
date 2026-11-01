@@ -1,3 +1,7 @@
+## Estado vigente — v99 R2 corrige manifest; revisión P3 pendiente — 01-11-2026
+
+Nuevo APK SHA256 `db8736e25634262fbba55314a49a57912d9858ccf107bffdf37460a8391f5b50`, firma DEBUG original; manifest sin testOnly y sólo versiones distintas frente a v98. Corrección exclusiva de parámetros de build: código y payload salvo manifest intactos; host Full/Play1.134 conservado con binding idéntico. **R1 sigue FAIL, nuevo packaging aún pendiente de PASS independiente; no entrega.** [Candidato R2 y límites](docs/BOT_PORTABILITY_V99_CANDIDATE_R2.md).
+
 ## Estado vigente — P3 v99 R1 FAIL de packaging; corrección de entrada de build — 01-11-2026
 
 El APK8992ce92… conserva firma/payload y host PASS, pero la revisión detectó `android:testOnly=true`: no es apto para entrega mediante instalador normal. Se conserva como FAIL, sin usar adb como bypass. P2 sigue PASS funcional acotado. La corrección declara explícitamente `-Pandroid.injected.testOnly=false` junto al ABI ARM64, sin cambiar código de app, y exige reconstrucción/firma/revisión del nuevo hash.
