@@ -242,20 +242,33 @@ class WorkspaceTreeNativeRuntimeTest {
         } finally {release.countDown()}
     }
 
-    private fun captureNativeStartupTimeout(fixture:Fixture) {
+    private fun captureNativeStartupTimeout(fixture:Fixture,elapsedNs:Long) {
         // Nonblocking lifecycle getters only: no checkpoint/DB reads or monitor acquisition
         // that could conceal the very lock contention being diagnosed. Never change success.
         runCatching {
-            System.err.println("NATIVE_STARTUP_TIMEOUT monotonicNs=${System.nanoTime()} parent=${fixture.bot.id}")
+            System.err.println("NATIVE_STARTUP_TIMEOUT monotonicNs=${System.nanoTime()} elapsedNs=$elapsedNs parent=${fixture.bot.id}")
             fixture.manager.bots().forEach { bot ->
                 System.err.println("NATIVE_STARTUP_OWNER bot=${bot.id} assignment=${bot.assignmentId()} cycle=${bot.cycleId()} status=${bot.status()}")
             }
-            val threads=java.lang.management.ManagementFactory.getThreadMXBean()
-            threads.dumpAllThreads(true,true).forEach { info ->
-                System.err.println("NATIVE_STARTUP_THREAD id=${info.threadId} name=${info.threadName} state=${info.threadState} waiting=${info.lockInfo} owner=${info.lockOwnerId} cpuNs=${threads.getThreadCpuTime(info.threadId)}")
-                info.stackTrace.forEach { System.err.println(" at $it") }
-                info.lockedMonitors.forEach { System.err.println(" heldMonitor=$it at=${it.lockedStackFrame}") }
-                info.lockedSynchronizers.forEach { System.err.println(" heldSynchronizer=$it") }
+            // Android's compile API omits java.lang.management; this host-only diagnostic
+            // uses the public JDK interfaces reflectively and reports unavailable support.
+            val factory=Class.forName("java.lang.management.ManagementFactory")
+            val api=Class.forName("java.lang.management.ThreadMXBean")
+            val threads=factory.getMethod("getThreadMXBean").invoke(null)
+            val deadlocks=runCatching { api.getMethod("findDeadlockedThreads").invoke(threads) as? LongArray }
+            System.err.println("NATIVE_STARTUP_DEADLOCK_IDS="+deadlocks.fold({it?.joinToString() ?: "none"},{"unavailable:"+it.javaClass.name}))
+            val infos=api.getMethod("dumpAllThreads",Boolean::class.javaPrimitiveType,Boolean::class.javaPrimitiveType)
+                .invoke(threads,true,true) as Array<*>
+            infos.filterNotNull().forEach { info ->
+                fun field(name:String):Any?=info.javaClass.getMethod(name).invoke(info)
+                val id=field("getThreadId") as Long
+                val cpu=api.getMethod("getThreadCpuTime",Long::class.javaPrimitiveType).invoke(threads,id)
+                System.err.println("NATIVE_STARTUP_THREAD id=$id name=${field("getThreadName")} state=${field("getThreadState")} waiting=${field("getLockInfo")} owner=${field("getLockOwnerId")} cpuNs=$cpu")
+                (field("getStackTrace") as Array<*>).forEach { System.err.println(" at $it") }
+                (field("getLockedMonitors") as Array<*>).filterNotNull().forEach {
+                    System.err.println(" heldMonitor=$it at=${it.javaClass.getMethod("getLockedStackFrame").invoke(it)}")
+                }
+                (field("getLockedSynchronizers") as Array<*>).forEach { System.err.println(" heldSynchronizer=$it") }
             }
         }.onFailure { System.err.println("NATIVE_STARTUP_DIAGNOSTIC_FAILURE type=${it.javaClass.name}") }
     }
@@ -273,8 +286,9 @@ class WorkspaceTreeNativeRuntimeTest {
         try {
             // Fixture readiness, not a product latency policy. Preserve the same deadline and
             // assertion; capture the actual failure boundary before finally/STOP changes it.
+            val readinessStarted=System.nanoTime()
             val childReady=childEntered.await(15,TimeUnit.SECONDS)
-            if(!childReady)captureNativeStartupTimeout(fixture)
+            if(!childReady)captureNativeStartupTimeout(fixture,System.nanoTime()-readinessStarted)
             assertTrue(childReady);await(fixture.bot)
             assertEquals(fixture.bot.error(),CrewManager.Status.WAITING,fixture.bot.status());assertNull(fixture.bot.resultEvidence())
             storage.onDatabaseWorker { WorkspaceRegistry(app).use { db ->

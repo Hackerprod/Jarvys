@@ -13,3 +13,5 @@ The15 seconds is a fixture-readiness prerequisite, not a newly specified product
 ## Preregistered final validation
 
 One fresh serialized Full/Play119-class pair on identical final bytes, unchanged runner/timeouts/assertions, is the next acceptance attempt. No retry-until-green policy. Both must pass; any further failure remains evidence and triggers review of its captured cause rather than automatic rerun. Independent review must evaluate a scoped functional verdict with the unresolved historical timing limitation explicit, not certify latency, all schedules, physical process/power loss or live-provider behavior. Prior production source remains unchanged; only the diagnostic test and documentation change.
+
+The initial diagnostic-only compile failed because Android's Kotlin compile API omits java.lang.management. The test uses public host JDK interfaces reflectively instead; unsupported collection is reported without replacing the original assertion. Monotonic elapsed wait and available deadlock IDs are included. No acceptance tests ran on the failed compile; it remains retained separately.
