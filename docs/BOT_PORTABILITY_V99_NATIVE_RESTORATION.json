@@ -1,0 +1,52 @@
+{
+  "status": "restored-exact-baseline-bytes-packaging-validation-pending",
+  "baselineApkSha256": "d70949e04935964d61ab6b7e9d352308c1ef7e1ed602fa6d8bb4b36e9676dd54",
+  "files": [
+    {
+      "path": "app/app/src/full/jniLibs/arm64-v8a/libandroid-shmem.so",
+      "bytes": 14432,
+      "sha256": "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731",
+      "sourceCommit": "337fcac032e2c3f8a5dac01c8d51475f4b939cb5",
+      "apkEntry": "lib/arm64-v8a/libandroid-shmem.so"
+    },
+    {
+      "path": "app/app/src/full/jniLibs/arm64-v8a/libproot_exec.so",
+      "bytes": 247488,
+      "sha256": "1545b85b312505db6eb6908ff8b2ded0a77a3bd689c50ae85aa7c1d8445dd717",
+      "sourceCommit": "337fcac032e2c3f8a5dac01c8d51475f4b939cb5",
+      "apkEntry": "lib/arm64-v8a/libproot_exec.so"
+    },
+    {
+      "path": "app/app/src/full/jniLibs/arm64-v8a/libproot_loader.so",
+      "bytes": 18136,
+      "sha256": "cbdef0e652c2b78af25d867e1719fdebbb0915e25aae2dd35b3b5c1835f6b551",
+      "sourceCommit": "337fcac032e2c3f8a5dac01c8d51475f4b939cb5",
+      "apkEntry": "lib/arm64-v8a/libproot_loader.so"
+    },
+    {
+      "path": "app/app/src/full/jniLibs/arm64-v8a/libtalloc.so",
+      "bytes": 33592,
+      "sha256": "742b438c4d09e276985a61d44164c9de207b6d8cc268f3018cb3001961bcb309",
+      "sourceCommit": "337fcac032e2c3f8a5dac01c8d51475f4b939cb5",
+      "apkEntry": "lib/arm64-v8a/libtalloc.so"
+    },
+    {
+      "path": "app/tools/PROOT_NOTICE.txt",
+      "bytes": 1097,
+      "sha256": "6ead26ff7ba33d07c39d2bb971d217d1628b2be38014c839f5404ed585119d9e",
+      "sourceCommit": "337fcac032e2c3f8a5dac01c8d51475f4b939cb5"
+    },
+    {
+      "path": "app/tools/proot_checksums.txt",
+      "bytes": 425,
+      "sha256": "b3f946c59285401c9eaa5828f697962cf607110b52012cee2fd2efccf2422ed3",
+      "sourceCommit": "337fcac032e2c3f8a5dac01c8d51475f4b939cb5"
+    },
+    {
+      "path": "app/tools/fetch_proot.sh",
+      "bytes": 1441,
+      "sha256": "731161bf67d82201b5342792936709827cd30c1242ef29878308371925999f25",
+      "sourceCommit": "337fcac032e2c3f8a5dac01c8d51475f4b939cb5"
+    }
+  ]
+}

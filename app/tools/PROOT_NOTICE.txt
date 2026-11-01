@@ -1,0 +1,17 @@
+Jarvys Full flavor bundles the following independent executable payloads from the
+Termux aarch64 repository (not linked into Jarvys):
+
+* PRoot 5.1.107.96 — GPL-2.0-or-later
+  Source: https://github.com/termux/proot/archive/refs/tags/v5.1.107.96.zip
+  Package: https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.96_aarch64.deb
+* talloc 2.5.0 — LGPL-3.0-or-later
+  Source: https://www.samba.org/ftp/talloc/talloc-2.5.0.tar.gz
+  Package: https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.5.0_aarch64.deb
+* libandroid-shmem 0.7 — BSD-3-Clause
+  Source: https://github.com/termux/libandroid-shmem/archive/refs/tags/v0.7.tar.gz
+  Package: https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb
+
+Exact package SHA-256 digests are in tools/proot_checksums.txt. The corresponding
+source archives and notices are available from the linked upstream source/package
+locations. This file is the F1/L0 supplemental notice; publication license inventory
+remains a separate release checklist item.
