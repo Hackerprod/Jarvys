@@ -1,3 +1,5 @@
+> Current status: matching pre-write Full132/Play132 passed before local enablement. Final changed-source Full/Play1,127 passed; [R2 independent review is pending](BOT_PORTABILITY_P2_CANDIDATE_R2.md). The sections below preserve chronology, including OFF drafts and failures.
+
 # B2 native snapshot conservation — second additive current-generation upgrade
 
 Status: planning/implementation WIP, local tree admission OFF, no new migration writes enabled on existing v1 data. Independent P2 R1 remains FAIL. Its stricter transport requirement uncovered an actual storage gap: `MemoryTimelineRepository` normalizes Crew snapshot messages/bindings but discards their original `inputProvenance`; reading those rows cannot lawfully fabricate the missing parent/child proof.

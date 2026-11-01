@@ -1,3 +1,5 @@
+> Historical R1 candidate: independent review **FAIL**. Its host results remain valid only for its stated source. See [R2 repair candidate](BOT_PORTABILITY_P2_CANDIDATE_R2.md); independent R2 review pending.
+
 # P2 implementation candidate — matching host acceptance, independent review pending
 
 2026-10-31. Production/test source: `dd2a629671c7e9584a6d4df18ee16f4b4fd2102e`. **Full 1,090/0 and Play 1,090/0**, 117 classes per flavor, no errors or skipped cases. The included ten-class pre-write cohort is **105/0 per flavor**, not additional tests. A separate Full worker-focused39/0 is also not added to acceptance. This is an implementation candidate, **not independent P2 PASS or delivery approval**. No APK/signing/version change, physical-device, installation, live-provider or full upstream parity claim.
