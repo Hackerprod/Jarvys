@@ -1,0 +1,24 @@
+{
+  "apkName": "Jarvys-v99-full-arm64-bot-trees-debug.apk",
+  "apkBytes": 40996795,
+  "apkSha256": "db8736e25634262fbba55314a49a57912d9858ccf107bffdf37460a8391f5b50",
+  "zipBytes": 40996975,
+  "zipSha256": "9b02603543df059b7ca5a9fc0eb9d1ef30c1e9aa9ce064364c9432a2f03d24a0",
+  "parts": [
+    {
+      "name": "Jarvys-v99-full-arm64-bot-trees-debug.zip.001",
+      "bytes": 16777216,
+      "sha256": "dc6636f0b5cbc798c7d686ad6ddbc6e09c7651504f982bcc4a08d96b1faa6809"
+    },
+    {
+      "name": "Jarvys-v99-full-arm64-bot-trees-debug.zip.002",
+      "bytes": 16777216,
+      "sha256": "8956ed769f4b952ea4eedff2de10a74e21ec462072f279c29814aff4b40aa6a7"
+    },
+    {
+      "name": "Jarvys-v99-full-arm64-bot-trees-debug.zip.003",
+      "bytes": 7442543,
+      "sha256": "dafe25a4907c00dcbdedbcdf721f8ca35dc8f9e1d800acd5a90665637f78a136"
+    }
+  ]
+}

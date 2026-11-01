@@ -1,3 +1,7 @@
+## Estado vigente — v99 P3 R2 PASS de packaging; entrega preparada — 01-11-2026
+
+Revisión independiente **PASS de packaging** del APK SHA256 `db8736e25634262fbba55314a49a57912d9858ccf107bffdf37460a8391f5b50`, Full ARM64 v99, firma DEBUG original y sin `testOnly`. P2 conserva su PASS funcional acotado; Full/Play 119 clases y 1.134 pruebas por sabor, cero fallos. Las tres partes ZIP verificadas se enviaron el 01-11-2026 a las 03:57:06 UTC; el canal aceptó el envío. **No prueba descarga, instalación ni ejecución en teléfono.** [Identidad, ensamblado y límites](docs/BOT_PORTABILITY_V99_DELIVERY_CHECKPOINT.md). Se conservan R1 FAIL y el timeout histórico de fixture no clasificado; sin garantía temporal, dispositivo/proveedor vivo ni downgrade binario tras nuevas escrituras. Los estados inferiores son históricos.
+
 ## Estado vigente — v99 R2 corrige manifest; revisión P3 pendiente — 01-11-2026
 
 Nuevo APK SHA256 `db8736e25634262fbba55314a49a57912d9858ccf107bffdf37460a8391f5b50`, firma DEBUG original; manifest sin testOnly y sólo versiones distintas frente a v98. Corrección exclusiva de parámetros de build: código y payload salvo manifest intactos; host Full/Play1.134 conservado con binding idéntico. **R1 sigue FAIL, nuevo packaging aún pendiente de PASS independiente; no entrega.** [Candidato R2 y límites](docs/BOT_PORTABILITY_V99_CANDIDATE_R2.md).
