@@ -1,3 +1,7 @@
+## Estado vigente — P2 PASS funcional acotado; P3 packaging pendiente — 01-11-2026
+
+Revisión independiente R4: **PASS de implementación funcional en host**, fuente `23b1cd06d1308b25f1e036079836c5f89d895d99`; Full/Play119 clases/1.134 pruebas por sabor, sin fallos/errores/omisiones. Se conserva el timeout histórico de preparación del fixture, causa no clasificada: no es certificación de fiabilidad temporal, dispositivo o proveedor vivo. [Checkpoint público y límites](docs/BOT_PORTABILITY_P2_CHECKPOINT.md). P3 prepara v99 con firma DEBUG original; no APK nuevo aprobado/entregado todavía.
+
 ## Estado vigente — P2 R4: pareja final Full/Play 1.134; revisión funcional acotada pendiente — 01-11-2026
 
 Fuente final `23b1cd06d1308b25f1e036079836c5f89d895d99`: una pareja predeclarada,119 clases/1.134 pruebas por sabor sin fallos/errores/omisiones. Código productivo sin cambios; sólo diagnóstico automático antes del cleanup si reaparece la espera fallida. **R3 conserva un timeout histórico de preparación del fixture, causa no clasificada; no se certifica fiabilidad temporal.** [Candidato R4 y límites](docs/BOT_PORTABILITY_P2_CANDIDATE_R4.md). No PASS independiente P2 ni APK nuevo todavía; los apartados siguientes son históricos.
