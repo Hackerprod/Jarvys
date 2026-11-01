@@ -242,6 +242,24 @@ class WorkspaceTreeNativeRuntimeTest {
         } finally {release.countDown()}
     }
 
+    private fun captureNativeStartupTimeout(fixture:Fixture) {
+        // Nonblocking lifecycle getters only: no checkpoint/DB reads or monitor acquisition
+        // that could conceal the very lock contention being diagnosed. Never change success.
+        runCatching {
+            System.err.println("NATIVE_STARTUP_TIMEOUT monotonicNs=${System.nanoTime()} parent=${fixture.bot.id}")
+            fixture.manager.bots().forEach { bot ->
+                System.err.println("NATIVE_STARTUP_OWNER bot=${bot.id} assignment=${bot.assignmentId()} cycle=${bot.cycleId()} status=${bot.status()}")
+            }
+            val threads=java.lang.management.ManagementFactory.getThreadMXBean()
+            threads.dumpAllThreads(true,true).forEach { info ->
+                System.err.println("NATIVE_STARTUP_THREAD id=${info.threadId} name=${info.threadName} state=${info.threadState} waiting=${info.lockInfo} owner=${info.lockOwnerId} cpuNs=${threads.getThreadCpuTime(info.threadId)}")
+                info.stackTrace.forEach { System.err.println(" at $it") }
+                info.lockedMonitors.forEach { System.err.println(" heldMonitor=$it at=${it.lockedStackFrame}") }
+                info.lockedSynchronizers.forEach { System.err.println(" heldSynchronizer=$it") }
+            }
+        }.onFailure { System.err.println("NATIVE_STARTUP_DIAGNOSTIC_FAILURE type=${it.javaClass.name}") }
+    }
+
     @Test fun confirmedParkSourceRemainsExactThroughNativeFinalPublicationBeforeWake() {
         val calls=AtomicInteger();val childEntered=CountDownLatch(1);val releaseChild=CountDownLatch(1);val successor=CountDownLatch(1)
         val fixture=start { history,_,_ ->
@@ -253,7 +271,11 @@ class WorkspaceTreeNativeRuntimeTest {
             }
         }
         try {
-            assertTrue(childEntered.await(15,TimeUnit.SECONDS));await(fixture.bot)
+            // Fixture readiness, not a product latency policy. Preserve the same deadline and
+            // assertion; capture the actual failure boundary before finally/STOP changes it.
+            val childReady=childEntered.await(15,TimeUnit.SECONDS)
+            if(!childReady)captureNativeStartupTimeout(fixture)
+            assertTrue(childReady);await(fixture.bot)
             assertEquals(fixture.bot.error(),CrewManager.Status.WAITING,fixture.bot.status());assertNull(fixture.bot.resultEvidence())
             storage.onDatabaseWorker { WorkspaceRegistry(app).use { db ->
                 val tree=WorkspaceTreeStore(db);val node=tree.findAssignment(fixture.scope.workspaceId,fixture.bot.assignmentId())!!

@@ -1,3 +1,7 @@
+## Estado vigente — P2 R3 FAIL por espera de fixture; diagnóstico acotado — 01-11-2026
+
+Los ocho negativos previos y compatibilidad139 pasaron en ambos sabores; una espera de entrada del hijo agotó15s en la revisión Play. Causa histórica no establecida, FAIL conservado. Sin cambio productivo ni aumento del timeout: se añade captura automática de hilos/locks en ese límite y se predeclara una pareja final Full/Play. [Alcance y criterios](docs/BOT_PORTABILITY_P2_STARTUP_DIAGNOSTIC.md). No PASS P2 ni APK nuevo.
+
 ## Estado vigente — candidato P2 R3: Full/Play 1.134; revisión independiente pendiente — 01-11-2026
 
 Fuente `d7dc2b63cb4eb2e25565300b25f32e6a873e7051`: 119 clases y 1.134 pruebas por sabor, cero fallos/errores/omisiones, incluye139 de compatibilidad sin sumarlos. Reparados los filtros de esquema y la familia FTS incompleta señalados en R2; sus FAIL se conservan. Gates habilitados sólo para aceptación local tras Full139/Play139 con fuentes idénticas. **No PASS independiente P2 ni APK nuevo.** [Candidato R3 y límites](docs/BOT_PORTABILITY_P2_CANDIDATE_R3.md). Los apartados siguientes son históricos.

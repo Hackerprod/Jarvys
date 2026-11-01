@@ -1,3 +1,5 @@
+> Independent R3: **FAIL**, one native Play fixture-readiness timeout; prior eight independent regressions and139 compatibility cases pass both flavors. Cause unresolved; see [bounded diagnostic and final-validation criteria](BOT_PORTABILITY_P2_STARTUP_DIAGNOSTIC.md).
+
 # P2 R3 candidate — native schema repair; independent review pending
 
 2026-11-01. Application/test source **`d7dc2b63cb4eb2e25565300b25f32e6a873e7051`**. Full and Play each pass **119 classes / 1,134 tests**, zero failures/errors/skips. Included compatibility cohort:139 cases in12 classes per flavor, not extra tests. **Independent R1/R2 FAIL records remain; no independent P2 PASS or delivery approval.**
