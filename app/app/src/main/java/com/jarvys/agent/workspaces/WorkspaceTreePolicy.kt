@@ -7,6 +7,6 @@ internal object WorkspaceTreePolicy {
     const val MAX_REQUESTS=64L
     const val MAX_EXECUTIONS=96L
     const val MAX_WAKES=48L
-    // R2 schema-conservation repair requires fresh matching pre-write proof before enablement.
-    @JvmStatic fun admissionEnabled():Boolean=false
+    // Repaired Registry/Room pre-write gate Full139/Play139 passed; independent review pending.
+    @JvmStatic fun admissionEnabled():Boolean=true
 }
