@@ -305,10 +305,11 @@ class CentralAvailabilityBoundaryAcceptanceTest {
     }
 
     /** Simulated loss of process capability only; durable checkpoint and real Room reopen are exercised. */
-    private fun parkedWithoutLivePermission():AgentRunUiEvent {
+    private fun parkedWithoutLivePermission(withSteer:Boolean=false):AgentRunUiEvent {
         holdSecond=true
         val old=send("Original durable suspension request")
         await("Original sealed socket entered") {firstEntered.count==0L}
+        if(withSteer) assertTrue(storage.onDatabaseWorker {AgentForegroundService.interruptAndSend(context,session,"Retained steering mutation target",arrayListOf())})
         val fresh=send("Fresh owner holds the serial lane")
         await("Fresh owner entered after actual confirmed park") {secondEntered.count==0L}
         val descriptor=storage.onDatabaseWorker {CentralTreeAdmission.listRecoverableSuspensions(context,session).single()}
@@ -353,6 +354,9 @@ class CentralAvailabilityBoundaryAcceptanceTest {
         val completed=submissions().single {it.userMessageId==selected.messageId}
         assertEquals(initial.claimRunId,completed.claimRunId);assertEquals(initial.sourceSha256,completed.sourceSha256)
         assertEquals(3,calls.get());assertEquals(2,rows().count {it.optString("role")=="user"})
+        assertTrue(requests[2].contains("Original durable suspension request"))
+        assertFalse("Fresh USER cannot enter restored old-root provider request",requests[2].contains("Fresh owner holds the serial lane"))
+        assertFalse("Fresh-root assistant also remains excluded",requests[2].contains("Fresh request completed"))
         repeat(3){AgentForegroundService.nudgeCentralHandoff(context)}
         service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);pump();assertEquals(3,calls.get())
     }
@@ -517,5 +521,107 @@ class CentralAvailabilityBoundaryAcceptanceTest {
         releaseFirst.countDown();assertTrue(staleReturned.await(10,TimeUnit.SECONDS))
         assertFalse(modelRows().any {it.toString().contains("stale-effect")})
     }
+
+    private fun exactRetrySettled(selected:AgentRunUiEvent) {
+        val executor=java.util.concurrent.Executors.newSingleThreadExecutor()
+        val unused=object:AttachmentMessageSubmitter {
+            override fun persistMessage(application:Application,session:String,text:String,attachments:List<ChatAttachment>):String=error("Recovery cannot append")
+            override fun startAgent(application:Application,session:String,messageId:String,skills:ArrayList<String>)=error("No generic recovery")
+        }
+        val retry=AttachmentDraftViewModel(context as Application,unused,executor).apply {switchSession(session)}
+        val owner=androidx.lifecycle.ViewModelStore().apply {put("recovery",retry)}
+        try {assertTrue(retry.recoverPreparedSuspension(selected));executor.submit {}.get(10,TimeUnit.SECONDS);pump()}
+        finally {owner.clear();executor.shutdownNow()}
+    }
+    private fun mutatedNativeRecovery(kind:String) {
+        val selected=parkedWithoutLivePermission(kind=="STEER")
+        val descriptor=requireNotNull(selected.centralAvailability!!.suspension)
+        val before=root(selected.messageId);val receipt=yields.single()
+        if(kind=="BLOB") {
+            val file=java.io.File(StorageGeneration(context).directory("crew-context"),
+                CrewCheckpointStore.digest(session.toByteArray(Charsets.UTF_8))+"/central-yields/"+receipt.checkpointDigest()+".json")
+            assertTrue(file.isFile);file.writeText("invalid retained checkpoint")
+        } else storage.onDatabaseWorker {
+            val message=if(kind=="USER") selected.messageId else rows().single {it.optString("content")=="Retained steering mutation target"}.getString("messageId")
+            ChatDatabaseBridge.closeInstanceForTests(context.filesDir)
+            android.database.sqlite.SQLiteDatabase.openDatabase(java.io.File(StorageGeneration(context).chatRoot(),"agent.db").path,null,android.database.sqlite.SQLiteDatabase.OPEN_READWRITE).use {db ->
+                val value=android.content.ContentValues().apply {put("payload","MUTATED CANONICAL SOURCE")}
+                assertEquals(1,db.update("message_parts",value,"conversation_id=? AND message_id=? AND kind='text'",arrayOf(session,message)))
+            }
+            LocalRunStore(context).readCentralSubmissions(session)
+        }
+        exactRetrySettled(selected)
+        assertEquals(2,calls.get());assertEquals(before,root(selected.messageId))
+        assertFalse(AgentForegroundService.hasLiveCentralSuspension(descriptor))
+        storage.onDatabaseWorker {WorkspaceRegistry(context).use {registry ->registry.treeRead {db ->
+            db.rawQuery("SELECT state,revision,source_digest FROM bot_tree_central_resume WHERE resume_id=?",arrayOf(descriptor.resumeId)).use {
+                assertTrue(it.moveToFirst());assertEquals("PREPARED",it.getString(0));assertEquals(descriptor.revision,it.getLong(1));assertEquals(descriptor.sourceDigest,it.getString(2))
+            }
+        }}}
+    }
+    @Test fun nativeRetryRejectsChangedRetainedBlobWithoutMintingPermission()=mutatedNativeRecovery("BLOB")
+    @Test fun nativeRetryRejectsChangedCanonicalOriginalUser()=mutatedNativeRecovery("USER")
+    @Test fun nativeRetryRejectsChangedCanonicalRetainedSteer()=mutatedNativeRecovery("STEER")
+
+    private fun actualClaim(runtime:CoreAgentRuntime):CentralTreeAdmission.SuspensionClaim? {
+        val field=CoreAgentRuntime::class.java.getDeclaredField("suspensionClaim").apply {isAccessible=true}
+        return field.get(runtime) as CentralTreeAdmission.SuspensionClaim? // Observes actual minted claim; never creates or injects one.
+    }
+    @Test fun actualSuspensionClaimRejectsWrongTokenAndUnconfirmedForeignRunSourceWitness() {
+        val previous=service.mainChatRunner;val checked=AtomicInteger()
+        service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->
+            val claim=actualClaim(runtime)
+            if(claim!=null) {
+                checked.incrementAndGet()
+                assertThrows(IllegalStateException::class.java) {claim.requireCurrent(CancellationToken.uncancellable())}
+                assertThrows(IllegalStateException::class.java) {claim.currentCheckpointSources(token)}
+                val foreign=MainChatTranscriptStore(context.filesDir,session,LocalRunStore(context))
+                assertThrows(IllegalStateException::class.java) {claim.attachCheckpointSourceWitness(foreign,claim.runId(),token)}
+                val noProvider=CoreAgentLoop(CoreAgentLoop.Model {_,_,_,_->error("Witness check cannot infer")},CoreToolRegistry(emptyList()),"",session)
+                foreign.attach(noProvider,emptyList(),claim.getOriginalUserMessageId(),"foreign-native-run")
+                assertThrows(IllegalStateException::class.java) {claim.attachCheckpointSourceWitness(foreign,claim.runId(),token)}
+                claim.requireCurrent(token)
+            }
+            previous.run(runtime,goal,history,attachments,token,progress).also {
+                if(claim!=null) {claim.requireBound(token);assertNotNull(claim.currentCheckpointSources(token))}
+            }
+        }
+        val selected=parkedWithoutLivePermission()
+        assertTrue(drafts.recoverPreparedSuspension(selected))
+        await("Actual verified owner succeeds after denied foreign witnesses") {submissions().single {it.userMessageId==selected.messageId}.state=="COMPLETED"}
+        await("Claim lane released") {!AgentForegroundService.hasActiveRun(session)}
+        assertEquals(1,checked.get());assertEquals(3,calls.get())
+    }
+    private fun rejectActualPrebindClaim(stop:Boolean) {
+        val selected=parkedWithoutLivePermission();val before=root(selected.messageId)
+        val previous=service.mainChatRunner;val observed=CountDownLatch(1);val denial=AtomicReference<Throwable>()
+        service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->
+            val claim=actualClaim(runtime)
+            if(claim==null) previous.run(runtime,goal,history,attachments,token,progress)
+            else {
+                try {
+                    if(stop) {stopSession();assertTrue(token.wasStoppedByUser())}
+                    else WorkspaceRegistry(context).use {registry ->registry.treeRead {db ->
+                        db.execSQL("UPDATE bot_tree_central_resume SET owner_run='different-owner', revision=revision+1 WHERE resume_id=?",arrayOf(claim.resumeId()))
+                    }}
+                    try {runtime.runMainChat(goal,history,attachments,token,progress);error("Revoked native claim must not bind/infer")}
+                    catch(expected:RuntimeException) {denial.set(expected);throw expected}
+                } finally {observed.countDown()}
+            }
+        }
+        assertTrue(drafts.recoverPreparedSuspension(selected))
+        await("Native reserved claim reaches deterministic prebind boundary") {observed.count==0L}
+        await("Denied owner physically releases") {!AgentForegroundService.hasActiveRun(session)}
+        assertNotNull(denial.get());assertEquals(2,calls.get());assertEquals(before.executions,root(selected.messageId).executions)
+        storage.onDatabaseWorker {WorkspaceRegistry(context).use {registry ->registry.treeRead {db ->
+            db.rawQuery("SELECT state FROM bot_tree_central_resume WHERE root_id=?",arrayOf(before.rootId)).use {
+                assertTrue(it.moveToFirst());assertTrue(it.getString(0) in setOf("RESERVED","UNCERTAIN","CANCELLED"))
+            }
+        }}}
+        repeat(3){AgentForegroundService.nudgeCentralHandoff(context)}
+        service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);pump();assertEquals(2,calls.get())
+    }
+    @Test fun actualReservedClaimRejectsDurableOwnerAndRevisionMutationBeforeSuccessorBinding()=rejectActualPrebindClaim(false)
+    @Test fun realServiceStopAfterReservationDeniesSuccessorBindingAndRetainsNoReplayEvidence()=rejectActualPrebindClaim(true)
 
 }

@@ -1,6 +1,6 @@
-# Central availability implementation — WIP, gates OFF
+# Central availability implementation — WIP, local acceptance enabled
 
-Phase A source/host repair has independent scoped PASS; Phase B design has separate independent PASS. Neither certifies this new implementation.
+Phase A source/host repair has independent scoped PASS; Phase B design has separate independent PASS. The paired pre-write compatibility gate now passes; native functional acceptance is in progress with local gates enabled. No Phase B implementation PASS or new deliverable is claimed. Earlier OFF checkpoints below are historical.
 
 First implementation slice is **uncompiled and untested**: shared OFF migration/admission policy; additive Registryv3 empty central-resume table/index; exact existing-schema recognition and prospective validation before version publication; read-only Doctor version recognition; initial conservation/hidden-trigger negatives. Registry platform exclusions now match object type, owner and exact platform DDL rather than hiding any object named android_metadata. No upgrade is invoked by ordinary reads, no historical root/submission is enrolled and no execution permission is minted by a row.
 
@@ -59,3 +59,9 @@ Exact180bf6c3 source remained unchanged. Production Kotlin compilation failed be
 Exacte4d722e9 Full compilation passed with unchanged source. The guarded12-class/125-test OFF cohort then finished with2 failures,0 errors/skips and unchanged source/artifacts; Play was not started. One assertion compared JSON object insertion order instead of canonical structural equality. The other exact-source fixture was rejected for unresolved tool effects; its native batch-completion contract is being checked, without relaxing the uncertainty guard. These results are not a compatibility PASS.
 
 Source tracing established that the unresolved-effects failure was a verifier defect, not a missing fixture batch-terminal event. ModelTranscriptRepository retains call STARTED and a separate RESULT receipt; InteractionProtection uses this native pair. The verifier now accepts only STARTED/RESULT or NEVER_LAUNCHED/NEVER_LAUNCHED with exact tool name and strictly ordered integer lifecycle/result sequences. Missing, uncertain, mismatched and restarted effects remain rejected. The original long-payload positive fixture is retained, with pre-result denial and a new native lifecycle matrix. The next pre-write selector has126 tests.
+
+## Paired pre-write gate PASS; local functional acceptance enabled
+
+Sourcea3f65d53b2a75ae6d160f16cf9833f294ca6af8d passed Full126 and Play126 across the same12 preregistered classes,0 failures/errors/skips; source/artifact bindings stayed unchanged. Both prior failed attempts remain recorded. This compatibility gate permits local migration/admission activation for native acceptance, not a Phase B functional PASS or delivery approval.
+
+The three native gates are now enabled for that local acceptance. Six additional authority-boundary tests join the existing fixtures: exact fresh recovery rejects mutated blob/USER/STEER; real minted claims reject wrong token, unconfirmed/foreign-run witnesses and revoked reservation; STOP before successor dispatch forbids replay. Resumed provider payload must exclude the unrelated fresh USER/answer. These tests are authored and UNRUN. The exact-final source will rerun the compatibility cohort and native/baseline Full/Play acceptance before independent review.
