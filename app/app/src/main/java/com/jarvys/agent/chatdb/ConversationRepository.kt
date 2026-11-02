@@ -1217,9 +1217,12 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     suspend fun readInputsAfter(conversationId: String, afterSeq: Long): List<StoredMessage> =
         JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
             val highWater = maxSeq(conversationId)
+            // Positive NEW_TURN is never STEER, even after its independently owned run completes.
+            // This classification does not hide the USER from UI or eligible completed history.
+            val newTurns=CentralTurnSubmissionRepository(database).list(conversationId).mapTo(hashSetOf()) {it.userMessageId}
             val ids = sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND seq>? AND seq<=? " +
                 "AND role IN ('user','agent','system') ORDER BY seq", arrayOf(conversationId, afterSeq, highWater))
-                .use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+                .use { c -> buildList { while (c.moveToNext()) {val id=c.getString(0);if(id !in newTurns)add(id)} } }
             hydrateMessages(conversationId, ids, highWater)
         } }
 

@@ -73,7 +73,7 @@ class CentralDefaultAwaitDelegationTest {
             episode({ frame ->
                 val result = execute(workspace, frame, null)
                 assertTrue(result.content, result.success)
-                val row = JSONObject(result.content)
+                val row = responseData(result)
                 assertEquals(started.assignmentId, row.getString("assignment_id"))
                 assertEquals("STARTED", row.getString("admission_state"))
                 assertTrue(row.getBoolean("no_replay"))
@@ -151,7 +151,7 @@ class CentralDefaultAwaitDelegationTest {
         }, { frame ->
             val result = execute(workspace, frame, null)
             assertTrue(result.content, result.success)
-            assertEquals(original!!.assignmentId, JSONObject(result.content).getString("assignment_id"))
+            assertEquals(original!!.assignmentId, responseData(result).getString("assignment_id"))
             assertEquals(EffectInvocation.Outcome.NOT_EXECUTED, result.effectReceipt.outcome)
             assertEquals(1, modelCalls.get())
         })
@@ -175,8 +175,14 @@ class CentralDefaultAwaitDelegationTest {
     private fun prepare(db: WorkspaceRegistry, workspace: WorkspaceRecord, key: String) = db.prepareAssignment(
         workspace.workspaceId, key, REQUEST, ORIGINAL, ROLE, MISSION, emptyList(), "Synthetic worker", CrewMissionAccess.STANDARD)
     private fun retainedKey(awaited: Boolean) = if (awaited) "continuation-v1:" + UUID.nameUUIDFromBytes(KEY.toByteArray(Charsets.UTF_8)) else KEY
+    private fun responseData(result: CoreToolResult): JSONObject {
+        assertTrue(result.content, result.success)
+        val envelope = JSONObject(result.content)
+        assertEquals("workspace_data", envelope.getString("kind"))
+        return envelope.getJSONObject("data")
+    }
     private fun awaitWorker(workspace: WorkspaceRecord, result: CoreToolResult) {
-        val bot = requireNotNull(managers.getValue(workspace.executionSessionId).bot(JSONObject(result.content).getString("bot_id")))
+        val bot = requireNotNull(managers.getValue(workspace.executionSessionId).bot(responseData(result).getString("bot_id")))
         val task = FutureTask<Unit> { bot.awaitTermination(); Unit }
         val thread = Thread(task, "default-await-fixture-join").apply { isDaemon = true; start() }
         try { task.get(10, TimeUnit.SECONDS) } finally { if (thread.isAlive) thread.interrupt() }

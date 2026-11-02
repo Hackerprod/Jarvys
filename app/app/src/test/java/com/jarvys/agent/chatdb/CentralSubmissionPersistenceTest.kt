@@ -229,4 +229,30 @@ class CentralSubmissionPersistenceTest {
         val changed=reader.loadConversationContext(session)
         rejected {db.withChatReadTransaction {CentralSuspensionSourceScope.select(db,session,original.messageId,"successor-run",retained,emptyMap(),emptySet(),changed)}}
     }
+    @Test fun nativeSteeringSelectorNeverConsumesPositiveNewTurnsInAnyRetainedState()=work {
+        val repo=ConversationRepository(db)
+        val anchor=(repo.appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","old run anchor")))) as ChatDbResult.Success).value
+        val queued=prepared("steer-prepared");val started=claim(prepared("steer-started"))
+        val completed=claim(prepared("steer-completed"));val failed=claim(prepared("steer-failed"))
+        val cancelled=prepared("steer-cancelled")
+        db.withChatWriteTransaction {CentralTurnSubmissionRepository(db).cancelCapturedInTransaction(listOf(cancelled))}
+        for((row,status) in listOf(completed to "COMPLETED",failed to "FAILED")) {
+            val assistant=(repo.appendMessage(AppendMessageInput(session,"assistant",listOf(MessagePartInput("text","independent result")),status=status,ownerUserMessageId=row.userMessageId,runId=row.claimRunId)) as ChatDbResult.Success).value
+            val receipt=org.json.JSONObject().put("version",1).put("kind","DIRECT").put("assistantId",assistant.messageId)
+                .put("runId",row.claimRunId).put("originRunId",row.claimRunId).put("sourceSha256",row.sourceSha256).put("finalOwnerMessageId",row.userMessageId)
+            if(status=="COMPLETED")receipt.put("chainDigest","a".repeat(64))
+            // Valid persistence fixture, not a live terminal capability or execution admission.
+            db.testChatSql.execSQL("UPDATE central_turn_submissions SET state=?,revision=revision+1,terminal_evidence=? WHERE conversation_id=? AND submission_id=?",arrayOf(status,receipt.toString(),session,row.submissionId))
+        }
+        val legacy=(repo.appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","retained v99 ordinary input")))) as ChatDbResult.Success).value
+        val steer=(writer().appendAndDispatchInterruptRequest(session,"explicit native steering",emptyList()) as ChatDbResult.Success).value
+        val inputs=repo.readInputsAfter(session,anchor.seq)
+        assertEquals(setOf(legacy.messageId,steer.message.messageId),inputs.map {it.messageId}.toSet())
+        val excluded=setOf(queued.userMessageId,started.userMessageId,completed.userMessageId,failed.userMessageId,cancelled.userMessageId)
+        assertTrue(inputs.none {it.messageId in excluded})
+        assertTrue(ConversationReader(db).readConversationMessages(session).map {it.messageId}.containsAll(excluded))
+        assertTrue(ConversationReader(db).loadConversationContext(session).any {it.content=="Prompt steer-completed"})
+        JarvysChatDatabaseProvider.closeDatabaseFileForTests(db);open()
+        assertEquals(inputs.map {it.messageId},ConversationRepository(db).readInputsAfter(session,anchor.seq).map {it.messageId})
+    }
 }

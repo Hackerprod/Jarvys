@@ -26,11 +26,12 @@ class WorkspaceCentralResumeSchemaTest {
         val names=db.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite%' AND name!='android_metadata' AND name!='bot_tree_central_resume' ORDER BY name",null).use{c->buildList{while(c.moveToNext())add(c.getString(0))}}
         names.associateWith{table-> db.rawQuery("SELECT * FROM $table",null).use{c->buildList{while(c.moveToNext())add((0 until c.columnCount).map{if(c.isNull(it))null else c.getString(it)})}}}
     }
-    @Test fun offGateDoesNotUpgradeAndExplicitUpgradeConservesPopulatedV2(){
+    @Test fun ordinaryReadDoesNotUpgradeAndExplicitUpgradeConservesPopulatedV2(){
         val registry=open();val workspace=registry.createWorkspace("retained","Retained")
         registry.prepareAssignment(workspace.workspaceId,"old","request","user","generalist","mission",null,null,com.jarvys.agent.crew.CrewMissionAccess.STANDARD)
         registry.upgradeTreeSchema();val cached=open();assertEquals(2,cached.schemaVersion())
-        assertFalse(com.jarvys.agent.CentralAvailabilityPolicy.registryMigrationEnabled())
+        assertEquals(workspace,cached.getWorkspace(workspace.workspaceId))
+        assertEquals(2,open().schemaVersion()) // Ordinary reads stay non-migrating under either policy setting.
         val before=snapshots();registry.upgradeCentralResumeSchema()
         assertEquals(before,snapshots());assertEquals(3,cached.schemaVersion())
         registry.upgradeCentralResumeSchema();assertEquals(before,snapshots())

@@ -150,9 +150,11 @@ class CentralAvailabilityServiceTest {
         drafts=AttachmentDraftViewModel(context as Application,custom,executor).apply {switchSession(session)}
         val owner=androidx.lifecycle.ViewModelStore().apply {put("drafts",drafts)}
         try {
-            val input=java.io.File(context.cacheDir,"availability-attachment.txt").apply {writeText("Immutable attachment")}
-            drafts.addUris(session,listOf(android.net.Uri.fromFile(input)))
-            await("Attachment copied before native Send") {drafts.drafts.value.singleOrNull()?.attachment!=null}
+            val input=java.io.File(context.cacheDir,"jarvys/camera/availability-attachment.txt").apply {parentFile!!.mkdirs();writeText("Immutable attachment")}
+            drafts.addUris(session,listOf(androidx.core.content.FileProvider.getUriForFile(context,context.packageName+".generated-images",input)))
+            await("Attachment copied before native Send") {
+                val pending=drafts.drafts.value.singleOrNull();check(pending?.error==null) {"Native content attachment copy failed: ${pending?.error}"};pending?.attachment!=null
+            }
             val attachment=requireNotNull(drafts.drafts.value.single().attachment)
             val storedFile=AttachmentStore(context).resolve(session,attachment)
             assertTrue(drafts.submit(session,"Retain committed bytes",arrayListOf()))

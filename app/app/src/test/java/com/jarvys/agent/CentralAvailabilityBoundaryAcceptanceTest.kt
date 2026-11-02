@@ -162,9 +162,11 @@ class CentralAvailabilityBoundaryAcceptanceTest {
         drafts=AttachmentDraftViewModel(context as Application,custom,executor).apply {switchSession(session)}
         val owner=androidx.lifecycle.ViewModelStore().apply {put("drafts",drafts)}
         try {
-            val input=java.io.File(context.cacheDir,"availability-attachment.txt").apply {writeText("Immutable attachment")}
-            drafts.addUris(session,listOf(android.net.Uri.fromFile(input)))
-            await("Attachment copied before native Send") {drafts.drafts.value.singleOrNull()?.attachment!=null}
+            val input=java.io.File(context.cacheDir,"jarvys/camera/availability-attachment.txt").apply {parentFile!!.mkdirs();writeText("Immutable attachment")}
+            drafts.addUris(session,listOf(androidx.core.content.FileProvider.getUriForFile(context,context.packageName+".generated-images",input)))
+            await("Attachment copied before native Send") {
+                val pending=drafts.drafts.value.singleOrNull();check(pending?.error==null) {"Native content attachment copy failed: ${pending?.error}"};pending?.attachment!=null
+            }
             val attachment=requireNotNull(drafts.drafts.value.single().attachment)
             val storedFile=AttachmentStore(context).resolve(session,attachment)
             assertTrue(drafts.submit(session,"Retain committed bytes",arrayListOf()))
@@ -394,32 +396,48 @@ class CentralAvailabilityBoundaryAcceptanceTest {
                 session,receipt.checkpointReference(),receipt.checkpointDigest(),original.storageGeneration))
         } finally {owner.clear();executor.shutdownNow()}
     }
-    @Test fun confirmedYieldBlobThenRegistryParkFailureNeverRegistersOrReplaysOldRoot() {
-        val old=send("Original whose Registry park will fail")
-        await("Actual provider before park failure") {firstEntered.count==0L}
+    @Test fun confirmedYieldBlobThenNativeParkInsertFailureNeverRegistersOrReplaysOldRoot() {
+        val previous=service.mainChatRunner
+        val injected=AtomicReference<Throwable>()
+        service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->
+            previous.run(runtime,goal,history,attachments,token,progress).also {result ->
+                if(result.isYielded) {
+                    val field=CoreAgentRuntime::class.java.getDeclaredField("centralTreeAdmission").apply {isAccessible=true}
+                    val actual=field.get(runtime) as CentralTreeAdmission // Observe actual owner; no capability construction/insertion.
+                    try {
+                        WorkspaceRegistry(context).use {registry ->registry.treeTransaction {db ->
+                            db.execSQL("CREATE TEMP TRIGGER fail_actual_suspension BEFORE INSERT ON main.bot_tree_central_resume WHEN NEW.cause_kind='SUSPENSION' BEGIN SELECT RAISE(ABORT,'synthetic park insert failure'); END")
+                            try {actual.park(context,result.yieldReceipt());error("Expected actual park insertion failure")}
+                            finally {db.execSQL("DROP TRIGGER IF EXISTS temp.fail_actual_suspension")}
+                        }}
+                    } catch(problem:RuntimeException) {
+                        injected.set(problem);throw problem
+                    }
+                }
+            }
+        }
+        val old=send("Original whose Registry park insertion will fail")
+        await("Actual provider before park insertion fault") {firstEntered.count==0L}
+        val fresh=send("Fresh request survives failed old park insertion")
+        await("Fresh admitted source finishes after failed park owner unwinds") {submissions().single {it.userMessageId==fresh}.state=="COMPLETED"}
+        await("Both physical owners release") {!AgentForegroundService.hasActiveRun(session)}
+        val problem=requireNotNull(injected.get())
+        assertTrue("Actual INSERT error, not schema validation or an earlier fixture failure",generateSequence(problem as Throwable?) {it.cause}.any {it.message.orEmpty().contains("synthetic park insert failure")})
+        val confirmed=yields.single();val original=submissions().single {it.userMessageId==old}
+        assertNotNull(CrewCheckpointStore(context.filesDir).readCentralYieldConfirmed(
+            session,confirmed.checkpointReference(),confirmed.checkpointDigest(),original.storageGeneration))
+        val oldRootId=root(old).rootId
         storage.onDatabaseWorker {WorkspaceRegistry(context).use {registry ->registry.treeRead {db ->
-            db.execSQL("CREATE TRIGGER fail_actual_suspension BEFORE INSERT ON bot_tree_central_resume WHEN NEW.cause_kind='SUSPENSION' BEGIN SELECT RAISE(ABORT,'synthetic park failure'); END")
+            db.rawQuery("SELECT COUNT(*) FROM bot_tree_central_resume WHERE root_id=?",arrayOf(oldRootId)).use {assertTrue(it.moveToFirst());assertEquals(0,it.getInt(0))}
+            db.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind='CENTRAL_YIELD'",arrayOf(oldRootId)).use {assertTrue(it.moveToFirst());assertEquals(0,it.getInt(0))}
+            db.rawQuery("SELECT COUNT(*) FROM sqlite_temp_master WHERE name='fail_actual_suspension'",null).use {assertTrue(it.moveToFirst());assertEquals(0,it.getInt(0))}
         }}}
-        try {
-            val fresh=send("Fresh request survives failed old park")
-            await("Fresh admitted source finishes after failed park owner unwinds") {submissions().single {it.userMessageId==fresh}.state=="COMPLETED"}
-            await("Both physical owners release") {!AgentForegroundService.hasActiveRun(session)}
-            val confirmed=yields.single()
-            val original=submissions().single {it.userMessageId==old}
-            assertNotNull(CrewCheckpointStore(context.filesDir).readCentralYieldConfirmed(
-                session,confirmed.checkpointReference(),confirmed.checkpointDigest(),original.storageGeneration))
-            val oldRootId=root(old).rootId
-            storage.onDatabaseWorker {WorkspaceRegistry(context).use {registry ->registry.treeRead {db ->
-                db.rawQuery("SELECT COUNT(*) FROM bot_tree_central_resume WHERE root_id=?",arrayOf(oldRootId)).use {assertTrue(it.moveToFirst());assertEquals(0,it.getInt(0))}
-                db.rawQuery("SELECT COUNT(*) FROM bot_tree_event WHERE root_id=? AND kind='CENTRAL_YIELD'",arrayOf(oldRootId)).use {assertTrue(it.moveToFirst());assertEquals(0,it.getInt(0))}
-            }}}
-            assertTrue(storage.onDatabaseWorker {CentralTreeAdmission.listRecoverableSuspensions(context,session).isEmpty()})
-            assertEquals("FAILED",root(old).closeReason);assertEquals(1L,root(old).executions)
-            assertEquals("COMPLETED",root(fresh).closeReason)
-            val count=calls.get();repeat(4){AgentForegroundService.nudgeCentralHandoff(context)}
-            service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);pump();assertEquals(count,calls.get())
-            releaseFirst.countDown();assertTrue(staleReturned.await(10,TimeUnit.SECONDS));assertEquals(count,calls.get())
-        } finally {storage.onDatabaseWorker {WorkspaceRegistry(context).use {registry ->registry.treeRead {db ->db.execSQL("DROP TRIGGER IF EXISTS fail_actual_suspension")}}}}
+        assertTrue(storage.onDatabaseWorker {CentralTreeAdmission.listRecoverableSuspensions(context,session).isEmpty()})
+        assertEquals("FAILED",root(old).closeReason);assertEquals(1L,root(old).executions)
+        assertEquals("COMPLETED",root(fresh).closeReason)
+        val count=calls.get();repeat(4){AgentForegroundService.nudgeCentralHandoff(context)}
+        service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);pump();assertEquals(count,calls.get())
+        releaseFirst.countDown();assertTrue(staleReturned.await(10,TimeUnit.SECONDS));assertEquals(count,calls.get())
     }
 
     @Test fun nativeP1ResultLosesToLiveSuspensionAndFreshUserWithoutConsumingEitherTwice() {

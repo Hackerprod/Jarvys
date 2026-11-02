@@ -223,10 +223,10 @@ class RoomTreeProvenanceCompatibilityTest {
             assertEquals(0L,scalar(connection,"SELECT COUNT(*) FROM crew_message_input_provenance"))
         }
         val fresh=file("room-v2-fresh")
-        val db=JarvysChatDatabaseProvider.openDatabaseFileForTests(context,fresh)
+        val db=JarvysChatDatabaseProvider.openDatabaseFileForTests(context,fresh,true)
         JarvysChatDatabaseProvider.closeDatabaseFileForTests(db)
         for(file in listOf(migrated,fresh))open(file).use { assertEquals(2,RoomTreeProvenanceSchema.validate(it,v2Identity,false)) }
-        val reopened=JarvysChatDatabaseProvider.openDatabaseFileForTests(context,migrated)
+        val reopened=JarvysChatDatabaseProvider.openDatabaseFileForTests(context,migrated,true)
         JarvysChatDatabaseProvider.closeDatabaseFileForTests(reopened)
     }
     @Test fun newerUnknownPartialAndSpoofedIdentityNeverReceiveMigrationWrites() {
