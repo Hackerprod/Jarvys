@@ -105,3 +105,12 @@ Combined attempt6 onb1aa857a retained296/1 FAIL (0 errors/skips, unchanged sourc
 ## Paired final host acceptance; independent implementation review pending
 
 On frozen6bcdc1c4, the isolated UI2 passed, followed by Full and Play each137 classes/1,291 tests and the matching21-class/296-test combined cohort, all zero failures/errors/skips with unchanged source/artifact bindings. Exact test names match. [Candidate and explicit limitations](V99_CENTRAL_IMPLEMENTATION_CANDIDATE.md), [detailed evidence and retained failures](V99_CENTRAL_FINAL_HOST_RESULTS.json). A fresh independent implementation reviewer owns subsequent validation outputs; no implementation PASS or packaging approval is claimed.
+
+## Independent implementation R1 FAIL — two native functional blockers
+
+Independent review of6bcdc1c4 reproduced two defects on both Full and Play, despite its broad Full1,291 and affected Play296 tests passing. Diagnostic cases that assert the defective behavior passed2 per flavor; they are not acceptance successes.
+
+1. Ordinary regeneration has no yield boundary: a genuine fresh USER remains PREPARED until its held provider returns. Repair must interrupt only sealed inference under the actual consumed ordinary regeneration owner, conserve source/effect/memory evidence and free the same serial lane, without a tree/root/resume receipt or unsafe replay.
+2. An original USER suspended before delegation resumes with a blank workspace-operation request and fresh-delegation=false. Its legitimate delegation fails without an assignment. Repair must keep the loop replay prompt empty while restoring a separate canonical operation source and conserved original admission lineage. Original USER suspension may retain its existing authority/root/counters; P1/internal-origin suspension must not gain fresh-USER authority. Repeated suspension and explicit unclaimed recovery require paired positive/negative proofs.
+
+The source was released for these bounded corrections. Both diagnostic scenarios will become maintained acceptance regressions with corrected expected outcomes, followed by exact-source variant validation and independent re-review. No implementation PASS or new APK is approved. Historical failures and the original timing/device/live-provider limitations remain.

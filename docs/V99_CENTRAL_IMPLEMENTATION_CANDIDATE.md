@@ -1,4 +1,6 @@
-# v99 repair Phase B — host candidate, independent review pending
+# v99 repair Phase B — historical host candidate, independent R1 FAIL
+
+**Current disposition:** independent R1 review reproduced two functional blockers on Full and Play: ordinary regeneration availability and original-USER suspension operation context/authority. This candidate is not approved. See [retained findings and repair](V99_CENTRAL_AVAILABILITY_PROGRESS.md). The evidence below records the earlier host candidate accurately.
 
 ## Identity and status
 
