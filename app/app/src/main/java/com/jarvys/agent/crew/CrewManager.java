@@ -178,6 +178,9 @@ public final class CrewManager implements AutoCloseable {
         private final Object cycleLock = new Object();
         private volatile boolean cycleScheduled;
         private boolean initialStartSubmitted;
+        // Process-local proof of a fresh initial spawn, never inferred from a restored checkpoint.
+        // The initial scheduler and exact STOP consume it under cycleLock.
+        private boolean initialStartPending;
         // In-process capabilities only; never populated from snapshots, checkpoints, or source journals.
         private final Map<String, CoordinationRequest> coordinationRequests = new LinkedHashMap<>();
         // A single immutable reference keeps lock-free snapshot identity/evidence reads coherent.
@@ -1738,15 +1741,17 @@ public final class CrewManager implements AutoCloseable {
         if (bot == null) throw new IllegalArgumentException("Prepared worker is required");
         synchronized (bot.cycleLock) {
             if (bots.get(bot.id) != bot || !bot.cycleScheduled || bot.status != Status.QUEUED
-                    || bot.initialStartSubmitted || bot.thread != null)
+                    || !bot.initialStartPending || bot.initialStartSubmitted || bot.thread != null)
                 throw new IllegalStateException("Worker is not awaiting its initial mission start");
             bot.initialStartSubmitted = true;
+            bot.initialStartPending = false;
         }
         try {
             executor.execute(() -> runBot(bot));
         } catch (RuntimeException admissionFailure) {
             synchronized (bot.cycleLock) {
                 bot.cycleScheduled = false;
+                bot.initialStartPending = false;
                 bot.status = Status.FAILED;
                 bot.requiresExplicitResume = true;
                 bot.error = "Worker was not started because its durable checkpoint or submission failed";
@@ -1811,6 +1816,7 @@ public final class CrewManager implements AutoCloseable {
             bot.assignmentId = assignmentId == null ? "" : assignmentId;
             bot.ownerPrefix = conversationId + "/" + bot.id + "/";
             bot.cycleScheduled = true;
+            bot.initialStartPending = true;
             bots.put(id, bot);
             bot.checkpointChanged = ()->persistCheckpoint(bot);
         }
@@ -1845,6 +1851,7 @@ public final class CrewManager implements AutoCloseable {
         } catch (RuntimeException admissionFailure) {
             synchronized (bot.cycleLock) {
                 bot.cycleScheduled = false;
+                bot.initialStartPending = false;
                 bot.status = Status.FAILED;
                 bot.requiresExplicitResume = true;
                 bot.error = "Worker was not started because its durable checkpoint or submission failed";
@@ -3020,10 +3027,27 @@ public final class CrewManager implements AutoCloseable {
             bot.waitingReason = pending ? "deteniendo trabajo del proyecto" : "";
             CancellationToken token = bot.token;
             Thread thread = bot.thread;
-            token.cancel();
-            if (thread != null) thread.interrupt();
-            bus.signalWaiters();
-            publishMission(bot.missionId);
+            boolean finishDeferred = bot.initialStartPending && !bot.initialStartSubmitted
+                    && thread == null && bot.cycleScheduled;
+            java.util.concurrent.CountDownLatch deferredLatch = finishDeferred ? bot.terminated : null;
+            if (finishDeferred) {
+                bot.initialStartPending = false;
+                bot.cycleScheduled = false;
+                bot.finishedAtMillis = System.currentTimeMillis();
+            }
+            try {
+                token.cancel();
+                if (thread != null) thread.interrupt();
+                bus.signalWaiters();
+                publishMission(bot.missionId);
+            } catch (RuntimeException persistenceFailure) {
+                if (cancellationFailure == null) cancellationFailure = persistenceFailure;
+                else if (cancellationFailure != persistenceFailure) cancellationFailure.addSuppressed(persistenceFailure);
+            } finally {
+                // No executor/runBot finally owns this exact cycle. Complete it even if saving STOP fails.
+                // This is lifecycle termination only, never a fabricated worker RESULT or replay grant.
+                if (deferredLatch != null) deferredLatch.countDown();
+            }
             if (cancellationFailure != null) throw cancellationFailure;
             return true;
         }

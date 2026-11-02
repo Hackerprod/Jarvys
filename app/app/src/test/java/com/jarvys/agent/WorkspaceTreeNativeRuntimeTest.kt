@@ -892,17 +892,30 @@ class WorkspaceTreeNativeRuntimeTest {
 
     @Test fun postbindAdmissionFailureCompletesNeverSubmittedNativeCycleWithoutReplay()=deferredAdmissionFailure(3,false)
     @Test fun prebindAdmissionFailureKeepsOriginalCauseAndConservesUncertainReservation()=deferredAdmissionFailure(2,true)
-    private fun deferredAdmissionFailure(failAt:Int,expectCleanupFailure:Boolean) {
+    @Test fun failedStopPersistenceStillCompletesNeverSubmittedNativeCycleAndRetainsOriginalError()=deferredAdmissionFailure(3,false,true)
+    private fun deferredAdmissionFailure(failAt:Int,expectCleanupFailure:Boolean,failStopPersistence:Boolean=false) {
         val providerCalls=AtomicInteger();val original=IllegalStateException("controlled_postspawn_admission_failure")
+        val stopFailure=IllegalStateException("controlled_stop_checkpoint_failure")
         var reservation:TreeExecutionReservation?=null
         val thrown=runCatching {
-            start(admissionCheck={step,admitted ->
+            start(configureManager={manager ->
+                if(failStopPersistence) {
+                    val field=CrewManager::class.java.getDeclaredField("checkpointSupport").apply{isAccessible=true}
+                    val actual=field.get(manager) as CrewManager.CheckpointSupport
+                    val failing=java.lang.reflect.Proxy.newProxyInstance(actual.javaClass.classLoader,arrayOf(CrewManager.CheckpointSupport::class.java)) {_,method,args ->
+                        if(method.name=="persist" && (args?.firstOrNull() as? CrewManager.Bot)?.status()==CrewManager.Status.STOPPED)throw stopFailure
+                        try {method.invoke(actual,*(args?:emptyArray()))}catch(wrapped:java.lang.reflect.InvocationTargetException){throw wrapped.targetException}
+                    } as CrewManager.CheckpointSupport
+                    manager.configureCheckpoints(failing)
+                }
+            },admissionCheck={step,admitted ->
                 reservation=admitted
                 if(step==failAt)throw original
             }) {_,_,_->providerCalls.incrementAndGet();ModelReply("Must not execute",emptyList())}
         }.exceptionOrNull()
         assertSame("Cleanup must not mask the original admission error",original,thrown)
         if(expectCleanupFailure)assertTrue("Exact prebind cleanup denial is retained",original.suppressed.isNotEmpty())
+        if(failStopPersistence)assertTrue("STOP persistence failure is retained",original.suppressed.any{it===stopFailure})
         val manager=managers.single();val bot=manager.bots().single();val token=bot.token;val cycle=bot.cycleId()
         fun field(name:String)=CrewManager.Bot::class.java.getDeclaredField(name).apply{isAccessible=true}.get(bot)
         assertFalse(field("initialStartSubmitted") as Boolean);assertNull(field("thread"))
@@ -927,6 +940,41 @@ class WorkspaceTreeNativeRuntimeTest {
         }}
         assertFalse(manager.stopExact(bot.id,CancellationToken.crewChild()))
         assertSame(token,bot.token);assertEquals(cycle,bot.cycleId());assertEquals(0,providerCalls.get())
+    }
+
+    @Test fun submittedInitialCycleKeepsTerminationOwnedByRunnableUntilCancelledRunUnwinds() {
+        val submitting=CountDownLatch(1);val releaseSubmission=CountDownLatch(1);val providers=AtomicInteger()
+        val startFuture=pool.submit<Fixture> {
+            start(configureManager={manager ->
+                val field=CrewManager::class.java.getDeclaredField("executor").apply{isAccessible=true}
+                val original=field.get(manager) as java.util.concurrent.ExecutorService
+                field.set(manager,object:java.util.concurrent.AbstractExecutorService() {
+                    override fun execute(command:Runnable) {
+                        submitting.countDown();check(releaseSubmission.await(15,TimeUnit.SECONDS))
+                        original.execute(command)
+                    }
+                    override fun shutdown()=original.shutdown()
+                    override fun shutdownNow():MutableList<Runnable> = original.shutdownNow()
+                    override fun isShutdown()=original.isShutdown
+                    override fun isTerminated()=original.isTerminated
+                    override fun awaitTermination(timeout:Long,unit:TimeUnit)=original.awaitTermination(timeout,unit)
+                })
+            }) {_,_,_->providers.incrementAndGet();ModelReply("Must not run",emptyList())}
+        }
+        try {
+            assertTrue(submitting.await(15,TimeUnit.SECONDS))
+            val manager=liveManager;val bot=manager.bots().single();val token=bot.token;val cycle=bot.cycleId()
+            fun field(name:String)=CrewManager.Bot::class.java.getDeclaredField(name).apply{isAccessible=true}.get(bot)
+            assertTrue(field("initialStartSubmitted") as Boolean);assertNull(field("thread"))
+            pool.submit {manager.stopExact(bot.id,token)}.get(15,TimeUnit.SECONDS)
+            assertEquals(CrewManager.Status.STOPPED,bot.status())
+            assertTrue("Submitted runnable still owns completion",field("cycleScheduled") as Boolean)
+            assertEquals(1L,(field("terminated") as CountDownLatch).count)
+            assertFalse(bot.canResume());assertEquals(0,providers.get())
+            releaseSubmission.countDown();startFuture.get(15,TimeUnit.SECONDS);await(bot)
+            assertFalse(field("cycleScheduled") as Boolean);assertEquals(0L,(field("terminated") as CountDownLatch).count)
+            assertSame(token,bot.token);assertEquals(cycle,bot.cycleId());assertEquals(0,providers.get())
+        } finally {releaseSubmission.countDown();startFuture.cancel(true)}
     }
 
 }

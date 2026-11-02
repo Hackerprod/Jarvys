@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Real serial service/runtime with a provider that cannot physically unwind until released. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk=[34],application=CentralFlowTestApplication::class,shadows=[ArtifactOsShadow::class])
+@Config(sdk=[34],application=TreeNativeTestApplication::class,shadows=[ArtifactOsShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class CentralStopFreshUserTest {
     private val storage=ChatTestStore(runTestOnWorker=false,registerApplicationFilesDirectory=true)
@@ -35,10 +35,16 @@ class CentralStopFreshUserTest {
     private val release=CountDownLatch(1)
     private val freshEntered=CountDownLatch(1)
     private val calls=AtomicInteger()
+    private val runtimeFailure=java.util.concurrent.atomic.AtomicReference<Throwable>()
     private var startId=0
     @Before fun setup() {
         storage.localRunStore(context.filesDir)
-        storage.onDatabaseWorker {FreshStorageBootstrap.ensure(context);ChatDatabaseBridge.getInstance(context).ensureConversationSync(session,"chat")}
+        storage.onDatabaseWorker {
+            FreshStorageBootstrap.ensure(context)
+            (context as TreeNativeTestApplication).connectionAccess().initializeAsync().get()
+            check((context as TreeNativeTestApplication).connectionAccess().isReady())
+            ChatDatabaseBridge.getInstance(context).ensureConversationSync(session,"chat")
+        }
         ProviderSettings(context).apply {setProvider(ProviderSettings.Provider.OPENROUTER);setOpenRouterModel("offline/stop-fresh")}
         check(context.getSharedPreferences("provider_context_metadata",0).edit().putInt("model_offline/stop-fresh",32768)
             .putLong("fetched_offline/stop-fresh",System.currentTimeMillis()).commit())
@@ -57,6 +63,11 @@ class CentralStopFreshUserTest {
             }
         }
         service.runtimeFactory=AgentForegroundService.RuntimeFactory {c,id,skills -> CoreAgentRuntime(c,id,skills,CorePromptBudget.standard(),provider)}
+        service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->
+            try {runtime.runMainChat(goal,history,attachments,token,progress)}
+            catch(cancelled:java.util.concurrent.CancellationException){throw cancelled}
+            catch(problem:Throwable){runtimeFailure.set(problem);throw AssertionError("Actual Central runtime failed",problem)}
+        }
     }
     @After fun cleanup() {
         release.countDown();StopController.stopAllRuns();StopController.getInstance().stopRun()
@@ -71,7 +82,7 @@ class CentralStopFreshUserTest {
     }
     private fun await(description:String,condition:()->Boolean) {
         val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(20)
-        while(!condition()){pump();check(System.nanoTime()<deadline){"$description; ${AgentForegroundService.getLastRunReport()}"};Thread.sleep(10)}
+        while(!condition()){runtimeFailure.get()?.let {throw AssertionError(description,it)};pump();check(System.nanoTime()<deadline){"$description; ${AgentForegroundService.getLastRunReport()}"};Thread.sleep(10)}
     }
     private fun rows()=storage.onDatabaseWorker {LocalRunStore(context).readConversationMessages(session)}
     private fun submit(text:String):String {

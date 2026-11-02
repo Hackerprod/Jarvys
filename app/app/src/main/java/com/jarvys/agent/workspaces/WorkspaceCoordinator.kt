@@ -359,16 +359,25 @@ class WorkspaceCoordinator internal constructor(context: Context,
                 } catch (failure: RuntimeException) {
                     // Never reset STARTED or reuse a reservation. No parent cancellation hook survives dispatch:
                     // stopRequester deliberately leaves an already-started child running to report.
-                    if (!started) admittedBot?.let { manager.stopExact(it.id, it.token) }
-                    val current = tree.getNode(node.rootId, node.nodeId)
-                    if (!started && current != null) {
-                        val native = db.getAssignment(workspaceId, assignment.assignmentId)
-                        if (current.state == TreeNodeState.STARTED && native?.state == WorkspaceAssignmentState.STARTED)
-                            runCatching { tree.markUncertain(TreeNodeFence.of(current)) }
-                        else if (native?.state == WorkspaceAssignmentState.BOUND && admittedBot != null)
-                            runCatching { tree.markDispatchUncertain(reservation,TreeNodeFence.of(current),admittedBot!!.id,admittedBot!!.cycleId()) }
+                    // Native STOP can itself report an exact-owner or persistence failure. Still attempt
+                    // durable uncertainty classification and preserve the original admission failure.
+                    fun cleanup(action: () -> Unit) {
+                        try { action() } catch (cleanupFailure: RuntimeException) {
+                            if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
+                        }
                     }
-                    WorkspaceChanges.changed()
+                    if (!started) cleanup { admittedBot?.let { manager.stopExact(it.id, it.token) }; Unit }
+                    if (!started) cleanup {
+                        val current = tree.getNode(node.rootId, node.nodeId)
+                        if (current != null) {
+                            val native = db.getAssignment(workspaceId, assignment.assignmentId)
+                            if (current.state == TreeNodeState.STARTED && native?.state == WorkspaceAssignmentState.STARTED)
+                                tree.markUncertain(TreeNodeFence.of(current))
+                            else if (native?.state == WorkspaceAssignmentState.BOUND && admittedBot != null)
+                                tree.markDispatchUncertain(reservation,TreeNodeFence.of(current),admittedBot!!.id,admittedBot!!.cycleId())
+                        }
+                    }
+                    cleanup { WorkspaceChanges.changed() }
                     throw failure
                 }
             }

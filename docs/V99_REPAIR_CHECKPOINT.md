@@ -18,3 +18,11 @@ Regressions use actual native/service paths with barriers and offline injected p
 Source-backed design work is separate from Phase A fixes. Preserve one Central chat, single mutation owner, durable delegation/return evidence and existing general-purpose worker capabilities. Reuse upstream asynchronous delegation/requester wait and priority-human semantics, not arbitrary mission timers or new quotas. Do not import new UI, privileged Chief inheritance, parallel memory, destructive upgrades or automatic replay of uncertain effects. Concrete ownership/yield design and independent review precede activation.
 
 Each phase requires exact-source deterministic tests and an independent clean-context evaluator; failed results remain retained. No new APK or repair PASS is claimed.
+
+## First diagnostic result and native fix candidate
+
+Fresh frozen Full export passed with source binding unchanged. The first guarded run executed 43 tests: native41 had exactly the two new intended failures (prebind original-error masking and postbind scheduled lifecycle leak), while its prior39 passed. The two new service tests failed before provider entry because their fixture did not initialize current connection readiness; those failures are retained and are **not STOP reproduction evidence**.
+
+Native production repair is now a candidate: positive process-local initial-start ownership for fresh spawned workers, consumed under the cycle lock; exact never-submitted STOP completes its own lifecycle even when persistence cleanup fails. Submitted/restored/replacement cycles are not inferred as unsubmitted. Coordinator preserves the original exception and independently attempts STOP/uncertainty cleanup, attaching secondary failures instead of hiding them. No synthetic worker result, whole-mission completion, or uncertain replay. Two adjacent regressions cover persistence failure and submission winning the STOP race.
+
+The service fixture now uses the same native connection readiness as current acceptance and captures the actual runtime exception. **Production service remains unchanged**, awaiting a meaningful red reproduction. Next frozen Full run is a mixed diagnostic: native green candidate plus corrected service red. No repair PASS is claimed.
