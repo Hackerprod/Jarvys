@@ -18,7 +18,8 @@ class CentralAvailabilityUiReadThreadTest {
     private val context:Context get()=ApplicationProvider.getApplicationContext()
     @Test fun existingUiFixtureDispatchesReadOnlyInspectionWithoutCreatingEitherDatabase() {
         assertSame(Looper.getMainLooper(),Looper.myLooper())
-        val file=chat.onDatabaseWorker {java.io.File(StorageGeneration(context).chatRoot(),"agent.db")}
+        // Match the read-only inspector path without invoking bootstrap-producing StorageGeneration.
+        val file=java.io.File(java.io.File(java.io.File(context.filesDir,"jarvys"),StorageGeneration.NAME),"agent.db")
         val registry=context.getDatabasePath(WorkspaceRegistry.DATABASE_NAME)
         assertFalse(file.exists());assertFalse(registry.exists())
         val bridge=ChatDatabaseBridge.getInstance(context)

@@ -25,7 +25,7 @@ class NativeRegenerationReceiptTest {
         val assistant=runBlocking {
             val repo=ConversationRepository(db)
             val writer=ConversationModelTurnWriter(db,repo,ModelTranscriptRepository(db))
-            val prepared=writer.appendPreparedCentralSubmission(AppendMessageInput(session,"user",listOf(MessagePartInput("text",id),MessagePartInput(CentralSubmissionRequest.PART_KIND,CentralSubmissionRequest.encode(emptyList())))),id,"fixture-process")
+            val prepared=writer.appendPreparedCentralSubmission(AppendMessageInput(session,"user",listOf(MessagePartInput("text",id),MessagePartInput(CentralSubmissionRequest.PART_KIND,CentralSubmissionRequest.encode(emptyList()))),stableId=id),id,"fixture-process")
             val row=db.withChatWriteTransaction {CentralTurnSubmissionRepository(db).claimPreparedInTransaction(prepared,"fixture-process","run-$id",1,setOf(id))}
             val answer=(repo.appendMessage(AppendMessageInput(session,"assistant",listOf(MessagePartInput("text","answer")),status="COMPLETED",ownerUserMessageId=row.userMessageId,runId=row.claimRunId)) as ChatDbResult.Success).value
             val terminal=org.json.JSONObject().put("version",1).put("kind","DIRECT").put("assistantId",answer.messageId).put("runId",row.claimRunId).put("originRunId",row.claimRunId).put("sourceSha256",row.sourceSha256).put("finalOwnerMessageId",row.userMessageId).put("chainDigest","a".repeat(64)).toString()
