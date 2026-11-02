@@ -612,8 +612,11 @@ class CentralAvailabilityBoundaryAcceptanceTest {
         await("Claim lane released") {!AgentForegroundService.hasActiveRun(session)}
         assertEquals(1,checked.get());assertEquals(3,calls.get())
     }
-    private fun rejectActualPrebindClaim(stop:Boolean) {
+    private fun rejectActualPrebindClaim(stop:Boolean,genericStop:Boolean=false) {
         val selected=parkedWithoutLivePermission();val before=root(selected.messageId)
+        val freshRootBefore=root(submissions().single {it.userMessageId!=selected.messageId}.userMessageId)
+        val oldStopEpoch=storage.onDatabaseWorker {WorkspaceRegistry(context).use {WorkspaceTreeStore(it).getNode(before.rootId,before.rootId)!!.stopEpoch}}
+        val exactClaim=AtomicReference<CentralTreeAdmission.SuspensionClaim>()
         val previous=service.mainChatRunner;val observed=CountDownLatch(1);val denial=AtomicReference<Throwable>()
         val enteredPrebind=CountDownLatch(1);val releasePrebind=CountDownLatch(1);val actualToken=AtomicReference<CancellationToken>()
         val callbackProblem=AtomicReference<Throwable>()
@@ -623,7 +626,7 @@ class CentralAvailabilityBoundaryAcceptanceTest {
             else {
                 try {
                     if(stop) {
-                        actualToken.set(token);enteredPrebind.countDown()
+                        exactClaim.set(claim);actualToken.set(token);enteredPrebind.countDown()
                         // Only this test barrier consumes thread interruption; native token remains cancelled.
                         while(releasePrebind.count>0)try {releasePrebind.await()}catch(_:InterruptedException){}
                     } else WorkspaceRegistry(context).use {registry ->registry.treeRead {db ->
@@ -642,8 +645,14 @@ class CentralAvailabilityBoundaryAcceptanceTest {
             assertTrue(drafts.recoverPreparedSuspension(selected))
             if(stop) {
                 await("Actual reserved owner pauses before successor binding") {enteredPrebind.count==0L}
-                stopSession() // Run STOP from the external native caller, never await it on its cancelled owner thread.
-                assertTrue(actualToken.get().wasStoppedByUser());releasePrebind.countDown()
+                if(genericStop) StopController.stopAllRuns() else stopSession()
+                assertTrue(actualToken.get().wasStoppedByUser())
+                if(!genericStop) {
+                    val owned=exactClaim.get()
+                    assertThrows(IllegalStateException::class.java) {com.jarvys.agent.workspaces.WorkspaceTreeStops.requireRootAllowed(context,owned.rootId(),owned.confirmedYield().oldCycleId())}
+                    assertThrows(IllegalStateException::class.java) {com.jarvys.agent.workspaces.WorkspaceTreeStops.requireRootAllowed(context,owned.rootId(),owned.cycleId())}
+                }
+                releasePrebind.countDown()
             }
             await("Native reserved claim reaches deterministic prebind boundary") {observed.count==0L}
         } finally {releasePrebind.countDown()}
@@ -652,6 +661,23 @@ class CentralAvailabilityBoundaryAcceptanceTest {
         assertNotNull("Actual runtime must reject the revoked claim",denial.get())
         if(stop)assertTrue("Exact native token STOP must cause cancellation",denial.get() is java.util.concurrent.CancellationException)
         assertEquals(2,calls.get());assertEquals(before.executions,root(selected.messageId).executions)
+        if(stop) {
+            // Generic StopController callbacks may wait for dispatch release; no synchronous global claim is made.
+            await("Exact stopped root closes after physical unwind") {root(selected.messageId).admissionsClosed && root(selected.messageId).wakesClosed}
+            val owned=exactClaim.get()
+            assertThrows(IllegalStateException::class.java) {com.jarvys.agent.workspaces.WorkspaceTreeStops.requireRootAllowed(context,owned.rootId(),owned.confirmedYield().oldCycleId())}
+            assertThrows(IllegalStateException::class.java) {com.jarvys.agent.workspaces.WorkspaceTreeStops.requireRootAllowed(context,owned.rootId(),owned.cycleId())}
+            val closed=root(selected.messageId)
+            assertTrue("Exact original root admissions close durably",closed.admissionsClosed)
+            assertTrue("Exact original root wakes close durably",closed.wakesClosed)
+            assertEquals("STOPPED",closed.closeReason)
+            assertEquals(before.windowEpoch,closed.windowEpoch);assertEquals(before.requests,closed.requests);assertEquals(before.wakes,closed.wakes)
+            assertEquals("Unrelated completed fresh root is untouched",freshRootBefore,root(freshRootBefore.origin.originUserMessageId))
+            val stoppedNode=storage.onDatabaseWorker {WorkspaceRegistry(context).use {WorkspaceTreeStore(it).getNode(before.rootId,before.rootId)!!}}
+            assertTrue(stoppedNode.stopEpoch>oldStopEpoch)
+            assertFalse(AgentForegroundService.hasLiveCentralSuspension(selected.centralAvailability!!.suspension!!))
+            assertTrue(storage.onDatabaseWorker {CentralTreeAdmission.listRecoverableSuspensions(context,session).none {it.originalUserMessageId==selected.messageId}})
+        }
         storage.onDatabaseWorker {WorkspaceRegistry(context).use {registry ->registry.treeRead {db ->
             db.rawQuery("SELECT state FROM bot_tree_central_resume WHERE root_id=?",arrayOf(before.rootId)).use {
                 assertTrue(it.moveToFirst());assertTrue(it.getString(0) in setOf("RESERVED","UNCERTAIN","CANCELLED"))
@@ -662,5 +688,91 @@ class CentralAvailabilityBoundaryAcceptanceTest {
     }
     @Test fun actualReservedClaimRejectsDurableOwnerAndRevisionMutationBeforeSuccessorBinding()=rejectActualPrebindClaim(false)
     @Test fun realServiceStopAfterReservationDeniesSuccessorBindingAndRetainsNoReplayEvidence()=rejectActualPrebindClaim(true)
+    @Test fun genericStopFacadeEventuallyClosesExactReservedRootWithoutProviderReplay()=rejectActualPrebindClaim(true,true)
+    @Test fun prebindStopCancelsNeverStartedChildButRetainsStartedChildReportWithoutWakingRoot() {
+        holdFirst=false;holdThird=true
+        val priorMode=CrewMode.read(context)
+        val childEntered=CountDownLatch(1);val releaseChild=CountDownLatch(1)
+        val enteredClaim=CountDownLatch(1);val releaseClaim=CountDownLatch(1)
+        val childCalls=AtomicInteger();val childToken=AtomicReference<CancellationToken>()
+        val ownerToken=AtomicReference<CancellationToken>();val callbackFailure=AtomicReference<Throwable>()
+        var manager:CrewManager?=null
+        val (workspace,profile)=storage.onDatabaseWorker {
+            val scope=WorkspaceRegistry(context).use {it.createWorkspace(java.util.UUID.randomUUID().toString(),"Exact stopped root children")}
+            ChatDatabaseBridge.getInstance(context).ensureConversationSync(scope.executionSessionId,"workspace")
+            val role=CrewProfileRepository(context).create(CrewProfile(CrewProfileRepository.newCustomId(),1,"Generalist","General-purpose planning","Use retained evidence",emptyList(),emptyList(),CrewProfile.WorkspaceMode.LEGACY_CHAT),emptyList(),emptyList())
+            val provider=object:ModelProviderClient {
+                override fun complete(systemPrompt:String,userPrompt:String,images:List<com.jarvys.agent.device.ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=error("Conversation required")
+                override fun completeConversation(systemPrompt:String,history:List<ConversationTurn>,userPrompt:String,images:List<com.jarvys.agent.device.ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply {
+                    childCalls.incrementAndGet();childToken.set(token);childEntered.countDown()
+                    check(releaseChild.await(20,TimeUnit.SECONDS));token.throwIfCancelled()
+                    return ModelReply("Retained started child result after parent stop",emptyList())
+                }
+            }
+            val runtime=CoreAgentRuntime(context,scope.executionSessionId,emptyList(),CorePromptBudget.standard())
+            manager=runtime.configureCrewManager(runtime.createTools(),CoreAgentModel(context,provider,scope.executionSessionId),null)
+            scope to role
+        }
+        fun response(content:String,key:String?=null):String {
+            val message=org.json.JSONObject().put("role","assistant").put("content",content)
+            if(key!=null) {
+                val args=org.json.JSONObject().put("action","delegate").put("workspace_id",workspace.workspaceId).put("key",key)
+                    .put("role",profile.id).put("mission","Produce retained native evidence").put("tools",org.json.JSONArray()).put("continue_result",true)
+                message.put("tool_calls",org.json.JSONArray().put(org.json.JSONObject().put("id",key).put("type","function")
+                    .put("function",org.json.JSONObject().put("name",com.jarvys.agent.workspaces.CentralWorkspaceTool.NAME).put("arguments",args.toString()))))
+            }
+            return org.json.JSONObject().put("choices",org.json.JSONArray().put(org.json.JSONObject().put("message",message))).toString()
+        }
+        socketReply={index->when(index) {
+            1->response("","started-child-before-stop")
+            2->{CrewMode.write(context,CrewMode.OFF);response("","queued-child-before-stop")}
+            3->response("STALE old inference after children")
+            else->response("Independent fresh request done")
+        }}
+        val previous=service.mainChatRunner
+        service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->
+            val claim=actualClaim(runtime)
+            if(claim==null)previous.run(runtime,goal,history,attachments,token,progress)
+            else {
+                ownerToken.set(token);enteredClaim.countDown()
+                while(releaseClaim.count>0)try {releaseClaim.await()}catch(_:InterruptedException){}
+                try {runtime.runMainChat(goal,history,attachments,token,progress)}
+                catch(problem:Throwable) {callbackFailure.set(problem);throw problem}
+            }
+        }
+        try {
+            val original=send("Start one child and retain one never-started child")
+            await("Actual first child and Central third inference") {childEntered.count==0L && thirdEntered.count==0L}
+            val before=root(original)
+            val initialChildren=storage.onDatabaseWorker {WorkspaceRegistry(context).use {WorkspaceTreeStore(it).children(before.rootId,before.rootId)}}
+            val queued=initialChildren.single {it.state==com.jarvys.agent.workspaces.TreeNodeState.QUEUED}
+            val started=initialChildren.single {it.nodeId!=queued.nodeId}
+            assertNotNull(started.botId);assertNull(queued.botId);assertNull(queued.executionEventId)
+            val fresh=send("Independent new request before exact prebind STOP")
+            await("Original actual successor reserved before binding") {enteredClaim.count==0L}
+            val freshBefore=root(fresh)
+            stopSession();assertTrue(ownerToken.get().wasStoppedByUser());releaseClaim.countDown()
+            await("Stopped actual owner physically releases") {!AgentForegroundService.hasActiveRun(session)}
+            assertTrue(callbackFailure.get() is java.util.concurrent.CancellationException)
+            val stopped=root(original)
+            assertTrue(stopped.admissionsClosed);assertTrue(stopped.wakesClosed);assertEquals("STOPPED",stopped.closeReason)
+            assertEquals(before.executions,stopped.executions);assertEquals(before.requests,stopped.requests);assertEquals(before.windowEpoch,stopped.windowEpoch)
+            storage.onDatabaseWorker {WorkspaceRegistry(context).use {registry ->
+                val tree=WorkspaceTreeStore(registry);val cancelled=tree.getNode(before.rootId,queued.nodeId)!!
+                assertEquals(com.jarvys.agent.workspaces.TreeNodeState.TERMINAL,cancelled.state);assertEquals("CANCELLED",cancelled.terminalOutcome)
+                assertNotNull(cancelled.reportReceipt);assertNull(cancelled.botId);assertNull(cancelled.executionEventId)
+                assertEquals(com.jarvys.agent.workspaces.WorkspaceAssignmentState.PREPARED,registry.getAssignment(workspace.workspaceId,queued.assignmentId!!)!!.state)
+            }}
+            assertFalse("Stopping requester is not a blanket started-child token STOP",childToken.get().wasStoppedByUser())
+            releaseChild.countDown()
+            val bot=manager!!.bots().single()
+            await("Started child retains actual native result and canonical report") {bot.isQuiescent && bot.resultEvidence()!=null && storage.onDatabaseWorker {WorkspaceRegistry(context).use {WorkspaceTreeStore(it).getNode(before.rootId,started.nodeId)!!.reportReceipt!=null}}}
+            val evidence=bot.resultEvidence()!!
+            assertNotNull(storage.onDatabaseWorker {LocalRunStore(context).readCrewResultEvidence(workspace.executionSessionId,evidence.evidenceId)})
+            assertEquals(1,childCalls.get());assertEquals(stopped,root(original));assertEquals(freshBefore,root(fresh))
+            val count=calls.get();repeat(4){AgentForegroundService.nudgeCentralHandoff(context);pump()}
+            service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);pump();assertEquals(count,calls.get())
+        } finally {releaseClaim.countDown();releaseChild.countDown();releaseThird.countDown();CrewMode.write(context,priorMode);manager?.close()}
+    }
 
 }
