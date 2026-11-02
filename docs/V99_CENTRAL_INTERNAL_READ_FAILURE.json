@@ -1,0 +1,134 @@
+{
+  "status": "FAIL-retained-not-acceptance",
+  "sourceCommit": "35e0f45e2d002f98038f907ec7a93c1d7387e0f7",
+  "terminal": {
+    "exit": 1,
+    "sourceUnchanged": true,
+    "artifactsUnchanged": true,
+    "xmlFiles": 10,
+    "counts": {
+      "tests": 132,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "terminalSha256": "a1ea92bf679c35d92c3b3d2806e2434cf498605a1fc58e516ded089096d8fc61",
+  "sourceBindingSha256": "216837a437e04213f5f8500746fb5e27ecc166ae75fff407f6802bb92dad13e5",
+  "artifactManifestSha256": "d389168e73d2a805051e6a615d914da985e316e58a113f94e9e3d24a53c321bb",
+  "classes": [
+    {
+      "className": "com.jarvys.agent.CentralAvailabilityBoundaryAcceptanceTest",
+      "counts": {
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "212e900a48d1af018cf255140f855f6151d2b8fe5c4904c6a283324662b6dece"
+    },
+    {
+      "className": "com.jarvys.agent.CentralAvailabilityServiceTest",
+      "counts": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "4cd280a7e829d702ae5767f735cfbd39ea26677f083e6d78db57b0fdd7da4222"
+    },
+    {
+      "className": "com.jarvys.agent.CentralTreeServiceAcceptanceTest",
+      "counts": {
+        "tests": 26,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "3afa3e151440328c936a1b2b9eb67a18f6de10ec2d46553bb9f4fe6903b2618b"
+    },
+    {
+      "className": "com.jarvys.agent.InternalContinuationSuspensionAuthorityTest",
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "suspendedActualInternalContinuationKeepsOperationContextButCannotDelegate"
+      ],
+      "xmlSha256": "449c424137160164772aea7d231184b8b33cb18f572b5f32632a42f870934883"
+    },
+    {
+      "className": "com.jarvys.agent.LateSteerAvailabilityAcceptanceTest",
+      "counts": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "46462a3abc79b9160a02c644d8d93491d04ba736af6b1efdf7991b0e06cbcd35"
+    },
+    {
+      "className": "com.jarvys.agent.MainAgentInteractionTest",
+      "counts": {
+        "tests": 54,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "9e51c9e3b4e0e63ef74bf83f968742c5467e5a0d13ed227a8e3eacfd1e4f016e"
+    },
+    {
+      "className": "com.jarvys.agent.OrdinaryAgentAvailabilityAcceptanceTest",
+      "counts": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "7c1fc295c11f03fbb218b393c14576906873fa84799b66ba2efae944b1c6b1b1"
+    },
+    {
+      "className": "com.jarvys.agent.OrdinaryRegenerationAvailabilityTest",
+      "counts": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "14ecd81eefd1276dd519e3211ce40ac88c40b50a7a78f3727394b488575fd1c9"
+    },
+    {
+      "className": "com.jarvys.agent.OriginalUserSuspensionAuthorityTest",
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "92eb1579c3dbcef150752824b52114a2bbc481187b92a4bc0f7ac2fc9616cdf0"
+    },
+    {
+      "className": "com.jarvys.agent.chatdb.LegacyRegenerationGenerationTest",
+      "counts": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "952b6e3790b9e900b754c78728b73c0032d85587946bc2f3ee6d0fbf83ed132e"
+    }
+  ],
+  "diagnosticSummary": "Sole internal-continuation retained tool-result assertion failed; remaining131 cases passed. No broader union or Play run."
+}

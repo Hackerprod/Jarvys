@@ -626,7 +626,9 @@ public final class CoreAgentRuntime {
               : null;
       if (mainChat && depth == 0 && context != null
           && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)) {
-        if (claimedContinuationInput == null) {
+        if (claimedContinuationInput == null && !(suspensionClaim != null
+            && suspensionClaim.confirmedYield().operationLineage() != null
+            && CentralOperationLineage.INTERNAL.equals(suspensionClaim.confirmedYield().operationLineage().kind))) {
           toolRegistry = toolRegistry.withInvocationSourceProvider(
               transcriptStore.centralSourceProvider(currentTurnOwnerMessageId, runId));
         } else {
@@ -637,7 +639,9 @@ public final class CoreAgentRuntime {
             }
             @Override public void bindPrepared(CoreTool tool, String callId, Map<String,Object> arguments,
                 CoreAgentLoop.PreparedInvocationSnapshot prepared, EffectInvocation invocation) {
-              WorkspaceContinuationDelivery.requireResultRead(context, claimedContinuationInput, token, tool, arguments);
+              if (suspensionClaim != null)
+                WorkspaceContinuationDelivery.requireSuspendedResultRead(context,suspensionClaim,token,tool,arguments);
+              else WorkspaceContinuationDelivery.requireResultRead(context, claimedContinuationInput, token, tool, arguments);
             }
           });
         }

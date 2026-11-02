@@ -77,6 +77,11 @@ class InternalContinuationSuspensionAuthorityTest {
         }
         val selected=AtomicReference<JSONObject>()
         val operation=AtomicReference<String>()
+        val resumedInitialOwner=AtomicReference<String>()
+        val exactReadChecks=AtomicInteger()
+        val finishedClaim=AtomicReference<CentralTreeAdmission.SuspensionClaim>()
+        val finishedToken=AtomicReference<CancellationToken>()
+        val finishedTool=AtomicReference<CoreTool>()
         val denied=AtomicReference<String>()
         val initialP1=AtomicInteger()
         val resumedP1=AtomicInteger()
@@ -89,6 +94,7 @@ class InternalContinuationSuspensionAuthorityTest {
                 assertEquals("Suspension must not replay a new USER prompt","",goal)
                 assertEquals(ConversationInput.Origin.AGENT,claim.confirmedYield().finalOwnerOrigin())
                 operation.set(claim.originalOperationRequest(token))
+                resumedInitialOwner.set(claim.confirmedYield().ownerMessageId())
             }
             prior.run(runtime,goal,history,attachments,token,progress).also {
                 if(claim!=null) {
@@ -97,6 +103,26 @@ class InternalContinuationSuspensionAuthorityTest {
                     val authority=CoreAgentRuntime::class.java.getDeclaredField("centralTreeAdmission").apply {isAccessible=true}.get(runtime) as CentralTreeAdmission
                     try {authority.requireFreshDelegation(token);fail("Internal continuation gained original USER authority")}
                     catch(expected:IllegalStateException){denied.set(expected.message)}
+                    val readTool=runtime.createTools().get(CentralWorkspaceTool.NAME)
+                    val readArgs=mapOf<String,Any>("action" to "read_result","workspace_id" to workspace.workspaceId,
+                        "result_id" to selected.get().getString("resultReferenceId"),"expected_sha256" to selected.get().getString("contentSha256"))
+                    WorkspaceContinuationDelivery.requireSuspendedResultRead(context,claim,token,readTool,readArgs)
+                    fun deniedRead(args:Map<String,Any>,candidate:CancellationToken=token) {
+                        assertThrows(IllegalStateException::class.java) {WorkspaceContinuationDelivery.requireSuspendedResultRead(context,claim,candidate,readTool,args)}
+                        exactReadChecks.incrementAndGet()
+                    }
+                    deniedRead(readArgs+ ("workspace_id" to UUID.randomUUID().toString()))
+                    deniedRead(readArgs+ ("result_id" to "workspace-result-"+"c".repeat(64)))
+                    deniedRead(readArgs+ ("expected_sha256" to "d".repeat(64)))
+                    deniedRead(readArgs,CancellationToken.cancellable())
+                    val bridge=ChatDatabaseBridge.getInstance(context)
+                    val old=storage.onDatabaseWorker {requireNotNull(bridge.readMessageSync(session,claim.confirmedYield().ownerMessageId())).text}
+                    storage.onDatabaseWorker {com.jarvys.agent.chatdb.JarvysChatDatabaseProvider.getInstance(context).testChatSql.execSQL(
+                        "UPDATE message_parts SET payload=? WHERE conversation_id=? AND message_id=? AND kind='text'",arrayOf("Changed canonical P1",session,claim.confirmedYield().ownerMessageId()))}
+                    try {deniedRead(readArgs)} finally {storage.onDatabaseWorker {com.jarvys.agent.chatdb.JarvysChatDatabaseProvider.getInstance(context).testChatSql.execSQL(
+                        "UPDATE message_parts SET payload=? WHERE conversation_id=? AND message_id=? AND kind='text'",arrayOf(old,session,claim.confirmedYield().ownerMessageId()))}}
+                    WorkspaceContinuationDelivery.requireSuspendedResultRead(context,claim,token,readTool,readArgs)
+                    finishedClaim.set(claim);finishedToken.set(token);finishedTool.set(readTool)
                     resumedP1.incrementAndGet()
                 }
             }
@@ -145,7 +171,39 @@ class InternalContinuationSuspensionAuthorityTest {
         assertEquals(beforeSuspension.executions+1,root(original).executions)
         assertNotEquals(root(original).rootId,root(fresh).rootId)
         val transcript=storage.onDatabaseWorker {LocalRunStore(context).readModelTranscriptRows(session)}
-        assertTrue("Actual delegate proposal received a retained tool result",transcript.any {it.toString().contains("must-deny-internal-delegate") && it.toString().contains("Workspace request could not complete")})
+        // The retained P1 read-only guard rejects mutation before the workspace backend runs.
+        // Prove the exact canonical call/result pair, not a guessed backend error substring.
+        val callId="must-deny-internal-delegate"
+        val source=storage.onDatabaseWorker {requireNotNull(LocalRunStore(context).readToolResultSource(session,callId))}
+        assertEquals("Exact native denied result: $source","RESULT",source.getString("lifecycle"))
+        assertEquals(CentralWorkspaceTool.NAME,source.getString("toolName"))
+        assertEquals("Inline denial must be conserved in full",0,source.getJSONArray("artifactIds").length())
+        assertEquals("Tool error: Continuation may only read its exact retained result",source.getString("output"))
+        val result=transcript.single {it.optString("type")=="model_tool_result" && it.optString("callId")==callId}
+        assertEquals(source.getString("batchId"),result.getString("batchId"))
+        assertEquals(source.getString("output"),result.getString("output"))
+        val batch=transcript.single {it.optString("type")=="model_tool_calls" && it.optString("batchId")==source.getString("batchId")}
+        assertEquals(resumedInitialOwner.get(),batch.getString("userMessageId"))
+        val calls=batch.getJSONArray("calls")
+        val proposal=(0 until calls.length()).map {calls.getJSONObject(it)}.single {it.getString("id")==callId}
+        assertEquals(CentralWorkspaceTool.NAME,proposal.getString("name"))
+        assertEquals("delegate",proposal.getJSONObject("arguments").getString("action"))
+        assertEquals("forbidden-internal-renewal",proposal.getJSONObject("arguments").getString("key"))
+        val readSource=storage.onDatabaseWorker {requireNotNull(LocalRunStore(context).readToolResultSource(session,"exact-result-read"))}
+        assertEquals("Actual retained P1 read must complete: $readSource","RESULT",readSource.getString("lifecycle"))
+        assertEquals(CentralWorkspaceTool.NAME,readSource.getString("toolName"))
+        assertEquals(0,readSource.getJSONArray("artifactIds").length())
+        val readOutput=JSONObject(readSource.getString("output"))
+        assertEquals("workspace_data",readOutput.getString("kind"))
+        val data=readOutput.getJSONObject("data")
+        assertEquals("Canonical internal continuation result",data.getString("result_text"))
+        assertEquals(0,data.getInt("offset"));assertTrue(data.isNull("next_offset"))
+        assertEquals(data.getString("result_text").length,data.getInt("total_chars"))
+        assertEquals(selected.get().getString("contentSha256"),data.getString("contentSha256"))
+        assertEquals(5,exactReadChecks.get())
+        // Completed/released physical ownership cannot continue consulting the old read scope.
+        assertThrows(RuntimeException::class.java) {WorkspaceContinuationDelivery.requireSuspendedResultRead(context,finishedClaim.get(),finishedToken.get(),finishedTool.get(),
+            mapOf("action" to "read_result","workspace_id" to workspace.workspaceId,"result_id" to selected.get().getString("resultReferenceId"),"expected_sha256" to selected.get().getString("contentSha256")))}
         assertFalse(storage.onDatabaseWorker {LocalRunStore(context).readConversationMessages(session)}.any {it.optString("content")=="STALE internal proposal"})
     }
 }

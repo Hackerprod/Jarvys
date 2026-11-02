@@ -446,6 +446,53 @@ internal object WorkspaceContinuationDelivery {
             arguments["expected_sha256"] == selected.getString("contentSha256")) { "Continuation may only read its exact retained result" }
     }
 
+    /** A bound successor keeps only the original P1 read scope, never its released claim/token. */
+    @JvmStatic fun requireSuspendedResultRead(context:Context, claim:CentralTreeAdmission.SuspensionClaim,
+        token:CancellationToken, tool:CoreTool, arguments:Map<String,Any>) {
+        claim.requireBound(token)
+        val retained=claim.confirmedYield()
+        val lineage=requireNotNull(retained.operationLineage())
+        check(lineage.kind==CentralOperationLineage.INTERNAL) {"Suspension is not an internal continuation"}
+        lineage.requireSource(claim.rootId(),claim.originalUserMessageId,claim.originDigest)
+        val owner=retained.ownerMessageId()
+        val turn=retained.retainedCheckpoint().transcript.single {it.source()==ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE,WorkspaceIdentity.CENTRAL_SESSION,owner,"")}
+        val metadata=requireNotNull(turn.incomingMetadata);val source=requireNotNull(metadata.provenance)
+        check(metadata.origin==ConversationInput.Origin.AGENT && isProtocol(source) && turn.durableMessageId==owner)
+        synchronized(WorkspaceCoordinator.controlDispatchLock(source.assignmentId)) {
+            claim.requireBound(token)
+            val ledger=LocalRunStore(context)
+            val currentInput=requireNotNull(ledger.readConversationInput(WorkspaceIdentity.CENTRAL_SESSION,owner))
+            check(currentInput.origin==ConversationInput.Origin.AGENT && currentInput.content==turn.content &&
+                currentInput.provenance!!.toJson().toString()==source.toJson().toString() &&
+                ledger.readConversationInputState(WorkspaceIdentity.CENTRAL_SESSION,owner)=="incorporated") {"Suspended P1 source changed"}
+            val saved=requireNotNull(snapshot(context,source.sessionId,source.botId))
+            val current=requireNotNull(record(saved));val value=current.toJson()
+            check(current.dispatchState()=="ACKNOWLEDGED" && value.getString("continuationKey") !in stoppedEpisodes) {"Suspended P1 was revoked"}
+            val selected=value.getJSONObject("selectedResult")
+            val expected=input(value,selected.getString("resultReferenceId"),selected.getString("contentSha256"))
+            val row=requireNotNull(ledger.readConversationMessageByStableId(WorkspaceIdentity.CENTRAL_SESSION,value.getString("inputStableId")))
+            check(row.getString("messageId")==owner && expected.content==currentInput.content &&
+                expected.provenance!!.toJson().toString()==source.toJson().toString() && hash(currentInput.content)==value.getString("inputPayloadSha256"))
+            val assigned=requireCurrent(context,value,false)
+            check(assigned.revision==selected.getLong("assignmentRevision") && selected.getString("producerCycleId")==current.expectedCycleId())
+            WorkspaceRegistry(context).use { registry ->
+                val node=requireNotNull(com.jarvys.agent.workspaces.WorkspaceTreeStore(registry).findAssignment(source.workspaceId,source.assignmentId))
+                check(node.rootId==claim.rootId()) {"Suspended P1 root changed"}
+            }
+            val reference=requireNotNull(ledger.readWorkspaceResultReference(source.sessionId,selected.getString("resultReferenceId")))
+            val evidence=requireNotNull(ledger.readCrewResultEvidence(source.sessionId,reference.evidenceId))
+            check(reference.workspaceId==source.workspaceId && reference.assignmentId==source.assignmentId &&
+                reference.botId==source.botId && reference.requestId==source.requestId && reference.missionId==source.missionId &&
+                reference.cycleId==source.cycleId && reference.observedAssignmentRevision==selected.getLong("assignmentRevision") &&
+                reference.contentSha256==selected.getString("contentSha256") && reference.matchesEvidence(evidence))
+            ledger.requireWorkspaceResultDisclosureLive(reference,true)
+            check(tool.declaration().name==CentralWorkspaceTool.NAME && tool.effectClass(arguments)==CoreTool.EffectClass.READ &&
+                arguments["action"]=="read_result" && arguments["workspace_id"]==source.workspaceId &&
+                arguments["result_id"]==reference.referenceId && arguments["expected_sha256"]==reference.contentSha256) {"Continuation may only read its exact retained result"}
+            claim.requireBound(token)
+        }
+    }
+
     /** Denial-only process fence also covers an uncertain cancellation write; never authorizes work. */
     @JvmStatic fun fenceCancelledEpisode(saved: CrewCheckpointStore.ConfirmedSnapshot) {
         record(saved)?.let {
