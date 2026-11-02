@@ -102,6 +102,29 @@ class CentralStopFreshUserTest {
         await("Old provider entered"){entered.count==0L}
         return original
     }
+    @Test fun stoppedQueuedFollowUpReleasesClaimAndAllowsExplicitRegeneration() {
+        startHeld()
+        val queued=submit("Queued follow-up stopped before execution")
+        service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context,session,queued)
+            .putExtra("chat_follow_up_request_id",queued),0,++startId)
+        val claims=AgentForegroundService::class.java.getDeclaredField("queuedInternalInputIds")
+            .apply {isAccessible=true}.get(service) as Set<*>
+        assertTrue(claims.any {it.toString().endsWith(queued)})
+        stop()
+        assertFalse("Atomic cancellation must release the queued input's independent transient claim",claims.any {it.toString().endsWith(queued)})
+        val stopped=rows().filter {it.optString("role")=="assistant" && it.optString("userMessageId")==queued}
+        assertEquals("Only the atomic cohort writes its terminal bubble",1,stopped.size)
+        assertEquals(service.getString(R.string.agent_run_stopped),stopped.single().getString("content"))
+        release.countDown()
+        service.awaitSessionIdleForTesting(session).get(20,TimeUnit.SECONDS)
+        service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context,session,queued)
+            .putExtra("chat_regeneration",true),0,++startId)
+        await("Explicit regeneration of stopped stored USER reaches the real provider"){freshEntered.count==0L}
+        await("Regenerated USER completes"){rows().any {it.optString("role")=="assistant" && it.optString("userMessageId")==queued && it.optString("status")=="COMPLETED"}}
+        await("Serial lane idle"){!AgentForegroundService.hasActiveRun(session)}
+        assertEquals(2,calls.get())
+        assertEquals(1,rows().count {it.optString("role")=="assistant" && it.optString("userMessageId")==queued && it.optString("status")=="FAILED"})
+    }
     @Test fun stopLatchesExactTokenBeforeBlockedDatabaseSnapshot() {
         startHeld()
         val bridge=ChatDatabaseBridge.getInstance(context)

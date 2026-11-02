@@ -36,3 +36,9 @@ The service fix now captures exact STOP-owner input cohorts and never rescans la
 New tests cover atomic rollback/reopen, idempotency, later-input conservation, direct stored input parked behind persistence uncertainty, and immediate token cancellation while the database is blocked. Known limitation: failed STOP capture before durable write has no persisted cut marker; in-process quarantine is not a claim of cancellation conservation after process death during storage failure. No provider termination or device guarantee.
 
 The combined fix is awaiting fresh focused Full/Play and complete matching acceptance, then independent review. **Not repair PASS or a new APK.**
+
+## Independent R1 FAIL retained; bounded cleanup repair
+
+The first combined affected Full run executed155 tests with one existing semantic failure: explicit queued STOP used start-failure wording instead of the native stopped message. New service/storage7 and native43 all passed, but this was not acceptance. Independent clean-context review also found a process-local claim leak: skipping duplicate terminal persistence skipped the queued follow-up's claim release. Its separate guarded native regression reproduced one intended failure, with source/artifacts unchanged. R1 is **FAIL**, retained.
+
+The revised candidate separates unconditional claim-only STOP cleanup from terminal persistence, restores the existing localized STOP wording, and removes resolved cohort bookkeeping only after its exact owner is inactive. A permanent queued-follow-up STOP→explicit regeneration regression verifies claim release, one terminal bubble and fresh execution. No old assertion was weakened. Matching affected Full/Play and final121-class acceptance remain pending; independent R2 must assess corrected bytes.

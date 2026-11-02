@@ -105,6 +105,7 @@ public final class AgentForegroundService extends Service {
     final boolean interactive;
     final Runnable onRejected;
     final Runnable onStopped;
+    final Runnable onStoppedCleanup;
     final String followUpClaimId;
     final AtomicBoolean stopped = new AtomicBoolean();
     SessionRequest(SessionWork work, boolean interactive) {
@@ -123,6 +124,11 @@ public final class AgentForegroundService extends Service {
     SessionRequest(SessionAdmission admission, SessionAdmissionFailure onAdmissionFailure,
         SessionWork work, boolean interactive, Runnable onRejected, String followUpClaimId,
         Runnable onStopped) {
+      this(admission, onAdmissionFailure, work, interactive, onRejected, followUpClaimId, onStopped, null);
+    }
+    SessionRequest(SessionAdmission admission, SessionAdmissionFailure onAdmissionFailure,
+        SessionWork work, boolean interactive, Runnable onRejected, String followUpClaimId,
+        Runnable onStopped, Runnable onStoppedCleanup) {
       this.work = work;
       this.admission = admission;
       this.onAdmissionFailure = onAdmissionFailure;
@@ -130,6 +136,7 @@ public final class AgentForegroundService extends Service {
       this.onRejected = onRejected;
       this.followUpClaimId = followUpClaimId == null ? "" : followUpClaimId;
       this.onStopped = onStopped;
+      this.onStoppedCleanup = onStoppedCleanup;
     }
   }
   private static final class SessionLane {
@@ -570,7 +577,9 @@ public final class AgentForegroundService extends Service {
         } catch (RuntimeException failure) {
           reportStopPersistenceFailure(failure);
         } finally {
-          releaseFollowUpClaim(sessionId, request.followUpClaimId);
+          try {
+            if (request.onStoppedCleanup != null) request.onStoppedCleanup.run();
+          } finally { releaseFollowUpClaim(sessionId, request.followUpClaimId); }
         }
       }
     }
@@ -1092,11 +1101,13 @@ public final class AgentForegroundService extends Service {
       // Exact-ID atomic adapter over the existing native stopped-submission writer.
       LocalRunStore store = new LocalRunStore(this);
       store.persistStoppedInputCohort(cohort.sessionId, new ArrayList<>(cohort.requestIds),
-          getString(R.string.chat_interrupt_start_failed));
+          getString(R.string.agent_run_stopped));
       AgentRunUiState.refreshPersistedSession(cohort.sessionId, store.readRecentConversationTimeline(cohort.sessionId));
       for (String id : cohort.requestIds) releaseFollowUpClaim(cohort.sessionId, id);
       if (!cohort.captureUncertain) {
         unresolvedStoppedInputCohorts.remove(cohort);
+        stoppedInputCohorts.entrySet().removeIf(entry -> entry.getValue() == cohort
+            && activeRunTokens.get(cohort.sessionId) != entry.getKey() && activeRunToken != entry.getKey());
         boolean anotherUnresolved = false;
         for (StoppedInputCohort other : unresolvedStoppedInputCohorts)
           if (cohort.sessionId.equals(other.sessionId)) { anotherUnresolved = true; break; }
@@ -1541,7 +1552,7 @@ public final class AgentForegroundService extends Service {
           followUpRequestId, false, releaseInternalInputClaim) : null;
       Runnable stoppedSubmission = realAgent ? () -> resolveRejectedStoredSubmission(
           chatSessionId, chatDisplayGoal, userMessageAlreadyRecorded, existingUserMessageId,
-          followUpRequestId, true, releaseInternalInputClaim) : releaseInternalInputClaim;
+          followUpRequestId, true, null) : null;
       enqueueSessionRun(chatSessionId, new SessionRequest(admission, admissionFailure, active -> {
         ConversationInput submittedInput = submittedInputRef.get();
         boolean internalInputSubmission = internalInputSubmissionRef.get();
@@ -1589,7 +1600,7 @@ public final class AgentForegroundService extends Service {
           if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
         }
       }, isInteractive, rejectedSubmission,
-          isInteractive ? followUpRequestId : "", stoppedSubmission));
+          isInteractive ? followUpRequestId : "", stoppedSubmission, releaseInternalInputClaim));
       return START_NOT_STICKY;
     }
 
