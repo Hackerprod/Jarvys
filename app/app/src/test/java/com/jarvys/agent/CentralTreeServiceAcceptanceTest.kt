@@ -39,6 +39,7 @@ class CentralTreeServiceAcceptanceTest {
     private val retainedWakes=mutableListOf<android.content.Intent>()
     private var startId=100
     private val actualRuntime=AtomicReference<CoreAgentRuntime>()
+    private val actualProviderToken=AtomicReference<CancellationToken>()
     private val failure=AtomicReference<Throwable>()
     private val calls=AtomicInteger()
     private var manager:CrewManager?=null
@@ -46,7 +47,10 @@ class CentralTreeServiceAcceptanceTest {
     @Volatile private var reply:(List<ConversationTurn>)->ModelReply={ModelReply("Completed",emptyList())}
     private fun provider(block:(List<ConversationTurn>)->ModelReply)=object:ModelProviderClient {
         override fun complete(systemPrompt:String,userPrompt:String,images:List<ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=error("Conversation expected")
-        override fun completeConversation(systemPrompt:String,history:List<ConversationTurn>,userPrompt:String,images:List<ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=block(history)
+        override fun completeConversation(systemPrompt:String,history:List<ConversationTurn>,userPrompt:String,images:List<ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply {
+            actualProviderToken.set(token)
+            return block(history)
+        }
     }
     @Before fun setup() {
         check(WorkspaceTreePolicy.admissionEnabled()) {"Requires separately approved post-D3 enabled candidate"}
@@ -196,14 +200,82 @@ class CentralTreeServiceAcceptanceTest {
         val event=storage.onDatabaseWorker {val ledger=LocalRunStore(context);val assistant=ledger.readConversationMessages(central).single {it.optString("role")=="assistant"}.getString("messageId");requireNotNull(ledger.regenerateAssistantIfLatest(central,assistant))}
         val workspace=storage.onDatabaseWorker {WorkspaceRegistry(context).use {it.createWorkspace(UUID.randomUUID().toString(),"No regeneration grant")}}
         var regenerated=0
-        reply={history -> if(regenerated++==0)ModelReply("",listOf(ModelReply.Call("denied-regeneration-delegate",CentralWorkspaceTool.NAME,
-            mapOf("action" to "delegate","workspace_id" to workspace.workspaceId,"key" to "not-authorized","role" to "analyst","mission" to "Must not start","tools" to emptyList<String>()))))
+        val entered=CountDownLatch(1);val release=CountDownLatch(1)
+        reply={history -> if(regenerated++==0) { entered.countDown();check(release.await(20,TimeUnit.SECONDS))
+            ModelReply("",listOf(ModelReply.Call("denied-regeneration-delegate",CentralWorkspaceTool.NAME,
+            mapOf("action" to "delegate","workspace_id" to workspace.workspaceId,"key" to "not-authorized","role" to "analyst","mission" to "Must not start","tools" to emptyList<String>())))) }
             else {assertTrue(history.single {it.toolCallId=="denied-regeneration-delegate" && it.kind==ConversationTurn.Kind.TOOL_RESULT}.content.contains("Workspace request could not complete"));ModelReply("Regenerated answer",emptyList())}}
-        AgentForegroundService.startRegenerateAssistant(context,event.text,arrayListOf(),central,event.userMessageId,event.resumeReceipt)
-        service.onStartCommand(nextWake(original),0,1)
+        assertNotNull(event.nativeRegenerationReceipt)
+        assertSame(event.nativeRegenerationReceipt,com.jarvys.agent.chatdb.NativeRegenerationReceipt.lookupLive(event.nativeRegenerationReceipt!!.opaqueId))
+        AgentForegroundService.startRegenerateAssistant(context,event.text,arrayListOf(),central,event.userMessageId,event.resumeReceipt,event.nativeRegenerationReceipt)
+        val wake=nextWake(original)
+        try {
+            service.onStartCommand(android.content.Intent(wake),0,1)
+            assertTrue(entered.await(10,TimeUnit.SECONDS))
+            service.onStartCommand(android.content.Intent(wake),0,2) // Same live action while physical owner is active.
+        } finally {release.countDown()}
         waitUntil("Plain regenerated completion") {storage.onDatabaseWorker {LocalRunStore(context).readConversationMessages(central).any {it.optString("role")=="assistant" && it.optString("content")=="Regenerated answer" && it.optString("status")=="COMPLETED"}}}
         assertEquals(before,root(original));assertEquals(3,calls.get());assertEquals(2,regenerated)
+        assertNull(com.jarvys.agent.chatdb.NativeRegenerationReceipt.lookupLive(event.nativeRegenerationReceipt!!.opaqueId))
+        service.awaitSessionIdleForTesting(central).get(20,TimeUnit.SECONDS)
+        service.onStartCommand(android.content.Intent(wake),0,3)
+        service.awaitSessionIdleForTesting(central).get(20,TimeUnit.SECONDS)
+        assertEquals(3,calls.get()) // A consumed opaque receipt cannot mint another run/root.
+        assertEquals(before,root(original))
+
         storage.onDatabaseWorker {WorkspaceRegistry(context).use {assertTrue(it.listAssignments(workspace.workspaceId).isEmpty())}}
+    }
+    @Test fun completedPositiveSourceRejectsBooleanOnlyAndLostOrRetargetedRegenerationActions() {
+        val original=user("Completed source for exact regeneration");runStored(original)
+        val before=root(original);val count=calls.get()
+        val prompt=storage.onDatabaseWorker {val ledger=LocalRunStore(context)
+            val assistant=ledger.readConversationMessages(central).single {it.optString("role")=="assistant"}.getString("messageId")
+            requireNotNull(ledger.regenerateAssistantIfLatest(central,assistant))}
+        val receipt=requireNotNull(prompt.nativeRegenerationReceipt)
+        AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),central,prompt.userMessageId,prompt.resumeReceipt)
+        service.onStartCommand(nextWake(original),0,1)
+        service.awaitSessionIdleForTesting(central).get(20,TimeUnit.SECONDS)
+        assertEquals(count,calls.get());assertEquals(before,root(original))
+        val wrongUser=historicalUser("Different actual USER, not the regeneration target")
+        val wrong=runCatching {AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),central,wrongUser,prompt.resumeReceipt,receipt)}.exceptionOrNull()
+        assertTrue(wrong is IllegalStateException)
+        assertSame(receipt,com.jarvys.agent.chatdb.NativeRegenerationReceipt.lookupLive(receipt.opaqueId))
+        AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),central,prompt.userMessageId,prompt.resumeReceipt,receipt)
+        val retained=nextWake(original)
+        // Denial-only simulated process-capability loss. Stored marker/receipt data cannot remint it.
+        com.jarvys.agent.chatdb.NativeRegenerationReceipt.invalidate(receipt)
+        service.onStartCommand(retained,0,2)
+        service.awaitSessionIdleForTesting(central).get(20,TimeUnit.SECONDS)
+        assertEquals(count,calls.get());assertEquals(before,root(original))
+        assertNull(com.jarvys.agent.chatdb.NativeRegenerationReceipt.lookupLive(receipt.opaqueId))
+    }
+    @Test fun queuedBooleanOnlyRegenerationStoppedBeforeAdmissionCannotRewriteCompletedSource() {
+        val original=user("Conserved completed source");runStored(original)
+        val closed=root(original)
+        val before=storage.onDatabaseWorker {LocalRunStore(context).readConversationMessages(central).map {it.toString()}}
+        val originalRow=storage.onDatabaseWorker {LocalRunStore(context).readCentralSubmissions(central).single {it.userMessageId==original}}
+        val entered=CountDownLatch(1);val release=CountDownLatch(1)
+        val later=user("Independent actual owner held during queued stale regeneration")
+        reply={entered.countDown();check(release.await(20,TimeUnit.SECONDS));ModelReply("Not accepted after STOP",emptyList())}
+        try {
+            service.onStartCommand(android.content.Intent(requireNotNull(nativeWakes[later])),0,1)
+            assertTrue(entered.await(10,TimeUnit.SECONDS))
+            AgentForegroundService.startRegenerateAssistant(context,"Forged queued prompt",arrayListOf(),central,original)
+            service.onStartCommand(nextWake(original),0,2)
+            AgentForegroundService.stopRun(central)
+            service.awaitStopTasksForTesting().get(10,TimeUnit.SECONDS)
+        } finally {release.countDown()}
+        service.awaitSessionIdleForTesting(central).get(20,TimeUnit.SECONDS)
+        assertEquals(closed,root(original))
+        storage.onDatabaseWorker {val ledger=LocalRunStore(context)
+            assertEquals(originalRow,ledger.readCentralSubmissions(central).single {it.userMessageId==original})
+            val after=ledger.readConversationMessages(central)
+            before.forEach {old -> assertTrue(after.any {it.toString()==old})}
+            val originalAssistantIds=before.map {JSONObject(it)}.filter {it.optString("role")=="assistant"}.map {it.getString("messageId")}.toSet()
+            val owned=ChatDatabaseBridge.getInstance(context).readConversationMessagesSync(central).filter {it.role=="assistant" && it.ownerUserMessageId==original}
+            assertEquals(originalAssistantIds,owned.map {it.messageId}.toSet())
+        }
+        assertEquals(2,calls.get()) // Original + later actual owner, never the queued stale request.
     }
     @Test fun sameOriginalUserNewRuntimeCannotRenewClosedRootOrInvokeProvider() {
         val original=user("Retained exact request");runStored(original)
@@ -565,7 +637,7 @@ class CentralTreeServiceAcceptanceTest {
                 "mission" to "Independent planner $step","tools" to emptyList<String>(),"continue_result" to false))))
             else {
                 assertTrue(entered.await(10,TimeUnit.SECONDS))
-                if(requesterStop) assertTrue(StopController.getInstance().stopRunAsync())
+                if(requesterStop) assertTrue(requireNotNull(actualProviderToken.get()).cancelExactRunAsync())
                 ModelReply("The independent planners remain running",emptyList())
             }
         }
@@ -639,7 +711,11 @@ class CentralTreeServiceAcceptanceTest {
             when(mode) {
                 "THROWN" -> throw IllegalStateException("Injected terminal service boundary failure")
                 "DEADLINE" -> { assertTrue(token.cancelForTimeout());token.throwIfCancelled();error("Deadline must throw") }
-                else -> CoreAgentLoop.Result("injected-$mode","Native terminal $mode",1,mode)
+                else -> {
+                    val actual=storage.onDatabaseWorker {LocalRunStore(context).readCentralSubmissions(central).single {it.userMessageId==original}}
+                    assertEquals("STARTED",actual.state);assertEquals(token.generation(),requireNotNull(actual.claimTokenGeneration))
+                    CoreAgentLoop.Result(requireNotNull(actual.claimRunId),"Native terminal $mode",1,mode)
+                }
             }
         }
         runStored(original)
@@ -663,7 +739,7 @@ class CentralTreeServiceAcceptanceTest {
             }
             assertEquals(fresh,prompt.userMessageId)
             reply={ModelReply("Plain exact regenerated response",emptyList())}
-            AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),central,prompt.userMessageId,prompt.resumeReceipt)
+            AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),central,prompt.userMessageId,prompt.resumeReceipt,prompt.nativeRegenerationReceipt)
             service.onStartCommand(nextWake(fresh),0,3)
             waitUntil("Plain regeneration remains independently usable") { storage.onDatabaseWorker {
                 LocalRunStore(context).readConversationMessages(central).any {it.optString("content")=="Plain exact regenerated response" && it.optString("status")=="COMPLETED"}

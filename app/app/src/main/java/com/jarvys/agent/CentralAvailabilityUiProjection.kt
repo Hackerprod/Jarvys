@@ -36,7 +36,9 @@ class CentralAvailabilityUiEvidence internal constructor(
     submissions:List<CentralSubmissionSnapshot>,
     suspensions:List<CentralTreeAdmission.SuspensionRecoveryDescriptor>,
     assistantOwners:Map<String,String>,
+    confirmedCompletedUserIds:Set<String> = emptySet(),
 ) {
+    val confirmedCompletedUserIds:Set<String> = java.util.Collections.unmodifiableSet(LinkedHashSet(confirmedCompletedUserIds))
     val submissions:List<CentralSubmissionSnapshot> = java.util.Collections.unmodifiableList(ArrayList(submissions))
     val suspensions:List<CentralTreeAdmission.SuspensionRecoveryDescriptor> = java.util.Collections.unmodifiableList(ArrayList(suspensions))
     val assistantOwners:Map<String,String> = java.util.Collections.unmodifiableMap(LinkedHashMap(assistantOwners))
@@ -51,11 +53,12 @@ object CentralAvailabilityUiProjection {
         val rows=evidence.submissions
         val byUser=rows.associateBy {it.userMessageId}
         val resumes=evidence.suspensions.groupBy {it.originalUserMessageId}
-        val terminalIds=rows.mapNotNull {row -> row.terminalEvidence?.let {runCatching {org.json.JSONObject(it).optString("assistantId")}.getOrNull()}}.toSet()
         return events.map {event ->
-            if(event.kind=="assistant" && (event.messageId in terminalIds
-                || evidence.assistantOwners[event.messageId] in byUser))
-                return@map event.copy(canRegenerate=false)
+            if(event.kind=="assistant") {
+                val actualOwner=evidence.assistantOwners[event.messageId]
+                if(actualOwner in byUser && actualOwner !in evidence.confirmedCompletedUserIds)
+                    return@map event.copy(canRegenerate=false)
+            }
             if(event.kind!="user" || event.messageId.isBlank())return@map event
             val row=byUser[event.messageId]
             val resume=resumes[event.messageId]?.singleOrNull()

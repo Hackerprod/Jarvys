@@ -255,4 +255,61 @@ class CentralSubmissionPersistenceTest {
         JarvysChatDatabaseProvider.closeDatabaseFileForTests(db);open()
         assertEquals(inputs.map {it.messageId},ConversationRepository(db).readInputsAfter(session,anchor.seq).map {it.messageId})
     }
+    private suspend fun completedRegenerationFixture(id:String):Pair<CentralSubmissionSnapshot,StoredMessage> {
+        val row=claim(prepared(id));val repo=ConversationRepository(db)
+        val assistant=(repo.appendMessage(AppendMessageInput(session,"assistant",listOf(MessagePartInput("text","original completed answer")),status="COMPLETED",ownerUserMessageId=row.userMessageId,runId=row.claimRunId)) as ChatDbResult.Success).value
+        val receipt=org.json.JSONObject().put("version",1).put("kind","DIRECT").put("assistantId",assistant.messageId).put("runId",row.claimRunId)
+            .put("originRunId",row.claimRunId).put("sourceSha256",row.sourceSha256).put("finalOwnerMessageId",row.userMessageId).put("chainDigest","a".repeat(64)).toString()
+        // Read/retention fixture only; actual service success authority is separately exercised natively.
+        db.testChatSql.execSQL("UPDATE central_turn_submissions SET state='COMPLETED',revision=revision+1,terminal_evidence=? WHERE conversation_id=? AND submission_id=?",arrayOf(receipt,session,id))
+        return read(id)!! to assistant
+    }
+    @Test fun regenerationEvidenceRejectsWrongTargetChangedSourceAndUncertainOwners()=work {
+        val (row,assistant)=completedRegenerationFixture("exact-regeneration-evidence")
+        val repo=ConversationRepository(db)
+        assertNotNull((repo.regenerateIfLatestAssistant(session,assistant.messageId) as ChatDbResult.Success).value)
+        val evidence=db.withChatReadTransaction {CentralTurnSubmissionRepository(db).regenerationEvidence(session,row.userMessageId,assistant.messageId)}!!
+        assertEquals(row.sourceSha256,evidence.sourceSha);assertEquals(row.storageGeneration,evidence.storageGeneration)
+        rejected {db.withChatReadTransaction {CentralTurnSubmissionRepository(db).regenerationEvidence(session,row.userMessageId,"wrong-target")}}
+        db.testChatSql.execSQL("UPDATE message_parts SET payload='changed' WHERE conversation_id=? AND message_id=? AND kind='text'",arrayOf(session,row.userMessageId))
+        rejected {db.withChatReadTransaction {CentralTurnSubmissionRepository(db).regenerationEvidence(session,row.userMessageId,assistant.messageId)}}
+        val queued=prepared("not-completed-regeneration")
+        val unfinished=(repo.appendMessage(AppendMessageInput(session,"assistant",listOf(MessagePartInput("text","not a completed request")),status="COMPLETED",ownerUserMessageId=queued.userMessageId,runId="not-admitted")) as ChatDbResult.Success).value
+        assertTrue(repo.regenerateIfLatestAssistant(session,unfinished.messageId) is ChatDbResult.Invalid)
+        assertNull(repo.getMessage(session,unfinished.messageId)!!.hiddenKind)
+    }
+    @Test fun exactNativeRegenerationConservesCompletedSubmissionAndOrdinaryUserHistory()=work {
+        val (row,assistant)=completedRegenerationFixture("native-regeneration")
+        val repo=ConversationRepository(db)
+        val prompt=(repo.regenerateIfLatestAssistant(session,assistant.messageId) as ChatDbResult.Success).value!!
+        assertEquals(row.userMessageId,prompt.userMessageId)
+        assertEquals("assistant_regenerated",repo.getMessage(session,assistant.messageId)!!.hiddenKind)
+        assertTrue(db.withChatReadTransaction {CentralTurnSubmissionRepository(db).confirmedCompleted(read(row.submissionId)!!)})
+        assertEquals(row,read(row.submissionId))
+        assertTrue(ConversationReader(db).loadConversationContext(session).any {it.content=="Prompt native-regeneration"})
+        assertFalse(ConversationReader(db).loadConversationContext(session).any {it.content=="original completed answer"})
+        repo.appendMessage(AppendMessageInput(session,"assistant",listOf(MessagePartInput("text","ordinary regenerated answer")),status="COMPLETED",ownerUserMessageId=row.userMessageId,runId="ordinary-regeneration-run"))
+        assertTrue(ConversationReader(db).loadConversationContext(session).any {it.content=="ordinary regenerated answer"})
+        assertEquals(row,read(row.submissionId))
+        JarvysChatDatabaseProvider.closeDatabaseFileForTests(db);open()
+        assertTrue(db.withChatReadTransaction {CentralTurnSubmissionRepository(db).confirmedCompleted(read(row.submissionId)!!)})
+        assertEquals(row,read(row.submissionId))
+    }
+    @Test fun missingForeignDeletedAndCorruptRegenerationMarkersDoNotCertifyCompletedHistory()=work {
+        for(mutation in listOf("missing","foreign-key","wrong-kind","deleted","changed-run","changed-status","changed-owner")) {
+            val (row,assistant)=completedRegenerationFixture("invalid-regeneration-$mutation")
+            assertNotNull((ConversationRepository(db).regenerateIfLatestAssistant(session,assistant.messageId) as ChatDbResult.Success).value)
+            when(mutation) {
+                "missing"->db.testChatSql.execSQL("UPDATE messages SET hidden_seq=NULL WHERE conversation_id=? AND message_id=?",arrayOf(session,assistant.messageId))
+                "foreign-key"->db.testChatSql.execSQL("UPDATE conversation_items SET item_key='another-assistant' WHERE conversation_id=? AND seq=(SELECT hidden_seq FROM messages WHERE conversation_id=? AND message_id=?)",arrayOf(session,session,assistant.messageId))
+                "wrong-kind"->db.testChatSql.execSQL("UPDATE conversation_items SET item_kind='assistant_deleted' WHERE conversation_id=? AND seq=(SELECT hidden_seq FROM messages WHERE conversation_id=? AND message_id=?)",arrayOf(session,session,assistant.messageId))
+                "deleted"->db.testChatSql.execSQL("UPDATE messages SET hidden_kind='assistant_deleted' WHERE conversation_id=? AND message_id=?",arrayOf(session,assistant.messageId))
+                "changed-run"->db.testChatSql.execSQL("UPDATE messages SET run_id='other-run' WHERE conversation_id=? AND message_id=?",arrayOf(session,assistant.messageId))
+                "changed-status"->db.testChatSql.execSQL("UPDATE messages SET status='FAILED' WHERE conversation_id=? AND message_id=?",arrayOf(session,assistant.messageId))
+                else->db.testChatSql.execSQL("UPDATE messages SET owner_user_message_id='other-user' WHERE conversation_id=? AND message_id=?",arrayOf(session,assistant.messageId))
+            }
+            assertFalse("Altered native marker/receipt $mutation must fail closed",db.withChatReadTransaction {CentralTurnSubmissionRepository(db).confirmedCompleted(read(row.submissionId)!!)})
+            assertEquals(row,read(row.submissionId))
+        }
+    }
 }

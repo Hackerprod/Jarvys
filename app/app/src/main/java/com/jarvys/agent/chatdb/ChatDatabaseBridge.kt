@@ -2074,10 +2074,10 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
             val rows=CentralTurnSubmissionRepository(repos.database).list(sessionId)
             val owners=linkedMapOf<String,String>()
             for(id in assistantIds.distinct()) owners[id]=repos.reader.assistantOwnerUserMessageId(sessionId,id)
-            rows to owners
+            Triple(rows,owners,rows.filter {CentralTurnSubmissionRepository(repos.database).confirmedCompleted(it)}.mapTo(linkedSetOf()){it.userMessageId})
         }}
         val resumes=com.jarvys.agent.CentralTreeAdmission.listRecoverableSuspensions(applicationContext,sessionId)
-        com.jarvys.agent.CentralAvailabilityUiEvidence(room.first,resumes,room.second)
+        com.jarvys.agent.CentralAvailabilityUiEvidence(room.first,resumes,room.second,room.third)
     }
     fun captureCentralSubmissionCohortSync(sessionId:String):CentralSubmissionCohortSnapshot = executeOnWorker { repos ->
         val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
@@ -2290,8 +2290,47 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun regenerateIfLatestAssistantSync(
         conversationId: String,
         messageId: String,
-    ): ChatDbResult<RegenerationPromptValue?> =
-        execute { it.conversations.regenerateIfLatestAssistant(conversationId, messageId) }
+    ): ChatDbResult<RegenerationPromptValue?> = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            val result=runBlocking {repos.conversations.regenerateIfLatestAssistant(conversationId,messageId)}
+            if(result !is ChatDbResult.Success || result.value==null) result else {
+                val prompt=checkNotNull(result.value)
+                val evidence=runBlocking {repos.database.withChatReadTransaction {
+                    CentralTurnSubmissionRepository(repos.database).regenerationEvidence(conversationId,prompt.userMessageId,messageId)
+                }}
+                if(evidence==null) result else ChatDbResult.Success(prompt.copy(nativeRegenerationReceipt=
+                    NativeRegenerationReceipt.issue(evidence,anchor.attest(repos.database,evidence.storageGeneration))))
+            }
+        }
+    }
+
+    /** Exact native postcommit receipt only; a historical marker or caller DTO is not authority. */
+    fun validateNativeRegenerationReceiptSync(receipt:NativeRegenerationReceipt):Boolean = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            receipt.requireLive();check(anchor.accepts(receipt.lifecycle,repos.database))
+            runBlocking {repos.database.withChatReadTransaction {
+                check(CentralTurnSubmissionRepository(repos.database).regenerationEvidence(receipt.sessionId,
+                    receipt.userMessageId,receipt.assistantMessageId)==receipt.evidence)
+            }}
+            receipt.requireLive();true
+        }
+    }
+    fun consumeNativeRegenerationReceiptSync(receipt:NativeRegenerationReceipt,
+        owner:com.jarvys.agent.AgentForegroundService.CentralSubmissionOwner) = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        try {
+            anchor.fenced {
+                owner.requireCurrent(receipt.sessionId);receipt.requireLive();check(anchor.accepts(receipt.lifecycle,repos.database))
+                runBlocking {repos.database.withChatReadTransaction {
+                    check(CentralTurnSubmissionRepository(repos.database).regenerationEvidence(receipt.sessionId,
+                        receipt.userMessageId,receipt.assistantMessageId)==receipt.evidence)
+                    owner.requireCurrent(receipt.sessionId);receipt.consume()
+                }}
+            }
+        } catch(failure:Throwable) {NativeRegenerationReceipt.invalidate(receipt);throw failure}
+    }
 
     fun hideTranslationSync(conversationId: String, messageId: String): ChatDbResult<Long> =
         execute { it.conversations.hideTranslation(conversationId, messageId) }

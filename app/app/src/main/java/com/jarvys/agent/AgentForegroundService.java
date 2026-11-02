@@ -1,5 +1,6 @@
 package com.jarvys.agent;
 
+import com.jarvys.agent.chatdb.NativeRegenerationReceipt;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -801,11 +802,22 @@ public final class AgentForegroundService extends Service {
 
   public static void startRegenerateAssistant(Context context, String prompt, ArrayList<String> skillIds,
       String sessionId, String userMessageId, MemorySessionResumeReceipt receipt) {
+    startRegenerateAssistant(context, prompt, skillIds, sessionId, userMessageId, receipt, null);
+  }
+
+  public static void startRegenerateAssistant(Context context, String prompt, ArrayList<String> skillIds,
+      String sessionId, String userMessageId, MemorySessionResumeReceipt receipt,
+      NativeRegenerationReceipt nativeReceipt) {
+    if (nativeReceipt != null && (NativeRegenerationReceipt.lookupLive(nativeReceipt.getOpaqueId()) != nativeReceipt
+        || !WorkspaceIdentity.serviceSession(sessionId).equals(nativeReceipt.getSessionId())
+        || !userMessageId.equals(nativeReceipt.getUserMessageId())))
+      throw new IllegalStateException("Regeneration action is no longer current");
     Intent intent = storedChatMessageIntent(context, WorkspaceIdentity.serviceSession(sessionId), userMessageId)
         .putExtra("agent_goal", prompt == null ? "" : prompt)
         .putExtra("agent_display_goal", prompt == null ? "" : prompt)
         .putExtra("chat_regeneration", true)
         .putStringArrayListExtra("agent_skill_ids", skillIds == null ? new ArrayList<>() : new ArrayList<>(skillIds));
+    if (nativeReceipt != null) intent.putExtra("native_regeneration_action", nativeReceipt.getOpaqueId());
     if (receipt != null) {
       intent.putExtra("memory_resume_generation", receipt.getSourceGeneration());
       intent.putExtra("memory_resume_conversation", receipt.getConversationId());
@@ -815,8 +827,13 @@ public final class AgentForegroundService extends Service {
       intent.putExtra("memory_resume_hidden_seq", receipt.getHiddenSeq());
       intent.putExtra("memory_resume_root", receipt.getRootSessionId());
     }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
-    else context.startService(intent);
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
+      else context.startService(intent);
+    } catch (RuntimeException failure) {
+      NativeRegenerationReceipt.invalidate(nativeReceipt);
+      throw failure;
+    }
   }
 
   private static MemorySessionResumeReceipt untrustedResumeLocator(Intent intent) {
@@ -1643,7 +1660,14 @@ public final class AgentForegroundService extends Service {
       boolean stopped, Runnable releaseClaim) {
     try {
       if (userMessageAlreadyRecorded && userMessageId != null && !userMessageId.isEmpty()) {
-        ConversationInput input = new LocalRunStore(this).readConversationInput(sessionId, userMessageId);
+        LocalRunStore rejectionStore = new LocalRunStore(this);
+        // Denial-only lookup also covers STOP before admission has identified the source.
+        // Generic queued Intents never own a protected NEW_TURN terminal disposition.
+        if (CentralAvailabilityPolicy.admissionEnabled()) {
+          for (com.jarvys.agent.chatdb.CentralSubmissionSnapshot row : rejectionStore.readCentralSubmissions(sessionId))
+            if (userMessageId.equals(row.getUserMessageId())) return;
+        }
+        ConversationInput input = rejectionStore.readConversationInput(sessionId, userMessageId);
         if (input != null && input.origin != ConversationInput.Origin.USER) {
           if (stopped && WorkspaceContinuationDelivery.isProtocol(input.provenance))
             WorkspaceContinuationDelivery.cancelPendingInput(this, input);
@@ -1816,6 +1840,9 @@ public final class AgentForegroundService extends Service {
     final boolean userMessageAlreadyRecorded = chatMessageRecorded;
     final boolean regeneration = chatRegeneration;
     final MemorySessionResumeReceipt resumeLocator = chatRegeneration ? untrustedResumeLocator(intent) : null;
+    final NativeRegenerationReceipt nativeRegeneration = chatRegeneration && intent != null
+        ? NativeRegenerationReceipt.lookupLive(intent.getStringExtra("native_regeneration_action")) : null;
+    final java.util.concurrent.atomic.AtomicBoolean positiveRegenerationSource = new java.util.concurrent.atomic.AtomicBoolean(false);
     final String existingUserMessageId = chatUserMessageId == null ? "" : chatUserMessageId;
     final String followUpRequestId = chatFollowUpRequestId == null ? "" : chatFollowUpRequestId;
     ArrayList<String> selectedSkillIds =
@@ -1865,10 +1892,18 @@ public final class AgentForegroundService extends Service {
         if(CentralAvailabilityPolicy.admissionEnabled() && submittedInput!=null && submittedInput.origin==ConversationInput.Origin.USER) {
           for(com.jarvys.agent.chatdb.CentralSubmissionSnapshot row:submittedInputStore.readCentralSubmissions(chatSessionId))
             if(existingUserMessageId.equals(row.getUserMessageId())) {
-              if(releaseInternalInputClaim!=null)releaseInternalInputClaim.run();
-              return false;
+              positiveRegenerationSource.set(true);
+              if (!regeneration || nativeRegeneration == null
+                  || !chatSessionId.equals(nativeRegeneration.getSessionId())
+                  || !existingUserMessageId.equals(nativeRegeneration.getUserMessageId())
+                  || !com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this)
+                      .validateNativeRegenerationReceiptSync(nativeRegeneration)) {
+                if(releaseInternalInputClaim!=null)releaseInternalInputClaim.run();
+                return false;
+              }
             }
         }
+        if (nativeRegeneration != null && !positiveRegenerationSource.get()) return false;
         // This admission runs at physical lane dequeue, before allocating a token/UI generation.
         // A predecessor can hot-incorporate the exact USER while its direct intent is queued.
         // Explicit regeneration retains its separate native authority and is not a duplicate.
@@ -1925,16 +1960,23 @@ public final class AgentForegroundService extends Service {
         return true;
       } : null;
       SessionAdmissionFailure admissionFailure = realAgent ? failure -> {
+        NativeRegenerationReceipt.invalidate(nativeRegeneration);
         if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
         LocalDiagnostics.recoverable(this, LocalDiagnostics.Origin.SERVICE, failure);
         stopServiceIfIdle();
       } : null;
-      Runnable rejectedSubmission = realAgent ? () -> resolveRejectedStoredSubmission(
-          chatSessionId, chatDisplayGoal, userMessageAlreadyRecorded, existingUserMessageId,
-          followUpRequestId, false, releaseInternalInputClaim) : null;
-      Runnable stoppedSubmission = realAgent ? () -> resolveRejectedStoredSubmission(
-          chatSessionId, chatDisplayGoal, userMessageAlreadyRecorded, existingUserMessageId,
-          followUpRequestId, true, null) : null;
+      Runnable rejectedSubmission = realAgent ? () -> {
+        if (nativeRegeneration != null || positiveRegenerationSource.get()) {
+          NativeRegenerationReceipt.invalidate(nativeRegeneration);
+          if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
+        } else resolveRejectedStoredSubmission(chatSessionId, chatDisplayGoal, userMessageAlreadyRecorded,
+            existingUserMessageId, followUpRequestId, false, releaseInternalInputClaim);
+      } : null;
+      Runnable stoppedSubmission = realAgent ? () -> {
+        if (nativeRegeneration != null || positiveRegenerationSource.get()) NativeRegenerationReceipt.invalidate(nativeRegeneration);
+        else resolveRejectedStoredSubmission(chatSessionId, chatDisplayGoal, userMessageAlreadyRecorded,
+            existingUserMessageId, followUpRequestId, true, null);
+      } : null;
       enqueueSessionRun(chatSessionId, new SessionRequest(admission, admissionFailure, active -> {
         ConversationInput submittedInput = submittedInputRef.get();
         boolean internalInputSubmission = internalInputSubmissionRef.get();
@@ -1942,6 +1984,10 @@ public final class AgentForegroundService extends Service {
         try {
           if (compactConversation) runManualConversationCompaction(active.token, chatSessionId);
           else {
+            if (positiveRegenerationSource.get()) {
+              com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this)
+                  .consumeNativeRegenerationReceiptSync(nativeRegeneration, new CentralSubmissionOwner(this, active));
+            }
             MemoryResumeAdmission memoryResume = null;
             if (regeneration && resumeLocator != null && !internalInputSubmission
                 && chatSessionId.equals(resumeLocator.getConversationId())
@@ -1953,11 +1999,19 @@ public final class AgentForegroundService extends Service {
                 memoryResume.requireCurrent(active.token);
               }
             }
-            runRealAgent(active.token, chatAgentGoal, runSkillIds, chatSessionId, chatDisplayGoal,
+            // Positive regeneration's prompt comes from the canonical actual USER, never Intent text.
+            runRealAgent(active.token, positiveRegenerationSource.get() ? "" : chatAgentGoal, runSkillIds,
+                chatSessionId, positiveRegenerationSource.get() ? "" : chatDisplayGoal,
                 userMessageAlreadyRecorded, regeneration,
                 internalInputSubmission ? internalRunInputId : existingUserMessageId, memoryResume);
           }
         } catch (RuntimeException earlyFailure) {
+          if (positiveRegenerationSource.get()) {
+            LocalDiagnostics.recoverable(this, LocalDiagnostics.Origin.SERVICE, earlyFailure);
+            AgentRunUiState.completeGeneration(chatSessionId, active.generation, "failed-start", "FAILED",
+                getString(R.string.chat_interrupt_start_failed), "", 0L);
+            return; // Never rewrite a conserved completed submission after receipt rejection.
+          }
           if (!isInteractive) throw earlyFailure;
           if (internalInputSubmission) {
             LocalDiagnostics.recoverable(this, LocalDiagnostics.Origin.SERVICE, earlyFailure);
@@ -1979,6 +2033,7 @@ public final class AgentForegroundService extends Service {
           }
           AgentRunUiState.completeGeneration(chatSessionId, active.generation, "failed-start", "FAILED", message, "", 0L);
         } finally {
+          NativeRegenerationReceipt.invalidate(nativeRegeneration);
           if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
         }
       }, isInteractive, rejectedSubmission,

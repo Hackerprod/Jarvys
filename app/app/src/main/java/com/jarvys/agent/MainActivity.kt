@@ -1191,7 +1191,7 @@ ${event.text}
             val skillIds = skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id }
             runCatching {
                 AgentForegroundService.startRegenerateAssistant(this@MainActivity, prompt.text, ArrayList(skillIds),
-                    sessionId, prompt.userMessageId, prompt.resumeReceipt)
+                    sessionId, prompt.userMessageId, prompt.resumeReceipt, prompt.nativeRegenerationReceipt)
             }.onFailure {
                 toast(getString(R.string.chat_footer_regenerate_error), Toast.LENGTH_LONG)
             }

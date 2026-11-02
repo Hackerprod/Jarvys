@@ -18,7 +18,7 @@ class CentralAvailabilityUiReadThreadTest {
     private val context:Context get()=ApplicationProvider.getApplicationContext()
     @Test fun existingUiFixtureDispatchesReadOnlyInspectionWithoutCreatingEitherDatabase() {
         assertSame(Looper.getMainLooper(),Looper.myLooper())
-        val file=java.io.File(StorageGeneration(context).chatRoot(),"agent.db")
+        val file=chat.onDatabaseWorker {java.io.File(StorageGeneration(context).chatRoot(),"agent.db")}
         val registry=context.getDatabasePath(WorkspaceRegistry.DATABASE_NAME)
         assertFalse(file.exists());assertFalse(registry.exists())
         val bridge=ChatDatabaseBridge.getInstance(context)

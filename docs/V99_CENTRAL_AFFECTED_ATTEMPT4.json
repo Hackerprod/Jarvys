@@ -1,0 +1,112 @@
+{
+  "sourceCommit": "319a99a1cb9c9ff12e828ad5001015eca6b3bff6",
+  "scope": "Offline host diagnostics; not Phase B PASS or device evidence",
+  "runs": [
+    {
+      "exit": 0,
+      "sourceUnchanged": true,
+      "artifactsUnchanged": true,
+      "xmlFiles": 1,
+      "counts": {
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "name": "phase-b-full-stop-green-tests-4",
+      "terminalSha256": "fef3dc760a81066a7bc36bf51ebc9b5ceca8d9d463a938b1be53da057f6a85fe",
+      "classes": [
+        {
+          "name": "com.jarvys.agent.CentralAvailabilityBoundaryAcceptanceTest",
+          "tests": 16,
+          "failures": 0,
+          "errors": 0,
+          "xmlSha256": "a150b3e718b9a3ea9638a14c5f2932993676a25a1cc89f01572889f3b9c1d372",
+          "failedTests": []
+        }
+      ]
+    },
+    {
+      "exit": 1,
+      "sourceUnchanged": true,
+      "artifactsUnchanged": true,
+      "xmlFiles": 7,
+      "counts": {
+        "tests": 145,
+        "failures": 7,
+        "errors": 0,
+        "skipped": 0
+      },
+      "name": "phase-b-full-enabled-affected-tests-4",
+      "terminalSha256": "2094807cd3bd333d2ac9e4fe8eccf8731e82c01045e55283cdb88b15418c9d51",
+      "classes": [
+        {
+          "name": "com.jarvys.agent.CentralStopFreshUserTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "xmlSha256": "97a4a9883ae4d908d694f45622ab88e00ec28f6353bb7d822805580f1eb8d3b0",
+          "failedTests": []
+        },
+        {
+          "name": "com.jarvys.agent.CentralTreeServiceAcceptanceTest",
+          "tests": 24,
+          "failures": 5,
+          "errors": 0,
+          "xmlSha256": "e65a9fc6ba8264560fca8c2ce04fc027992103aadbdfbe7a756f4cd3873e93cf",
+          "failedTests": [
+            "nativeRegenerationRemainsPlainChatWithoutNewRootAuthority",
+            "returnedFailedServiceExitClosesOwnedRootAndPreservesNewUserAndRegeneration",
+            "returnedPartialClosesOwnedRootWithoutDeadline",
+            "laterUserCancelsDetachedWorkerAfterRequesterStopWithoutReopening",
+            "returnedStoppedClosesOwnedRootWithoutInventingUserStop"
+          ]
+        },
+        {
+          "name": "com.jarvys.agent.MainAgentInteractionTest",
+          "tests": 54,
+          "failures": 0,
+          "errors": 0,
+          "xmlSha256": "25977d47ba718e1363687bf1517e9dc5c2500e1520bab9157d37c9ee5ea8b082",
+          "failedTests": []
+        },
+        {
+          "name": "com.jarvys.agent.WorkspaceTreeP1PreclaimTest",
+          "tests": 5,
+          "failures": 1,
+          "errors": 0,
+          "xmlSha256": "35ddd35df99938ab2deeb487f633b4214be2af3ee226f82491f202eccdbe1cb7",
+          "failedTests": [
+            "retainedV99RegistryCannotUpgradeOrConsumeP1WithoutExactLiveAuthority"
+          ]
+        },
+        {
+          "name": "com.jarvys.agent.chatdb.CentralAvailabilityUiReadThreadTest",
+          "tests": 2,
+          "failures": 1,
+          "errors": 0,
+          "xmlSha256": "c7671c6fb1b2cefe9c0a417ff5fff621c41e4feb949b7a8c4c5c37b8e4084216",
+          "failedTests": [
+            "existingUiFixtureDispatchesReadOnlyInspectionWithoutCreatingEitherDatabase"
+          ]
+        },
+        {
+          "name": "com.jarvys.agent.workspaces.CentralWorkspaceCoordinationToolTest",
+          "tests": 19,
+          "failures": 0,
+          "errors": 0,
+          "xmlSha256": "21d41aa17f3199231a8fd1de56067820d4a4b04e5847d240a7a6bcaaf58e4cb0",
+          "failedTests": []
+        },
+        {
+          "name": "com.jarvys.agent.workspaces.CentralWorkspaceToolTest",
+          "tests": 35,
+          "failures": 0,
+          "errors": 0,
+          "xmlSha256": "e0380624b26ade812d0ce53297c9b5a055eb71776adb0ae0a2f688a6ebbcb251",
+          "failedTests": []
+        }
+      ]
+    }
+  ]
+}

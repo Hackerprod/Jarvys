@@ -41,8 +41,36 @@ internal class CentralTurnSubmissionRepository(private val database: JarvysChatD
         if(row.state!="COMPLETED" || row.terminalEvidence==null || row.claimRunId==null)return false
         val receipt=checkNotNull(terminal(row))
         if(captureCentralUserRootDigestInTransaction(database,row.sessionId,row.userMessageId)!=row.sourceSha256)return false
-        return sql.query("SELECT role,status,owner_user_message_id,run_id,hidden_kind FROM messages WHERE conversation_id=? AND message_id=?",arrayOf(row.sessionId,receipt.getString("assistantId"))).use { c ->
-            c.moveToFirst() && c.getString(0)=="assistant" && c.getString(1)=="COMPLETED" && c.getString(2)==receipt.getString("finalOwnerMessageId") && c.getString(3)==receipt.getString("runId") && c.isNull(4) && !c.moveToNext()
+        return sql.query("SELECT role,status,owner_user_message_id,run_id,hidden_kind,hidden_seq,seq FROM messages WHERE conversation_id=? AND message_id=?",arrayOf(row.sessionId,receipt.getString("assistantId"))).use { c ->
+            if(!c.moveToFirst() || c.getString(0)!="assistant" || c.getString(1)!="COMPLETED" ||
+                c.getString(2)!=receipt.getString("finalOwnerMessageId") || c.getString(3)!=receipt.getString("runId")) return@use false
+            // Native regeneration hides presentation, not the original immutable successful receipt.
+            val conserved=if(c.isNull(4)) c.isNull(5) else c.getString(4)=="assistant_regenerated" &&
+                c.getType(5)==Cursor.FIELD_TYPE_INTEGER && c.getLong(5)>c.getLong(6) &&
+                sql.query("SELECT item_kind,item_key FROM conversation_items WHERE conversation_id=? AND seq=?",arrayOf(row.sessionId,c.getLong(5))).use { marker ->
+                    marker.moveToFirst() && marker.getString(0)=="assistant_regenerated" && marker.getString(1)==receipt.getString("assistantId") && !marker.moveToNext()
+                }
+            conserved && !c.moveToNext()
+        }
+    }
+    /** Exact committed native presentation marker; reading this data never mints a permit. */
+    fun regenerationEvidence(sessionId:String,userId:String,assistantId:String):NativeRegenerationEvidence? {
+        val row=list(sessionId).singleOrNull {it.userMessageId==userId} ?: return null
+        check(confirmedCompleted(row)) {"Regeneration source is not canonically completed"}
+        return sql.query("SELECT status,owner_user_message_id,run_id,hidden_kind,hidden_seq,seq FROM messages WHERE conversation_id=? AND message_id=? AND role='assistant'",arrayOf(sessionId,assistantId)).use { c ->
+            check(c.moveToFirst() && c.getString(0)=="COMPLETED" && c.getString(1)==userId && !c.isNull(2) && c.getString(2).isNotBlank() &&
+                c.getString(3)=="assistant_regenerated" && c.getType(4)==Cursor.FIELD_TYPE_INTEGER && c.getLong(4)>c.getLong(5))
+            val seq=c.getLong(4);val run=c.getString(2)
+            check(sql.query("SELECT item_kind,item_key FROM conversation_items WHERE conversation_id=? AND seq=?",arrayOf(sessionId,seq)).use { m ->
+                m.moveToFirst() && m.getString(0)=="assistant_regenerated" && m.getString(1)==assistantId && !m.moveToNext() })
+            check(!sql.query("SELECT 1 FROM messages newer JOIN conversation_items n ON n.conversation_id=newer.conversation_id AND n.seq=newer.seq " +
+                "JOIN conversation_items selected ON selected.conversation_id=newer.conversation_id AND selected.seq=? " +
+                "WHERE newer.conversation_id=? AND newer.role='assistant' AND newer.hidden_kind IS NULL AND " +
+                "(n.sort_seq>selected.sort_seq OR (n.sort_seq=selected.sort_seq AND n.sort_sub>selected.sort_sub) OR " +
+                "(n.sort_seq=selected.sort_seq AND n.sort_sub=selected.sort_sub AND n.seq>selected.seq)) LIMIT 1",
+                arrayOf(c.getLong(5),sessionId)).use {it.moveToFirst()}) {"Native regeneration target was superseded"}
+            check(!c.moveToNext())
+            NativeRegenerationEvidence(sessionId,userId,assistantId,seq,run,row.storageGeneration,row.sourceSha256)
         }
     }
     private fun changed() {check(sql.query("SELECT changes()").use {it.moveToFirst() && it.getLong(0)==1L}) {"Central submission CAS conflict"}}

@@ -121,7 +121,7 @@ class WorkspaceTreeP1PreclaimTest {
             try {
                 e.publish();e.park()
                 val before=e.record().toString();val input=e.input()
-                assertThrows(IllegalStateException::class.java) {WorkspaceContinuationDelivery.claim(f.context,input,CancellationToken.crewChild())}
+                assertThrows(IllegalArgumentException::class.java) {WorkspaceContinuationDelivery.claim(f.context,input,CancellationToken.crewChild())}
                 assertEquals(2,e.registry.schemaVersion());assertEquals(before,e.record().toString())
                 assertEquals("PREPARED",e.record().getString("dispatchState"))
                 e.registry.treeRead {db ->db.rawQuery("SELECT COUNT(*) FROM sqlite_master WHERE name='bot_tree_central_resume'",null).use {assertTrue(it.moveToFirst());assertEquals(0,it.getInt(0))}}

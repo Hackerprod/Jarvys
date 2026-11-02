@@ -105,7 +105,8 @@ data class ConversationMessageAt(val message: StoredMessage, val sortSeq: Long, 
 
 /** User prompt paired with a regeneration marker that was durably appended in the same transaction. */
 data class RegenerationPromptValue(val text: String, val userMessageId: String,
-    val resumeReceipt: MemorySessionResumeReceipt? = null)
+    val resumeReceipt: MemorySessionResumeReceipt? = null,
+    val nativeRegenerationReceipt: NativeRegenerationReceipt? = null)
 
 /** Marker identity and assistant owner captured together by one writer transaction. */
 data class AssistantMarkerValue(val seq: Long, val ownerUserMessageId: String?)
@@ -748,6 +749,9 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (owner == null) return@transactionResult ChatDbResult.NotFound
         if(owner.messageId in CentralTurnSubmissionRepository(database).historyExcluded(conversationId))
             return@transactionResult ChatDbResult.Invalid("Queued or uncertain Central submission cannot be regenerated")
+        if(CentralTurnSubmissionRepository(database).list(conversationId).any {it.userMessageId==owner.messageId} &&
+            (target.status!="COMPLETED" || target.runId.isNullOrBlank()))
+            return@transactionResult ChatDbResult.Invalid("Positive Central regeneration requires an exact completed assistant")
         val prompt = hydrateMessages(conversationId, listOf(owner.messageId)).singleOrNull()
             ?: return@transactionResult ChatDbResult.NotFound
 
