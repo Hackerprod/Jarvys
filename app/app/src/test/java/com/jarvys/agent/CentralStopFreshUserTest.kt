@@ -137,13 +137,51 @@ class CentralStopFreshUserTest {
         assertEquals(service.getString(R.string.agent_run_stopped),stopped.single().getString("content"))
         release.countDown()
         service.awaitSessionIdleForTesting(session).get(20,TimeUnit.SECONDS)
-        service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context,session,queued)
-            .putExtra("chat_regeneration",true),0,++startId)
-        await("Explicit regeneration of stopped stored USER reaches the real provider"){freshEntered.count==0L}
+        val store=LocalRunStore(context)
+        val bridge=ChatDatabaseBridge.getInstance(context)
+        val stoppedId=stopped.single().getString("messageId")
+        val before=storage.onDatabaseWorker {bridge.readConversationMessagesSync(session)}
+        if(CentralAvailabilityPolicy.admissionEnabled()) {
+            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context,session,queued)
+                .putExtra("chat_regeneration",true),0,++startId)
+            service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS)
+            assertEquals("A caller boolean is not a fresh native regeneration action",1,calls.get())
+            assertEquals("Forged regeneration cannot hide or rewrite the stopped source",before,
+                storage.onDatabaseWorker {bridge.readConversationMessagesSync(session)})
+        }
+        // The old physical owner's final STOPPED bubble is newer. Existing native UI eligibility
+        // rejects the older queued response; releasing a transient claim grants no bypass.
+        assertNull(storage.onDatabaseWorker {store.regenerateAssistantIfLatest(session,stoppedId)})
+        assertEquals(before,storage.onDatabaseWorker {bridge.readConversationMessagesSync(session)})
+        val later=before.single {it.role=="assistant" && it.hiddenKind==null && it.messageId!=stoppedId}
+        assertEquals("STOPPED",later.status)
+        storage.onDatabaseWorker {store.appendAssistantDeleted(session,later.messageId)}
+        val hidden=storage.onDatabaseWorker {bridge.readMessageSync(session,later.messageId)}!!
+        assertEquals("assistant_deleted",hidden.hiddenKind)
+        assertEquals(later.parts,hidden.parts);assertEquals(later.status,hidden.status)
+        assertEquals(later.ownerUserMessageId,hidden.ownerUserMessageId);assertEquals(later.runId,hidden.runId)
+        assertEquals(later.seq,hidden.seq);assertEquals(later.attachments,hidden.attachments)
+        val prompt=storage.onDatabaseWorker {requireNotNull(store.regenerateAssistantIfLatest(session,stoppedId))}
+        assertEquals(queued,prompt.userMessageId);assertNull(prompt.resumeReceipt)
+        val receipt=prompt.nativeRegenerationReceipt
+        if(CentralAvailabilityPolicy.admissionEnabled())assertNotNull("Actual retained manual action owns ordinary admission",receipt)
+        AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),session,prompt.userMessageId,prompt.resumeReceipt,receipt)
+        if(receipt!=null)AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),session,prompt.userMessageId,prompt.resumeReceipt,receipt)
+        await("Explicit native regeneration of eligible stopped USER reaches real provider"){freshEntered.count==0L}
         await("Regenerated USER completes"){rows().any {it.optString("role")=="assistant" && it.optString("userMessageId")==queued && it.optString("status")=="COMPLETED"}}
         await("Serial lane idle"){!AgentForegroundService.hasActiveRun(session)}
         assertEquals(2,calls.get())
         assertEquals(1,rows().count {it.optString("role")=="assistant" && it.optString("userMessageId")==queued && it.optString("status")=="FAILED"})
+        if(receipt!=null) {
+            assertNull(NativeRegenerationReceipt.lookupLive(receipt.opaqueId))
+            val completed=storage.onDatabaseWorker {bridge.readConversationMessagesSync(session)}
+            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context,session,queued)
+                .putExtra("chat_regeneration",true).putExtra("native_regeneration_action",receipt.opaqueId),0,++startId)
+            service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS)
+            assertEquals("Consumed opaque action never replays the run",2,calls.get())
+            assertEquals(completed,storage.onDatabaseWorker {bridge.readConversationMessagesSync(session)})
+        }
+
     }
     @Test fun stopLatchesExactTokenBeforeBlockedDatabaseSnapshot() {
         startHeld()
