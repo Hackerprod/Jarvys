@@ -68,6 +68,9 @@ class CentralAvailabilityServiceTest {
         override fun usingProxy()=false
     }
     @Before fun setup() {
+        // AndroidX caches provider roots by authority; Robolectric gives each test a different real files root.
+        val providerCache=androidx.core.content.FileProvider::class.java.getDeclaredField("sCache").apply {isAccessible=true}.get(null) as MutableMap<*,*>
+        synchronized(providerCache) {providerCache.clear()}
         check(CentralAvailabilityPolicy.admissionEnabled()) {"Requires explicit post-D3 local acceptance activation"}
         storage.localRunStore(context.filesDir)
         storage.onDatabaseWorker {

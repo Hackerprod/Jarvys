@@ -3,7 +3,7 @@ package com.jarvys.agent
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.jarvys.agent.chatdb.ChatDatabaseBridge
+import com.jarvys.agent.chatdb.*
 import com.jarvys.agent.crew.*
 import com.jarvys.agent.providers.ChatCompletionsConfig
 import com.jarvys.agent.workspaces.WorkspaceIdentity
@@ -80,6 +80,9 @@ class CentralAvailabilityBoundaryAcceptanceTest {
         override fun usingProxy()=false
     }
     @Before fun setup() {
+        // AndroidX caches provider roots by authority; Robolectric gives each test a different real files root.
+        val providerCache=androidx.core.content.FileProvider::class.java.getDeclaredField("sCache").apply {isAccessible=true}.get(null) as MutableMap<*,*>
+        synchronized(providerCache) {providerCache.clear()}
         check(CentralAvailabilityPolicy.admissionEnabled()) {"Requires explicit post-D3 local acceptance activation"}
         storage.localRunStore(context.filesDir)
         storage.onDatabaseWorker {
@@ -561,12 +564,11 @@ class CentralAvailabilityBoundaryAcceptanceTest {
             assertTrue(file.isFile);file.writeText("invalid retained checkpoint")
         } else storage.onDatabaseWorker {
             val message=if(kind=="USER") selected.messageId else rows().single {it.optString("content")=="Retained steering mutation target"}.getString("messageId")
-            ChatDatabaseBridge.closeInstanceForTests(context.filesDir)
-            android.database.sqlite.SQLiteDatabase.openDatabase(java.io.File(StorageGeneration(context).chatRoot(),"agent.db").path,null,android.database.sqlite.SQLiteDatabase.OPEN_READWRITE).use {db ->
-                val value=android.content.ContentValues().apply {put("payload","MUTATED CANONICAL SOURCE")}
-                assertEquals(1,db.update("message_parts",value,"conversation_id=? AND message_id=? AND kind='text'",arrayOf(session,message)))
-            }
-            LocalRunStore(context).readCentralSubmissions(session)
+            val database=JarvysChatDatabaseProvider.getInstance(context)
+            kotlinx.coroutines.runBlocking {database.withChatWriteTransaction {
+                database.testChatSql.execSQL("UPDATE message_parts SET payload=? WHERE conversation_id=? AND message_id=? AND kind='text'",arrayOf("MUTATED CANONICAL SOURCE",session,message))
+                database.testChatSql.query("SELECT changes()",emptyArray()).use {assertTrue(it.moveToFirst());assertEquals(1,it.getInt(0))}
+            }}
         }
         exactRetrySettled(selected)
         assertEquals(2,calls.get());assertEquals(before,root(selected.messageId))
@@ -613,24 +615,43 @@ class CentralAvailabilityBoundaryAcceptanceTest {
     private fun rejectActualPrebindClaim(stop:Boolean) {
         val selected=parkedWithoutLivePermission();val before=root(selected.messageId)
         val previous=service.mainChatRunner;val observed=CountDownLatch(1);val denial=AtomicReference<Throwable>()
+        val enteredPrebind=CountDownLatch(1);val releasePrebind=CountDownLatch(1);val actualToken=AtomicReference<CancellationToken>()
+        val callbackProblem=AtomicReference<Throwable>()
         service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->
             val claim=actualClaim(runtime)
             if(claim==null) previous.run(runtime,goal,history,attachments,token,progress)
             else {
                 try {
-                    if(stop) {stopSession();assertTrue(token.wasStoppedByUser())}
-                    else WorkspaceRegistry(context).use {registry ->registry.treeRead {db ->
+                    if(stop) {
+                        actualToken.set(token);enteredPrebind.countDown()
+                        // Only this test barrier consumes thread interruption; native token remains cancelled.
+                        while(releasePrebind.count>0)try {releasePrebind.await()}catch(_:InterruptedException){}
+                    } else WorkspaceRegistry(context).use {registry ->registry.treeRead {db ->
                         db.execSQL("UPDATE bot_tree_central_resume SET owner_run='different-owner', revision=revision+1 WHERE resume_id=?",arrayOf(claim.resumeId()))
                     }}
-                    try {runtime.runMainChat(goal,history,attachments,token,progress);error("Revoked native claim must not bind/infer")}
+                    val unexpected = try {runtime.runMainChat(goal,history,attachments,token,progress)}
                     catch(expected:RuntimeException) {denial.set(expected);throw expected}
+                    throw AssertionError("Revoked native claim returned ${unexpected.outcome} instead of denying before binding")
+                } catch(problem:Throwable) {
+                    if(denial.get()!==problem)callbackProblem.set(problem)
+                    throw problem
                 } finally {observed.countDown()}
             }
         }
-        assertTrue(drafts.recoverPreparedSuspension(selected))
-        await("Native reserved claim reaches deterministic prebind boundary") {observed.count==0L}
+        try {
+            assertTrue(drafts.recoverPreparedSuspension(selected))
+            if(stop) {
+                await("Actual reserved owner pauses before successor binding") {enteredPrebind.count==0L}
+                stopSession() // Run STOP from the external native caller, never await it on its cancelled owner thread.
+                assertTrue(actualToken.get().wasStoppedByUser());releasePrebind.countDown()
+            }
+            await("Native reserved claim reaches deterministic prebind boundary") {observed.count==0L}
+        } finally {releasePrebind.countDown()}
         await("Denied owner physically releases") {!AgentForegroundService.hasActiveRun(session)}
-        assertNotNull(denial.get());assertEquals(2,calls.get());assertEquals(before.executions,root(selected.messageId).executions)
+        callbackProblem.get()?.let {throw AssertionError("Prebind fixture failed before observing a native denial",it)}
+        assertNotNull("Actual runtime must reject the revoked claim",denial.get())
+        if(stop)assertTrue("Exact native token STOP must cause cancellation",denial.get() is java.util.concurrent.CancellationException)
+        assertEquals(2,calls.get());assertEquals(before.executions,root(selected.messageId).executions)
         storage.onDatabaseWorker {WorkspaceRegistry(context).use {registry ->registry.treeRead {db ->
             db.rawQuery("SELECT state FROM bot_tree_central_resume WHERE root_id=?",arrayOf(before.rootId)).use {
                 assertTrue(it.moveToFirst());assertTrue(it.getString(0) in setOf("RESERVED","UNCERTAIN","CANCELLED"))

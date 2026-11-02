@@ -1,3 +1,7 @@
+## Estado vigente — reparación v99 fase B: aceptación nativa en curso — 02-11-2026
+
+Fase A conserva **PASS independiente acotado**. Fase B tiene PASS de diseño y gate pre-write **Full126 / Play126** sobre la misma fuente; está habilitada sólo para aceptación local, **sin PASS funcional independiente ni APK nuevo**. El último focalizado ejecutó153 pruebas:148 pasan y5 fallan; se conservan resultados anteriores y se corrigen los fallos antes de continuar. Menú, datos, agentes generales y Engram conservados; no causa del teléfono ni ejecución en dispositivo/proveedor vivo confirmadas. [Progreso y límites](docs/V99_CENTRAL_AVAILABILITY_PROGRESS.md), [gate de compatibilidad](docs/V99_CENTRAL_PREWRITE_RESULTS.json). Los estados inferiores son históricos.
+
 ## Estado vigente — reparación v99 fase A: PASS independiente acotado — 02-11-2026
 
 Corregidos y revisados los defectos de limpieza de workers diferidos, conservación del error original y STOP que absorbía mensajes USER posteriores. Fuente `011ed51e96b5f6a0ecdaed7a6b6ca701d220f6f0`: Full y Play **121 clases / 1.146 pruebas cada uno**, cero fallos, errores u omisiones; suplemento Full5 separado. Se conserva R1 FAIL. [Checkpoint y límites](docs/V99_REPAIR_CHECKPOINT.md), [resultados](docs/V99_REPAIR_HOST_RESULTS.json). **No APK nuevo ni causa del teléfono confirmada.** La fase B de disponibilidad/autonomía tiene PASS de diseño, no de implementación; comienza detrás de gates de compatibilidad desactivados. Menú, datos y Engram conservados; estados inferiores históricos.
