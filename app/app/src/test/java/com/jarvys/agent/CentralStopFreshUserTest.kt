@@ -160,9 +160,16 @@ class CentralStopFreshUserTest {
                 .putExtra("chat_regeneration",true),0,++startId)
             service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS)
             assertEquals("A caller boolean is not a fresh native regeneration action",1,calls.get())
+            assertFalse("Denied forged action releases only its own transient claim",claims.any {it.toString().endsWith(queued)})
             assertEquals("Forged regeneration cannot hide or rewrite the stopped source",before,
                 storage.onDatabaseWorker {bridge.readConversationMessagesSync(session)})
         }
+        service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context,session,queued),0,++startId)
+        service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS)
+        assertEquals("An already handled USER is not replayed by an ordinary stored intent",1,calls.get())
+        assertFalse("Denied handled USER releases only its acquired transient claim",claims.any {it.toString().endsWith(queued)})
+        assertEquals("Handled USER denial preserves its terminal evidence",before,
+            storage.onDatabaseWorker {bridge.readConversationMessagesSync(session)})
         // The old physical owner's final STOPPED bubble is newer. Existing native UI eligibility
         // rejects the older queued response; releasing a transient claim grants no bypass.
         assertNull(storage.onDatabaseWorker {store.regenerateAssistantIfLatest(session,stoppedId)})

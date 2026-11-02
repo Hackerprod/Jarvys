@@ -1,0 +1,49 @@
+{
+  "status": "FAIL-retained-not-acceptance",
+  "className": "com.jarvys.agent.CentralStopFreshUserTest",
+  "failedMethod": "stoppedQueuedFollowUpReleasesClaimAndAllowsExplicitRegeneration",
+  "runs": [
+    {
+      "attempt": 9,
+      "sourceCommit": "ae0987746b252e83e83468292d3010579dfa371c",
+      "terminal": {
+        "exit": 1,
+        "sourceUnchanged": true,
+        "artifactsUnchanged": true,
+        "xmlFiles": 1,
+        "counts": {
+          "tests": 6,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 0
+        }
+      },
+      "terminalSha256": "7c235a9c2d2525b1af10feb60255905827de710ae56a8df1812915acbf941129",
+      "sourceBindingSha256": "a30048fc20eecc5ac6e139210a8473e7d64a682187ea6aacdaf19a6501ee91df",
+      "artifactManifestSha256": "c76bd4b0952f761a95728a55c809139a41105d486dba9bb7c9f518c32a2f7fd8",
+      "xmlSha256": "61f29bd0304b60d5c02dc931a0945cb309c871f2f60d15dbc13f4949d38a576b"
+    },
+    {
+      "attempt": 10,
+      "sourceCommit": "b43d9cd43b6aecb410072095158fd70108d201b1",
+      "terminal": {
+        "exit": 1,
+        "sourceUnchanged": true,
+        "artifactsUnchanged": true,
+        "xmlFiles": 1,
+        "counts": {
+          "tests": 6,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 0
+        }
+      },
+      "terminalSha256": "7c235a9c2d2525b1af10feb60255905827de710ae56a8df1812915acbf941129",
+      "sourceBindingSha256": "b08828760c08bea9e8113e7c071bce6de90a75f60d61c3e029cd814302e205ad",
+      "artifactManifestSha256": "d60c1664f889a17222fb3815fada538b60e873e3348f769d5e3e6f7633d1e685",
+      "xmlSha256": "55904edbb36bcd3587dfb3ee3789240739d0049ca460e35bfff383c2342c9873"
+    }
+  ],
+  "diagnosticSummary": "Attempt10: one provider invocation from initial run, live native receipt, one retained queued claim, inactive lane and two delivered native regeneration intents. No suppressed runtime exception. Earlier missing-receipt denial does not release internal claim; later valid native request is duplicate-guarded.",
+  "sameCountTerminalDifferentXml": true
+}

@@ -1984,14 +1984,22 @@ public final class AgentForegroundService extends Service {
           if (nativeRegeneration==null || !chatSessionId.equals(nativeRegeneration.getSessionId())
               || !existingUserMessageId.equals(nativeRegeneration.getUserMessageId())
               || !com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this)
-                  .validateNativeRegenerationReceiptSync(nativeRegeneration)) return false;
+                  .validateNativeRegenerationReceiptSync(nativeRegeneration)) {
+            // This request acquired its transient stored-input claim before admission. Denying
+            // a caller boolean must not strand that claim and block a later real native action.
+            if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
+            return false;
+          }
         }
         // This admission runs at physical lane dequeue, before allocating a token/UI generation.
         // A predecessor can hot-incorporate the exact USER while its direct intent is queued.
         // Explicit regeneration retains its separate native authority and is not a duplicate.
         if (!regeneration && submittedInput != null && submittedInput.origin == ConversationInput.Origin.USER
             && submittedInputStore.handledConversationMessageIds(chatSessionId,
-                java.util.Collections.singletonList(existingUserMessageId)).contains(existingUserMessageId)) return false;
+                java.util.Collections.singletonList(existingUserMessageId)).contains(existingUserMessageId)) {
+          if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
+          return false;
+        }
         // SYSTEM inputs may become context for a later user or AGENT turn, but never initiate one.
         if (submittedInput != null && submittedInput.origin == ConversationInput.Origin.SYSTEM) {
           if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
