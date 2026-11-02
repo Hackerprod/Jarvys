@@ -57,13 +57,17 @@ public class OrdinaryRegenerationAvailabilityTest {
   };
  }
  @After public void cleanup(){steerRelease.countDown();release.countDown();base.cleanup();}
+ static String requiredMessageId(org.json.JSONObject row) {
+  try {return row.getString("messageId");}
+  catch(org.json.JSONException malformed) {throw new AssertionError("Native messageId is required",malformed);}
+ }
  @Test public void freshUserDisplacesRegenerationBeforeStaleSocketReturns()throws Exception {
   String original=send("Original completed request");
   until(()->storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().anyMatch(r->r.getUserMessageId().equals(original)&&r.getState().equals("COMPLETED")));
   service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);pump();
   com.jarvys.agent.chatdb.CentralSubmissionSnapshot originalRow=storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().filter(r->r.getUserMessageId().equals(original)).findFirst().get();
   com.jarvys.agent.workspaces.TreeRoot originalRoot=(com.jarvys.agent.workspaces.TreeRoot)invoke("root",new Class[]{String.class},original);
-  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
+  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=requiredMessageId(store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get());return store.regenerateAssistantIfLatest(session,assistant);});
   AgentForegroundService.startRegenerateAssistant(context,event.getText(),new ArrayList<>(),session,event.getUserMessageId(),event.getResumeReceipt(),event.getNativeRegenerationReceipt());
   until(()->entered.getCount()==0);
   List<com.jarvys.agent.chatdb.PersonalMemorySessionView> heldMemory=storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).personalAgentMemorySessions()).stream().filter(r->original.equals(r.getOwnerMessageId())).collect(java.util.stream.Collectors.toList());
@@ -90,7 +94,7 @@ public class OrdinaryRegenerationAvailabilityTest {
   String original=send("Original completed request");
   until(()->storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().anyMatch(r->r.getUserMessageId().equals(original)&&r.getState().equals("COMPLETED")));
   service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);pump();
-  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
+  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=requiredMessageId(store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get());return store.regenerateAssistantIfLatest(session,assistant);});
   AgentForegroundService.startRegenerateAssistant(context,event.getText(),new ArrayList<>(),session,event.getUserMessageId(),event.getResumeReceipt(),event.getNativeRegenerationReceipt());
   until(()->entered.getCount()==0);return original;
  }
@@ -127,7 +131,7 @@ public class OrdinaryRegenerationAvailabilityTest {
   until(()->storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().anyMatch(r->r.getUserMessageId().equals(original)&&r.getState().equals("COMPLETED")));
   service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);pump();
   com.jarvys.agent.chatdb.CentralSubmissionSnapshot originalRow=storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().filter(r->r.getUserMessageId().equals(original)).findFirst().get();
-  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
+  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=requiredMessageId(store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get());return store.regenerateAssistantIfLatest(session,assistant);});
   AgentForegroundService.startRegenerateAssistant(context,event.getText(),new ArrayList<>(),session,event.getUserMessageId(),event.getResumeReceipt(),event.getNativeRegenerationReceipt());
   until(()->steerEntered.getCount()==0);
   String steer;
@@ -151,7 +155,7 @@ public class OrdinaryRegenerationAvailabilityTest {
   retainedMode=true;
   String original=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String user=store.appendConversationMessage(session,"user","Retained v99 USER request");store.appendConversationMessage(session,"assistant","Retained successful answer",0L,"retained-v99-run",user,"COMPLETED",null);return user;});
   assertTrue(storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).isEmpty());
-  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
+  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=requiredMessageId(store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get());return store.regenerateAssistantIfLatest(session,assistant);});
   assertNotNull(event.getNativeRegenerationReceipt());assertEquals("RETAINED",event.getNativeRegenerationReceipt().getSourceKind());
   AgentForegroundService.startRegenerateAssistant(context,event.getText(),new ArrayList<>(),session,event.getUserMessageId(),event.getResumeReceipt(),event.getNativeRegenerationReceipt());
   until(()->entered.getCount()==0);
