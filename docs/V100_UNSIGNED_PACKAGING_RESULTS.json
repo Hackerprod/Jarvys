@@ -1,0 +1,83 @@
+{
+  "status": "unsigned-packaging-and-forced-same-cache-repeat-pass",
+  "sourceCommit": "9da390a01d10c1a6887f92e3af5e937c22b108ef",
+  "sourceBindingSha256": "69f93d514068c2b42b03c2327872879753753e1eec61b23e95d7449024e0c1c4",
+  "package": "com.jarvys.agent",
+  "versionCode": 100,
+  "versionName": "1.2.93-CENTRAL-AVAILABLE",
+  "abi": "arm64-v8a",
+  "testOnly": false,
+  "testOnlyEvidence": "Attribute absent in final binary manifest; Android default false",
+  "factoryTemplateTestOnly": false,
+  "wholeApkByteIdentical": true,
+  "allZipEntryPayloadHashesIdentical": true,
+  "repeatForcedTasks": 143,
+  "attempts": [
+    {
+      "attempt": "v100-unsigned-assembly-3",
+      "apkSha256": "238bce3525be652674357ae1209c69cdfe7de42ee57ce266c016a0827e798bd5",
+      "bytes": 41207631,
+      "terminalSha256": "2a9984d1e04df6cfd62e04ce324b8bb49131126bbfb645c35d83690d95bdf780",
+      "commandSha256": "932abbebebb3332554e72334689f3ffc655be7af07ea8d46b4d53ea886f309a4",
+      "payloadManifestSha256": "9d233359d6c32ad0db141a5c5779a64311ad3ba325299d828e03c6ca1609af0c",
+      "binaryManifestDumpSha256": "95afc365c48e179c243906cc71a4b186e4fc9f52215898692fb2893304748706",
+      "factoryTemplateSha256": "784c876eb382ac7e8c530f0b3b88c0cd6a296ff36901a68da180e9ed79ba3fa1",
+      "nativeEntries": [
+        "lib/arm64-v8a/libandroid-shmem.so",
+        "lib/arm64-v8a/libandroidx.graphics.path.so",
+        "lib/arm64-v8a/libc++_shared.so",
+        "lib/arm64-v8a/libproot_exec.so",
+        "lib/arm64-v8a/libproot_loader.so",
+        "lib/arm64-v8a/librive-android.so",
+        "lib/arm64-v8a/libsqliteJni.so",
+        "lib/arm64-v8a/libtalloc.so"
+      ],
+      "sourceUnchanged": true
+    },
+    {
+      "attempt": "v100-unsigned-assembly-4",
+      "apkSha256": "238bce3525be652674357ae1209c69cdfe7de42ee57ce266c016a0827e798bd5",
+      "bytes": 41207631,
+      "terminalSha256": "5598ddadcbaaccdc15a6fddab237a9c5dd16efb6d7712917fb9f1fd416d27969",
+      "commandSha256": "6faf153681a7aab6b2e528bab487d60ff0b8606144db85253abcc7529fa1479c",
+      "payloadManifestSha256": "9d233359d6c32ad0db141a5c5779a64311ad3ba325299d828e03c6ca1609af0c",
+      "binaryManifestDumpSha256": "95afc365c48e179c243906cc71a4b186e4fc9f52215898692fb2893304748706",
+      "factoryTemplateSha256": "784c876eb382ac7e8c530f0b3b88c0cd6a296ff36901a68da180e9ed79ba3fa1",
+      "nativeEntries": [
+        "lib/arm64-v8a/libandroid-shmem.so",
+        "lib/arm64-v8a/libandroidx.graphics.path.so",
+        "lib/arm64-v8a/libc++_shared.so",
+        "lib/arm64-v8a/libproot_exec.so",
+        "lib/arm64-v8a/libproot_loader.so",
+        "lib/arm64-v8a/librive-android.so",
+        "lib/arm64-v8a/libsqliteJni.so",
+        "lib/arm64-v8a/libtalloc.so"
+      ],
+      "sourceUnchanged": true
+    }
+  ],
+  "retainedAttempts": [
+    {
+      "attempt": 1,
+      "status": "offline dependency unavailable",
+      "terminalSha256": "e88be3829c5558667569dfee9ac2fcefd142517f0faba197741e30e5b689c324"
+    },
+    {
+      "attempt": 2,
+      "status": "interrupted-unknown after denied poll",
+      "interruptionSha256": "a0b6d6a5ca06b574cc09ace2a1320c9c083ecd519872b9e2271abcf99c44615b"
+    },
+    {
+      "attempt": 3,
+      "status": "Gradle SUCCESS; collector path failure recovered without rebuild",
+      "collectorRecoverySha256": "7f14f634783bfece9781ffb5007f3d62fe57b20e0f92ce1827ed541baf840fb7"
+    }
+  ],
+  "hostEvidenceSha256": "478b396575e6cbd1a5f4e3f0891268678a00ab7846261bee41b79f22143f974f",
+  "limitations": [
+    "Same-cache forced rebuild only, not clean independent-machine reproducibility.",
+    "Unsigned artifacts; signing/identity verification owned separately by lead.",
+    "No native binary or APK execution, installation, device or live-provider validation.",
+    "Independent P3 review remains separate."
+  ]
+}

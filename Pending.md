@@ -1,3 +1,7 @@
+## Estado vigente — v100: PASS host y packaging independiente; envío aceptado — 02-11-2026
+
+APK FullARM64 v100 `8401f07de04af9eca9f8e573d697cce4642529b748d21b9f7b6a4a105bd7da57`, firma DEBUG original/testOnlyfalse. Full/Play **1.358 pruebas cada uno** y revisión independiente de implementación/packaging PASS acotado; rebuildforzado y firma repetida idénticos. Tres partes ZIP subidas y recuperadas/verificadas; **envío aceptado el02-11-2026 a16:35:36UTC**, no descarga/instalación confirmada. [Checkpoint, hashes, instrucciones y límites](docs/V100_DELIVERY_CHECKPOINT.md). Menú/datos/Engram conservados; no garantía temporal universal ni causa del teléfono demostrada. Los FAIL históricos permanecen.
+
 ## Estado vigente — reparación v99 fase B: PASS independiente acotado; packaging v100 pendiente — 02-11-2026
 
 **PASS independiente B** sobre `b40a7f49`: autor Full/Play1.358 pruebas por sabor; revisor314+2 adversariales por sabor, todo sin fallos y con bindings exactos. Cerrados ambos defectos R1 y el claim transitorio rechazado R2. [Checkpoint PASS y límites](docs/V99_CENTRAL_IMPLEMENTATION_PASS.md). Se prepara v100 con firma DEBUG original y cambios exclusivos de versión/build; **no APK nuevo aprobado ni entregado**. Sin garantía temporal universal, validación en teléfono/proveedor vivo ni causa original confirmada. Menú/datos/Engram conservados; todos los FAIL históricos permanecen.

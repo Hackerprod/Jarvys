@@ -1,0 +1,41 @@
+{
+  "status": "independent-packaging-pass-uploaded-roundtrip-verified-user-channel-accepted",
+  "apk": {
+    "filename": "Jarvys-v100-full-arm64-central-available-debug.apk",
+    "bytes": 41250747,
+    "sha256": "8401f07de04af9eca9f8e573d697cce4642529b748d21b9f7b6a4a105bd7da57"
+  },
+  "zip": {
+    "filename": "Jarvys-v100-full-arm64-central-available-debug.zip",
+    "bytes": 39263542,
+    "sha256": "e73b46ae233faf03c13824b671387857ffef41eb4a541e814f6e306645052dd2",
+    "crcVerified": true
+  },
+  "parts": [
+    {
+      "filename": "Jarvys-v100-full-arm64-central-available-debug.zip.001",
+      "bytes": 16777216,
+      "sha256": "4aa95de62ba702a3cada007dea900cc432f23302d7392918c1212b96cf37ac65"
+    },
+    {
+      "filename": "Jarvys-v100-full-arm64-central-available-debug.zip.002",
+      "bytes": 16777216,
+      "sha256": "ab12102f4942c6936ef0a4df9d57cdbe46a2820cddf3202c72e5ae32f8a94326"
+    },
+    {
+      "filename": "Jarvys-v100-full-arm64-central-available-debug.zip.003",
+      "bytes": 5709110,
+      "sha256": "6b9dab4c81db77690ac9f2ca05c2700a9e10c68452a3d088b421673a748ca95a"
+    }
+  ],
+  "reassembledApkVerified": true,
+  "uploadedRoundtripVerified": true,
+  "package": "com.jarvys.agent",
+  "versionCode": 100,
+  "versionName": "1.2.93-CENTRAL-AVAILABLE",
+  "sourceCommit": "9da390a01d10c1a6887f92e3af5e937c22b108ef",
+  "certificateSha256": "d2de47ccf48e02f58ecf4633392ff3f119e925aad1abaa7921c7ce163cfcec4e",
+  "independentPackagingReportSha256": "9dcd9b3434fa21437a289b5e946c3cc79fbf83d29f9686bebde3527efc68efcf",
+  "deliveryAcceptedUtc": "2026-11-02T16:35:36Z",
+  "downloadOrInstallationVerified": false
+}

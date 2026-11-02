@@ -15,3 +15,7 @@ Retained attempt history:
 The actual delivered v99 baseline was reconstructed from its existing split ZIP, passed ZIP CRC, matched APK SHA256 `db8736e25634262fbba55314a49a57912d9858ccf107bffdf37460a8391f5b50` and its original DEBUG signature. Original-key certificate preflight matches `d2de47ccf48e02f58ecf4633392ff3f119e925aad1abaa7921c7ce163cfcec4e`; credentials and key remain private, not included in evidence or backups.
 
 No v100 delivery/installation/device/live-provider validation is claimed. Existing menu/data/Engram remain preserved; binary downgrade after new writes is unsupported. Prior independent FAILs and unresolved historical timing limits remain intact. Same-cache reproduction is not an independent-machine build claim.
+
+## Cierre del gate
+
+Assembly4offlineforzada completó143/143tareas y reprodujoAPKunsignedbyteporbyte. Ambas firmas independientes conidentidadoriginal reprodujeronSHA8401f07de04af9eca9f8e573d697cce4642529b748d21b9f7b6a4a105bd7da57. Revisión limpiaP3: PASS acotado exacto; [checkpoint final](V100_DELIVERY_CHECKPOINT.md). La entrega preparada mantiene límites y todos los intentos históricos anteriores.
