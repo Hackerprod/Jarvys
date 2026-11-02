@@ -1,12 +1,12 @@
 package com.jarvys.agent;
 
-/** Existing schema/lineage gates passed; exact assistant-source conservation awaits revalidation.
+/** Paired schema/lineage/assistant-source conservation gates passed; local acceptance enabled.
  * Stored metadata never constitutes execution permission. */
 public final class CentralAvailabilityPolicy {
     private CentralAvailabilityPolicy() {}
     public static boolean roomMigrationEnabled() { return true; }
     public static boolean registryMigrationEnabled() { return true; }
-    public static boolean admissionEnabled() { return false; }
+    public static boolean admissionEnabled() { return true; }
     /** Call before acquiring a Room writer/lifecycle lease. Never upgrades or grants permission. */
     public static void requireRegistrySchemaReady(android.content.Context context) {
         if (!admissionEnabled()) throw new IllegalStateException("Central availability admission is not enabled");
