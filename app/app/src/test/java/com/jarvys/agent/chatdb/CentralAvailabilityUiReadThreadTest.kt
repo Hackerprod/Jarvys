@@ -18,15 +18,26 @@ class CentralAvailabilityUiReadThreadTest {
     private val context:Context get()=ApplicationProvider.getApplicationContext()
     @Test fun existingUiFixtureDispatchesReadOnlyInspectionWithoutCreatingEitherDatabase() {
         assertSame(Looper.getMainLooper(),Looper.myLooper())
-        // Match the read-only inspector path without invoking bootstrap-producing StorageGeneration.
-        val file=java.io.File(java.io.File(java.io.File(context.filesDir,"jarvys"),StorageGeneration.NAME),"agent.db")
-        val registry=context.getDatabasePath(WorkspaceRegistry.DATABASE_NAME)
-        assertFalse(file.exists());assertFalse(registry.exists())
-        val bridge=ChatDatabaseBridge.getInstance(context)
-        assertFalse(bridge.centralSubmissionSchemaReadySync())
-        val events=listOf(AgentRunUiEvent.messageEvent(1,"user","retained UI row",1))
-        assertEquals(events,CentralAvailabilityUiProjection.project(context,"jarvys-central",events))
-        assertFalse(file.exists());assertFalse(registry.exists())
+        // The real Application may already populate its own databases during startup.
+        // Use untouched isolated paths; do not delete or suppress that normal bootstrap.
+        val files=chat.newFilesDirectory("lazy-inspection")
+        val isolated=object:android.content.ContextWrapper(context) {
+            override fun getApplicationContext():Context=this
+            override fun getFilesDir():java.io.File=files
+            override fun getDatabasePath(name:String):java.io.File=java.io.File(java.io.File(files,"databases"),name)
+        }
+        val file=java.io.File(java.io.File(java.io.File(files,"jarvys"),StorageGeneration.NAME),"agent.db")
+        val registry=isolated.getDatabasePath(WorkspaceRegistry.DATABASE_NAME)
+        assertFalse("isolated Room fixture must start absent",file.exists())
+        assertFalse("isolated Registry fixture must start absent",registry.exists())
+        try {
+            val bridge=ChatDatabaseBridge.getInstance(isolated)
+            assertFalse(bridge.centralSubmissionSchemaReadySync())
+            val events=listOf(AgentRunUiEvent.messageEvent(1,"user","retained UI row",1))
+            assertEquals(events,CentralAvailabilityUiProjection.project(isolated,"jarvys-central",events))
+            assertFalse("inspection created Room",file.exists())
+            assertFalse("inspection created Registry",registry.exists())
+        } finally {chat.onDatabaseWorker {ChatDatabaseBridge.closeInstanceForTests(files)}}
     }
     @Test fun newInspectionEntryDoesNotRelaxExistingProductionMainThreadGuard() {
         assertSame(Looper.getMainLooper(),Looper.myLooper())
