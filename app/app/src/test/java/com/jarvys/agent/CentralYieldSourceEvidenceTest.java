@@ -57,6 +57,47 @@ public class CentralYieldSourceEvidenceTest {
         // Evidence inspection did not create a queued native Send or an execution permit.
         assertTrue(store.readCentralSubmissions(session).isEmpty());
     }
+    @Test public void roomProtocolSourcePreservesAllAdmittedMetadataWithoutMintingPermission() throws Exception {
+        File files=chat.newFilesDirectory();LocalRunStore store=chat.localRunStore(files);
+        String user=store.appendConversationMessage(session,"user","Original source");
+        CentralUserRootCheckpoint origin=store.captureCentralUserRoot(session,user);
+        ConversationInput.Provenance provenance=new ConversationInput.Provenance("workspace-source","workspace","assignment","bot","source-message",
+                ConversationInput.Kind.RESULT,ConversationInput.Provenance.PrincipalRole.SUBORDINATE,
+                "central-continuation:source-evidence","workspace-coordination-"+String.join("",Collections.nCopies(64,"a")),
+                String.join("",Collections.nCopies(64,"b")),2L,"request","mission","cycle");
+        String message=store.appendConversationInput(new ConversationInput(session,"source-message","Exact result data",ConversationInput.Origin.AGENT,provenance));
+        ConversationTurn admitted=ConversationTurn.internalInput("Exact result data",-1,
+                ConversationTurn.IncomingMetadata.forInternalInput(provenance),message);
+        admitted.bindSource(new ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE,session,message,""));
+        assertEquals(11,admitted.incomingMetadata.references.size());
+        // Evidence inspection still requires the canonical ACK; a protocol-shaped row grants nothing.
+        assertThrows(IllegalStateException.class,()->store.validateCentralYieldSources(origin,Collections.singletonList(admitted)));
+        store.markConversationMessagesIncorporated(session,Collections.singletonList(message));
+        store.validateCentralYieldSources(origin,Collections.singletonList(admitted));
+        CoreAgentLoop.Checkpoint restored=CentralYieldCheckpointCodec.decode(CentralYieldCheckpointCodec.encode(
+                new CoreAgentLoop.Checkpoint(Collections.singletonList(admitted),Collections.singleton(message),Collections.emptyMap(),-1)));
+        store.validateCentralYieldSources(origin,restored.transcript);
+        assertEquals(admitted.incomingMetadata.references,restored.transcript.get(0).incomingMetadata.references);
+        ConversationTurn.IncomingMetadata shortened=new ConversationTurn.IncomingMetadata(ConversationInput.Origin.AGENT,
+                provenance.messageId,"agent",provenance.botId,provenance.kind.name(),admitted.incomingMetadata.references.subList(0,4),true,provenance);
+        ConversationTurn wrong=ConversationTurn.internalInput(admitted.content,-1,shortened,message);wrong.bindSource(admitted.source());
+        assertThrows(IllegalStateException.class,()->store.validateCentralYieldSources(origin,Collections.singletonList(wrong)));
+        assertTrue(store.loadConversationContext(session).stream().noneMatch(t->t.source()!=null && message.equals(t.source().sourceId)));
+        assertTrue(store.readCentralSubmissions(session).isEmpty());
+    }
+
+    @Test public void ordinaryAgentAndSystemRowsKeepTheirExistingMetadataRepresentation() throws Exception {
+        File files=chat.newFilesDirectory();LocalRunStore store=chat.localRunStore(files);
+        for(ConversationInput.Origin kind:Arrays.asList(ConversationInput.Origin.AGENT,ConversationInput.Origin.SYSTEM)) {
+            ConversationInput.Provenance source=new ConversationInput.Provenance("source","workspace","assignment","bot",kind.name(),ConversationInput.Kind.FINDING);
+            String id=store.appendConversationInput(new ConversationInput(session,kind.name(),"Ordinary source data",kind,source));
+            ConversationTurn restored=store.loadConversationContext(session).stream().filter(t->t.source()!=null && id.equals(t.source().sourceId)).findFirst().get();
+            assertEquals(kind,restored.incomingMetadata.origin);
+            assertEquals(Arrays.asList("sessionId=source","workspaceId=workspace","assignmentId=assignment","botId=bot"),restored.incomingMetadata.references);
+            assertEquals(source.toJson().toString(),restored.incomingMetadata.provenance.toJson().toString());
+        }
+    }
+
     @Test public void nativeTerminalPairsRejectUncertainMismatchedAndRestartedEffects() throws Exception {
         for(String scenario:Arrays.asList("completed","never-launched","uncertain","wrong-name","restarted","mismatched-pair")) {
             File files=chat.newFilesDirectory();LocalRunStore store=chat.localRunStore(files);

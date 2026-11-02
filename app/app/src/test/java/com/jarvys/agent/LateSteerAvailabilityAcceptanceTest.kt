@@ -89,7 +89,8 @@ class LateSteerAvailabilityAcceptanceTest {
             assertEquals(1L,get<CountDownLatch>("releaseSecond").count)
             val partial=storage.onDatabaseWorker {LocalRunStore(context).readConversationMessages(session)}.filter {it.optString("role")=="assistant" && it.optString("userMessageId")==steer}
             assertEquals(1,partial.size);assertEquals("PARTIAL",partial.single().getString("status"))
-            get<CountDownLatch>("releaseSecond").countDown();assertTrue(staleReturned.await(10,TimeUnit.SECONDS))
+            get<CountDownLatch>("releaseSecond").countDown();assertTrue(get<CountDownLatch>("secondResponseReturned").await(10,TimeUnit.SECONDS))
+            assertEquals("Revoked transport must not parse its late body",1L,staleReturned.count)
             assertFalse(storage.onDatabaseWorker {LocalRunStore(context).readModelTranscriptRows(session)}.any {it.toString().contains("late-followup-effect")})
             assertFalse(storage.onDatabaseWorker {LocalRunStore(context).readConversationMessages(session)}.any {it.optString("content")=="LATE FOLLOWUP ANSWER"})
             assertEquals(3,get<AtomicInteger>("calls").get())
@@ -209,4 +210,75 @@ class LateSteerAvailabilityAcceptanceTest {
             assertEquals("No stale pending request or duplicate queued intent replays the source",3,get<AtomicInteger>("calls").get())
         } finally {AgentForegroundService.stopRun(session);releaseOld.countDown();releaseFollowup.countDown();releaseFresh.countDown()}
     }
+    @Test fun actualPreAckInterruptionReceiptCannotBeReusedAfterUncertainTerminalWrite() {
+        field("holdFirst").setBoolean(base,false)
+        val oldFinished=CountDownLatch(1);val releaseOld=CountDownLatch(1)
+        val followupEntered=CountDownLatch(1);val releaseFollowup=CountDownLatch(1)
+        val resultReady=CountDownLatch(1);val releaseResult=CountDownLatch(1)
+        val first=java.util.concurrent.atomic.AtomicBoolean(true)
+        val actualOwner=AtomicReference<AgentForegroundService.OrdinaryRunOwner>()
+        val actualToken=AtomicReference<CancellationToken>()
+        val actualResult=AtomicReference<CoreAgentLoop.Result>()
+        val prior=service.mainChatRunner
+        val steerText="Pending STEER with exact uncertain terminal write"
+        service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->
+            if(goal==steerText) {
+                actualOwner.set(CoreAgentRuntime::class.java.getDeclaredField("ordinaryRunOwner").apply {isAccessible=true}.get(runtime) as AgentForegroundService.OrdinaryRunOwner)
+                actualToken.set(token);followupEntered.countDown();check(releaseFollowup.await(20,TimeUnit.SECONDS))
+            }
+            prior.run(runtime,goal,history,attachments,token,progress).also {result ->
+                if(result.isOrdinaryInterrupted) {actualResult.set(result);resultReady.countDown();check(releaseResult.await(20,TimeUnit.SECONDS))}
+                else if(first.compareAndSet(true,false)) {oldFinished.countDown();check(releaseOld.await(20,TimeUnit.SECONDS))}
+            }
+        }
+        field("socketReply").set(base,{index:Int ->reply("Native answer $index")})
+        try {
+            send("Original source for real typed terminal receipt")
+            until("Original reader closed") {oldFinished.count==0L}
+            assertTrue(storage.onDatabaseWorker {AgentForegroundService.interruptAndSend(context,session,steerText,arrayListOf())})
+            releaseOld.countDown();until("Actual follow-up owner") {followupEntered.count==0L}
+            val fresh=send("Fresh native request supersedes the pre-ACK follow-up")
+            releaseFollowup.countDown();until("Actual confirmed ordinary interruption") {resultReady.count==0L}
+            val owner=actualOwner.get();val token=actualToken.get();val receipt=actualResult.get().ordinaryInterruptionReceipt()
+            val input=AppendMessageInput(session,"assistant",listOf(MessagePartInput("text","Confirmed interruption")),status="PARTIAL",runId=owner.runId,ownerUserMessageId=owner.inputMessageId)
+            storage.onDatabaseWorker {
+                val db=JarvysChatDatabaseProvider.getInstance(context);val repo=ConversationRepository(db)
+                val wrong=kotlinx.coroutines.runBlocking {runCatching {repo.appendOrdinaryInterruption(input.copy(ownerUserMessageId="wrong-owner"),owner,token,receipt)}.exceptionOrNull()}
+                assertNotNull("Typed receipt rejects invented terminal attribution",wrong)
+                val originalPart=db.testChatSql.query("SELECT payload FROM message_parts WHERE conversation_id=? AND message_id=? AND kind='text'",arrayOf(session,owner.inputMessageId)).use {check(it.moveToFirst());it.getString(0)}
+                db.testChatSql.execSQL("UPDATE message_parts SET payload='mutated exact source' WHERE conversation_id=? AND message_id=? AND kind='text'",arrayOf(session,owner.inputMessageId))
+                val changed=kotlinx.coroutines.runBlocking {runCatching {repo.appendOrdinaryInterruption(input,owner,token,receipt)}.exceptionOrNull()}
+                assertNotNull("Canonical source changed after proof mint must fail before append",changed)
+                db.testChatSql.execSQL("UPDATE message_parts SET payload=? WHERE conversation_id=? AND message_id=? AND kind='text'",arrayOf(originalPart,session,owner.inputMessageId))
+                val failure=runCatching {kotlinx.coroutines.runBlocking {db.withChatWriteTransaction {
+                    db.testChatSql.execSQL("CREATE TEMP TRIGGER reject_ordinary_terminal BEFORE INSERT ON main.messages WHEN NEW.status='PARTIAL' BEGIN SELECT RAISE(ABORT,'synthetic ordinary terminal failure'); END")
+                    try {repo.appendOrdinaryInterruption(input,owner,token,receipt)}
+                    finally {db.testChatSql.execSQL("DROP TRIGGER IF EXISTS temp.reject_ordinary_terminal")}
+                }}}.exceptionOrNull()
+                assertNotNull(failure)
+                assertTrue(generateSequence(failure){it.cause}.any {it.message.orEmpty().contains("synthetic ordinary terminal failure")})
+                val repeated=kotlinx.coroutines.runBlocking {runCatching {repo.appendOrdinaryInterruption(input,owner,token,receipt)}.exceptionOrNull()}
+                assertNotNull(repeated)
+                assertTrue(generateSequence(repeated){it.cause}.any {it.message.orEmpty().contains("terminal write already claimed")})
+                val store=LocalRunStore(context)
+                assertNull(store.readConversationInputState(session,owner.inputMessageId))
+                assertTrue(store.readPendingInterruptRequests(session).any {it.optString("requestId")==owner.inputMessageId})
+                assertFalse(store.readConversationMessages(session).any {it.optString("role")=="assistant" && it.optString("userMessageId")==owner.inputMessageId})
+            }
+            assertEquals("Pre-ACK source performed no provider/tool operation",1,get<AtomicInteger>("calls").get())
+            releaseResult.countDown()
+            until("Burned receipt does not block fresh input or falsely resolve pending source") {
+                storage.onDatabaseWorker {LocalRunStore(context).readCentralSubmissions(session).single {it.userMessageId==fresh}}.state=="COMPLETED" &&
+                    storage.onDatabaseWorker {LocalRunStore(context).readConversationMessages(session)}.any {it.optString("role")=="assistant" && it.optString("userMessageId")==owner.inputMessageId && it.optString("status")=="COMPLETED"}
+            }
+            service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS)
+            val rows=storage.onDatabaseWorker {LocalRunStore(context).readConversationMessages(session)}.filter {it.optString("role")=="assistant" && it.optString("userMessageId")==owner.inputMessageId}
+            assertEquals("No generic FAILED fallback or duplicate uncertain terminal",1,rows.size)
+            assertEquals("COMPLETED",rows.single().optString("status"))
+            assertEquals("Fresh turn and genuinely never-incorporated recovery each run once",3,get<AtomicInteger>("calls").get())
+            assertEquals("incorporated",storage.onDatabaseWorker {LocalRunStore(context).readConversationInputState(session,owner.inputMessageId)})
+
+        } finally {AgentForegroundService.stopRun(session);releaseOld.countDown();releaseFollowup.countDown();releaseResult.countDown()}
+    }
+
 }

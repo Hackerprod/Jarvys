@@ -130,15 +130,46 @@ public final class CoreAgentRuntime {
   }
 
   /** Postcommit proof for an interrupted ordinary run; never a tree/suspension permission. */
+  private final java.util.LinkedHashMap<String, CoreAgentLoop.IncomingMessage> ordinaryIncomingOwners = new java.util.LinkedHashMap<>();
+  private final java.util.LinkedHashMap<String, String> ordinaryIncomingDigests = new java.util.LinkedHashMap<>();
+  void bindOrdinaryIncomingOwners(List<CoreAgentLoop.IncomingMessage> messages, CancellationToken token) {
+    if (ordinaryRunOwner == null || token != ordinaryRunToken) throw new IllegalStateException("Ordinary owner unavailable");
+    ordinaryRunOwner.requireCurrent(token);
+    for (CoreAgentLoop.IncomingMessage message : messages) {
+      if (message == null || !"main_chat".equals(message.sourceKind)) continue;
+      String digest=com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).confirmCentralTreeIncomingSync(sessionId,message);
+      if (ordinaryIncomingOwners.containsKey(message.id)) throw new IllegalStateException("Ordinary input already incorporated");
+      ordinaryIncomingOwners.put(message.id,message);ordinaryIncomingDigests.put(message.id,digest);
+    }
+  }
+  private String confirmOrdinaryFinalOwner(CoreAgentLoop.Checkpoint checkpoint,CancellationToken token) {
+    ordinaryRunOwner.requireCurrent(token);String last=ordinaryRunOwner.getInputMessageId();
+    for (CoreAgentLoop.IncomingMessage incoming : ordinaryIncomingOwners.values()) {
+      if (!checkpoint.appliedIncomingIds.contains(incoming.id) || !ordinaryIncomingDigests.get(incoming.id).equals(
+          com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).confirmCentralTreeIncomingSync(sessionId,incoming)))
+        throw new IllegalStateException("Ordinary final owner evidence changed");
+      last=incoming.id;
+    }
+    return last;
+  }
   public static final class ConfirmedOrdinaryInterruption {
     private final AgentForegroundService.OrdinaryRunOwner owner;
     private final CancellationToken token;
     private final CentralSubmissionAdmission.LivePermit request;
     private final MainChatTranscriptStore.TreeExitReceipt checkpoint;
+    private final String finalOwnerMessageId;
+    private final List<CoreAgentLoop.IncomingMessage> incomingOwners;
+    private final java.util.Map<String, String> incomingDigests;
+    private final java.util.concurrent.atomic.AtomicBoolean terminalWriteClaimed = new java.util.concurrent.atomic.AtomicBoolean();
     private ConfirmedOrdinaryInterruption(AgentForegroundService.OrdinaryRunOwner owner,
-        CancellationToken token, CentralSubmissionAdmission.LivePermit request, MainChatTranscriptStore.TreeExitReceipt checkpoint) {
-      this.owner=owner;this.token=token;this.request=request;this.checkpoint=checkpoint;
+        CancellationToken token, CentralSubmissionAdmission.LivePermit request, MainChatTranscriptStore.TreeExitReceipt checkpoint, String finalOwnerMessageId,
+        java.util.Collection<CoreAgentLoop.IncomingMessage> incomingOwners, java.util.Map<String,String> incomingDigests) {
+      this.owner=owner;this.token=token;this.request=request;this.checkpoint=checkpoint;this.finalOwnerMessageId=finalOwnerMessageId;
+      this.incomingOwners=java.util.Collections.unmodifiableList(new ArrayList<>(incomingOwners));
+      this.incomingDigests=java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(incomingDigests));
     }
+    public List<CoreAgentLoop.IncomingMessage> getIncomingOwners() { return incomingOwners; }
+    public java.util.Map<String,String> getIncomingDigests() { return incomingDigests; }
     CentralSubmissionAdmission.LivePermit request() { return request; }
     public void requireCurrent(AgentForegroundService.OrdinaryRunOwner expected,
         CancellationToken expectedToken) {
@@ -146,6 +177,16 @@ public final class CoreAgentRuntime {
           || !owner.getInputMessageId().equals(checkpoint.ownerMessageId))
         throw new IllegalStateException("Ordinary interruption owner changed");
       owner.requireCurrent(token);
+    }
+    public void requireTerminalOwner(String finalOwner) {
+      if (!finalOwnerMessageId.equals(finalOwner)) throw new IllegalStateException("Ordinary terminal attribution changed");
+    }
+    /** One native terminal append attempt; uncertain persistence never rearms this receipt. */
+    public void claimTerminalWrite(AgentForegroundService.OrdinaryRunOwner expected,
+        CancellationToken expectedToken) {
+      requireCurrent(expected, expectedToken);
+      if (!terminalWriteClaimed.compareAndSet(false, true))
+        throw new IllegalStateException("Ordinary interruption terminal write already claimed");
     }
   }
 
@@ -640,7 +681,8 @@ public final class CoreAgentRuntime {
         MainChatTranscriptStore.requireSafeYieldCheckpoint(candidate.checkpoint);
         MainChatTranscriptStore.TreeExitReceipt persisted=transcriptStore.confirmTreeExit(candidate.checkpoint,runId);
         ConfirmedOrdinaryInterruption receipt=new ConfirmedOrdinaryInterruption(
-            ordinaryRunOwner,token,candidate.request,persisted);
+            ordinaryRunOwner,token,candidate.request,persisted,confirmOrdinaryFinalOwner(candidate.checkpoint,token),
+            ordinaryIncomingOwners.values(),ordinaryIncomingDigests);
         receipt.requireCurrent(ordinaryRunOwner,token);
         completed.withConfirmedOrdinaryInterruption(receipt);
         confirmedNonterminalExit=true;

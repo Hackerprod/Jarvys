@@ -1608,7 +1608,11 @@ internal class ConversationReader(
             "sessionId=${provenance.sessionId}", "workspaceId=${provenance.workspaceId}",
             "assignmentId=${provenance.assignmentId}", "botId=${provenance.botId}",
         )
-        val metadata = ConversationTurn.IncomingMetadata(origin, provenance.messageId, "agent",
+        // The explicitly admitted continuation uses this same complete metadata factory.
+        // Ordinary retained AGENT/SYSTEM history keeps its existing representation.
+        val metadata = if (origin == ConversationInput.Origin.AGENT && WorkspaceContinuationDelivery.isProtocol(provenance))
+            ConversationTurn.IncomingMetadata.forInternalInput(provenance)
+        else ConversationTurn.IncomingMetadata(origin, provenance.messageId, "agent",
             provenance.botId, provenance.kind.name, references, true, provenance)
         return ConversationTurn.internalInput(message.text, index, metadata, message.messageId)
     }

@@ -239,6 +239,9 @@ public final class AgentForegroundService extends Service {
       if(regeneration!=null)regeneration.requireTransactionOwner(token);
       else if("FOLLOW_UP".equals(input.getSourceKind()))physicalOwner.requireFollowUpClaim(input.getMessageId());
     }
+    public NativeRegenerationReceipt.ConsumedOwner getConsumedRegeneration(CancellationToken token) {requireCurrent(token);return regeneration;}
+    public com.jarvys.agent.chatdb.NativeOrdinaryInputSource getOrdinaryInputSource(CancellationToken token) {requireCurrent(token);return input;}
+    public CentralSubmissionOwner getPhysicalOwner(CancellationToken token) {requireCurrent(token);return physicalOwner;}
     /** Called outside service admission/child locks; source evidence never mints another owner. */
     public void revalidateSource(CancellationToken token) {
       requireCurrent(token);
@@ -2313,6 +2316,7 @@ public final class AgentForegroundService extends Service {
     MainChatTurnContextProvider steeringProvider = null;
     CentralTreeAdmission treeAdmission=null;
     boolean treeExitDisposed=false;
+    boolean confirmedOrdinaryInterruption=false;
     String treeFailureReason="FAILED";
     final boolean exactUserOrigin=!userMessageAlreadyRecorded || (existingUserMessageId!=null && !existingUserMessageId.isEmpty());
     try {
@@ -2479,6 +2483,7 @@ public final class AgentForegroundService extends Service {
               if (incorporatedIds.isEmpty()) return;
               CentralAgentInputCatalog.acknowledge(conversationStore, sessionId, incorporatedIds, agentIds);
               if(runTreeAdmission!=null)runTreeAdmission.bindIncomingOwner(AgentForegroundService.this,messages,token);
+              if(ordinaryRegenerationOwner!=null)runtime.bindOrdinaryIncomingOwners(messages,token);
               assistantOwnerMessageId.set(latestId);
               assistantOwnerInternal.set(latestInternal);
               if (latestInternal) AgentRunUiState.markInternalConversationInput(sessionId, token.generation());
@@ -2599,6 +2604,7 @@ public final class AgentForegroundService extends Service {
           throw new IllegalStateException("Ordinary interruption has no exact regeneration owner");
         ordinaryRegenerationOwner.revalidateSource(token);
         result.ordinaryInterruptionReceipt().requireCurrent(ordinaryRegenerationOwner,token);
+        confirmedOrdinaryInterruption=true;
       }
       if(result.isYielded()) {
         if(treeAdmission==null)throw new IllegalStateException("Typed yield has no original root authority");
@@ -2633,7 +2639,11 @@ public final class AgentForegroundService extends Service {
       String assistantMessageId = "";
       String proactiveThreadKey = assistantOwnerInternal.get() ? null
           : conversationStore.proactiveThreadKeyForUserMessage(sessionId, assistantOwnerMessageId.get());
-      assistantMessageId = storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)
+      assistantMessageId = result.isOrdinaryInterrupted()
+          ? com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this).appendOrdinaryInterruptionSync(
+              ordinaryRegenerationOwner,token,result.ordinaryInterruptionReceipt(),chatMessage,
+              result.durationMs,assistantOwnerMessageId.get(),proactiveThreadKey)
+          : storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)
           ? WorkspaceContinuationDelivery.finish(this, storedInput, token, chatMessage,
               timedOut ? "PARTIAL" : result.outcome, result.durationMs)
           : conversationStore.appendConversationMessage(
@@ -2690,6 +2700,16 @@ public final class AgentForegroundService extends Service {
       }
       if ("STOPPED".equals(result.outcome)) lastRunReport = chatMessage;
     } catch (RuntimeException failure) {
+      if(confirmedOrdinaryInterruption && !token.wasStoppedByUser()) {
+        // The confirmed safe-point is not a task failure. Never invent an ACK/FAILED row or
+        // reuse its burned terminal receipt after an uncertain persistence outcome.
+        reportStopPersistenceFailure(failure);
+        chatMessage=AgentResultPresentation.failure(this,failure);
+        AgentRunUiState.completeGeneration(sessionId,token.generation(),"uncertain-interruption-"+sessionId,
+            "PARTIAL",chatMessage,"",0L);
+        finishCoreRun(token,chatMessage);
+        return;
+      }
       if(suspensionClaim!=null && !suspensionClaim.isBound()) {
         if(token.wasStoppedByUser())try {suspensionClaim.stopReservedOwner(token);}
         catch(RuntimeException stopFailure){if(stopFailure!=failure)failure.addSuppressed(stopFailure);}

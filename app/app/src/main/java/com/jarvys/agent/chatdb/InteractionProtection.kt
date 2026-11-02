@@ -111,11 +111,37 @@ internal class InteractionProtection(private val database: JarvysChatDatabase) {
             val p = position(seq)?.takeIf { item?.get("item_kind") == expectedKind && item?.get("item_key") == expectedKey }
             if(p == null) { unsafe = true; g.uncertain = true } else positions[source] = p
         }
+        // Native regeneration preserves the selected legacy response, including its absent
+        // historical owner. A confirmed hide marker gives it an evidence-only uncertain group;
+        // this never assigns an owner, exposes hidden text, or supplies execution authority.
+        fun regeneratedOrphan(row:Map<String,String?>):Group? {
+            if(row["role"]!="assistant" || row["owner_user_message_id"]!=null ||
+                row["hidden_kind"]!="assistant_regenerated" || !NativeRegenerationSource.terminal(row["status"]))return null
+            val id=row["message_id"] ?: return null
+            val hidden=row["hidden_seq"]?.toLongOrNull() ?: return null
+            val seq=row["seq"]?.toLongOrNull() ?: return null
+            val marker=items[hidden.toString()]
+            if(hidden<=seq || marker?.get("item_kind")!="assistant_regenerated" || marker?.get("item_key")!=id)return null
+            val owner=NativeRegenerationSource.ownerId(database,conversation,id) ?: return null
+            val user=messages.singleOrNull {it["message_id"]==owner && it["role"]=="user" && it["hidden_kind"]==null} ?: return null
+            val targetPosition=NativeRegenerationSource.position(database,conversation,id) ?: return null
+            val userPosition=NativeRegenerationSource.position(database,conversation,owner) ?: return null
+            // Positive submissions require explicit owner evidence at native regeneration; an
+            // orphan cannot be reclassified as retained history after losing that evidence.
+            if(CentralTurnSubmissionRepository(database).list(conversation).any {it.userMessageId==owner})return null
+            if(sql.query("SELECT 1 FROM message_parts WHERE conversation_id=? AND message_id=? AND kind IN (?,?) LIMIT 1",
+                arrayOf(conversation,owner,CentralSubmissionRequest.PART_KIND,com.jarvys.agent.ConversationInput.PROVENANCE_PART_KIND)).use {it.moveToFirst()})return null
+            val sourceDigest=captureCentralUserRootDigestInTransaction(database,conversation,owner)
+            evidence.put(JSONArray().put("native_regenerated_orphan").put(id).put(hidden).put(owner)
+                .put(sourceDigest).put(JSONArray(targetPosition)).put(JSONArray(userPosition)))
+            return Group(false,position(user["seq"]),uncertain=true)
+        }
         for (row in messages) {
             val id = row["message_id"]
             if (id == null) { unsafe=true; continue }
             val role = row["role"]
-            val g = group(if(role in setOf("user","agent","system")) id else row["owner_user_message_id"])
+            val g = regeneratedOrphan(row)?.also { groups["regenerated:$id"]=it }
+                ?: group(if(role in setOf("user","agent","system")) id else row["owner_user_message_id"])
             bind(g,ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE,conversation,id,null),row["seq"])
             if(role == "assistant") {
                 if(row["status"] == "COMPLETED" && row["hidden_kind"] == null) g.completed = true

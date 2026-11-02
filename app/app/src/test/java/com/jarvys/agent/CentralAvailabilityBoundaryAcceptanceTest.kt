@@ -50,6 +50,8 @@ class CentralAvailabilityBoundaryAcceptanceTest {
     private var holdThird=false
     private val thirdEntered=CountDownLatch(1)
     private val releaseThird=CountDownLatch(1)
+    private val secondResponseReturned=CountDownLatch(1)
+    private val thirdResponseReturned=CountDownLatch(1)
     private var socketReply:((Int)->String)?=null
     private val secondEntered=CountDownLatch(1)
     private val releaseSecond=CountDownLatch(1)
@@ -68,6 +70,8 @@ class CentralAvailabilityBoundaryAcceptanceTest {
             }
             if(index==2 && holdSecond) {secondEntered.countDown();while(releaseSecond.count>0)try {releaseSecond.await()}catch(_:InterruptedException){}}
             if(index==3 && holdThird) {thirdEntered.countDown();while(releaseThird.count>0)try {releaseThird.await()}catch(_:InterruptedException){}}
+            if(index==2)secondResponseReturned.countDown()
+            if(index==3)thirdResponseReturned.countDown()
             return 200
         }
         override fun getInputStream()=ByteArrayInputStream((socketReply?.invoke(index) ?: when(index) {

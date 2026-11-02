@@ -474,7 +474,47 @@ class ConversationRepository internal constructor(private val database: JarvysCh
      * replacing `role=user`/`role=assistant` in
      * `LocalRunStore.java:appendConversationMessage`.
      */
-    suspend fun appendMessage(input: AppendMessageInput): ChatDbResult<StoredMessage> = transactionResult {
+    suspend fun appendMessage(input: AppendMessageInput): ChatDbResult<StoredMessage> = appendMessageNative(input,null)
+
+    /** Exact confirmed interruption only; ordinary PARTIAL failure still resolves its USER. */
+    internal suspend fun appendOrdinaryInterruption(input:AppendMessageInput,
+        owner:com.jarvys.agent.AgentForegroundService.OrdinaryRunOwner,
+        token:com.jarvys.agent.CancellationToken,
+        receipt:com.jarvys.agent.CoreAgentRuntime.ConfirmedOrdinaryInterruption):ChatDbResult<StoredMessage> {
+        check(input.conversationId==owner.sessionId && input.runId==owner.runId && input.role==ROLE_ASSISTANT && input.status=="PARTIAL")
+        return database.withChatWriteTransaction {
+            validateOrdinaryInterruptionSource(owner,token,receipt)
+            receipt.requireTerminalOwner(input.ownerUserMessageId)
+            receipt.claimTerminalWrite(owner,token)
+            appendMessageNative(input) {validateOrdinaryInterruptionSource(owner,token,receipt)}
+        }
+    }
+    private suspend fun validateOrdinaryInterruptionSource(owner:com.jarvys.agent.AgentForegroundService.OrdinaryRunOwner,
+        token:com.jarvys.agent.CancellationToken,receipt:com.jarvys.agent.CoreAgentRuntime.ConfirmedOrdinaryInterruption) {
+        receipt.requireCurrent(owner,token)
+        val physical=owner.getPhysicalOwner(token)
+        val regeneration=owner.getConsumedRegeneration(token)
+        if(regeneration!=null) {
+            regeneration.requireOwner(physical);val original=regeneration.originalReceipt()
+            check(CentralTurnSubmissionRepository(database).regenerationEvidence(original.sessionId,
+                original.userMessageId,original.assistantMessageId,physical.runId)==original.evidence)
+        } else {
+            val source=checkNotNull(owner.getOrdinaryInputSource(token))
+            check(sql.query("SELECT value FROM storage_meta WHERE key=?",arrayOf(ConnectionProjectionRepository.GENERATION_KEY)).use {
+                it.moveToFirst() && it.getString(0)==source.storageGeneration && !it.moveToNext()
+            }) {"Ordinary source storage generation changed"}
+            source.requireSame(hydrateMessages(source.sessionId,listOf(source.messageId)).single())
+            if(source.sourceKind=="FOLLOW_UP") {
+                physical.requireFollowUpClaim(source.messageId)
+                check(NativeOrdinaryInputSource.readFollowUpLedger(database,source.sessionId,source.messageId,false)==source.followUpLedger)
+            }
+        }
+        for(incoming in receipt.incomingOwners)check(CentralIncomingOwnerEvidence.confirm(database,owner.sessionId,incoming)==receipt.incomingDigests[incoming.id])
+        receipt.requireCurrent(owner,token)
+    }
+    private suspend fun appendMessageNative(input:AppendMessageInput,
+        confirmedInterruption:(suspend ()->Unit)?):ChatDbResult<StoredMessage> = transactionResult {
+        confirmedInterruption?.invoke()
         validateMessageInput(input)?.let { return@transactionResult ChatDbResult.Invalid(it) }
         if (input.conversationKind.isBlank()) return@transactionResult ChatDbResult.Invalid("conversation kind is required")
         var conversation = findConversation(input.conversationId)
@@ -536,10 +576,11 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (input.role == ROLE_USER && !input.interruptRequestId.isNullOrBlank() && !input.acknowledgementRequired) {
             resolveUnacknowledgedInterruptInput(input.conversationId, id, input.interruptRequestId)
         }
-        if (input.role == ROLE_ASSISTANT) {
+        if (input.role == ROLE_ASSISTANT && confirmedInterruption==null) {
             resolveOwnedInputAfterFailure(input.conversationId, input.ownerUserMessageId, input.status)
         }
         updateConversationMessageCounters(input.conversationId, now)
+        confirmedInterruption?.invoke()
         ChatDbResult.Success(hydrateMessages(input.conversationId, listOf(id)).single())
     }
 

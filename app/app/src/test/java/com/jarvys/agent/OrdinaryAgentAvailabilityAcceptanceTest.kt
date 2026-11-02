@@ -114,7 +114,8 @@ class OrdinaryAgentAvailabilityAcceptanceTest {
         }
         assertEquals(1,interrupted.size);assertEquals("PARTIAL",interrupted.single().getString("status"))
         get<CountDownLatch>("releaseThird").countDown()
-        assertTrue(lateReturned.await(10,TimeUnit.SECONDS))
+        assertTrue(get<CountDownLatch>("thirdResponseReturned").await(10,TimeUnit.SECONDS))
+        assertEquals("Revoked transport must not parse its late body",1L,lateReturned.count)
         assertFalse(storage.onDatabaseWorker {LocalRunStore(context).readModelTranscriptRows(session)}.any {it.toString().contains("late-ordinary-effect")})
         assertFalse(storage.onDatabaseWorker {LocalRunStore(context).readConversationMessages(session)}.any {it.optString("content")=="LATE ORDINARY ANSWER"})
         assertEquals(4,get<AtomicInteger>("calls").get())

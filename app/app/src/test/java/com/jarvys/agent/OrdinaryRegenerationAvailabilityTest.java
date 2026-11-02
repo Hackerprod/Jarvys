@@ -16,9 +16,15 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk={34},application=TreeNativeTestApplication.class,shadows={ArtifactOsShadow.class})
+@Config(sdk={34},application=TreeNativeTestApplication.class,shadows={ArtifactOsShadow.class,OrdinaryRegenerationAvailabilityTest.StopFailureShadow.class})
 @LooperMode(LooperMode.Mode.PAUSED)
 public class OrdinaryRegenerationAvailabilityTest {
+ @Implements(AgentErrorReporter.class)
+ public static class StopFailureShadow {
+  static final java.util.concurrent.ConcurrentLinkedQueue<Throwable> failures=new java.util.concurrent.ConcurrentLinkedQueue<>();
+  @Implementation public static void reportBackgroundFailure(Context context,Throwable failure){failures.add(failure);}
+  @Implementation public static void reportChatDatabaseFailure(Context context,Throwable failure){failures.add(failure);}
+ }
  final CentralAvailabilityServiceTest base=new CentralAvailabilityServiceTest();
  @Rule public TestRule rules=base.getRules();
  final CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
@@ -38,7 +44,7 @@ public class OrdinaryRegenerationAvailabilityTest {
  void until(java.util.function.BooleanSupplier test)throws Exception {long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(20);while(!test.getAsBoolean()){pump();if(nativeFailure.get()!=null)throw new AssertionError("Actual native runtime failed; provider calls="+calls.get(),nativeFailure.get());if(System.nanoTime()>end)fail("Native condition did not settle; provider calls="+calls.get()+"; states="+storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)));Thread.sleep(10);}}
  String send(String text)throws Exception{return (String)invoke("send",new Class[]{String.class},text);}
  @Before public void setup()throws Exception {
-  base.setup();context=ApplicationProvider.getApplicationContext();service=(AgentForegroundService)field("service");storage=(ChatTestStore)field("storage");
+  StopFailureShadow.failures.clear();base.setup();context=ApplicationProvider.getApplicationContext();service=(AgentForegroundService)field("service");storage=(ChatTestStore)field("storage");
   SecretStore secrets=new SecretStore(context.getSharedPreferences("availability-fixture-secret",0));
   OpenRouterClient provider=new OpenRouterClient(secrets,new ProviderSettings(context),ChatCompletionsConfig.openRouterDefault(),endpoint->new HttpURLConnection(new URL("https://example.invalid/review")) {
    final int index=calls.incrementAndGet(); final ByteArrayOutputStream body=new ByteArrayOutputStream();
@@ -119,6 +125,13 @@ public class OrdinaryRegenerationAvailabilityTest {
   String original=beginRegeneration();
   AgentForegroundService.stopRun(session);service.awaitStopTasksForTesting().get(10,TimeUnit.SECONDS);
   service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);
+  Field uncertain=AgentForegroundService.class.getDeclaredField("uncertainStopInputSessions");uncertain.setAccessible(true);
+  Field unresolved=AgentForegroundService.class.getDeclaredField("unresolvedStoppedInputCohorts");unresolved.setAccessible(true);
+  if(((Set<?>)uncertain.get(service)).contains(session)) {
+   AssertionError failure=new AssertionError("Exact STOP cohort quarantined after physical release; unresolved="+((Set<?>)unresolved.get(service)).size());
+   for(Throwable cause:StopFailureShadow.failures)failure.addSuppressed(cause);
+   throw failure;
+  }
   assertTrue(regenerationToken.get().wasStoppedByUser());
   assertTrue(regenerationResult.get()==null || !regenerationResult.get().isOrdinaryInterrupted());
   assertEquals(1L,release.getCount());

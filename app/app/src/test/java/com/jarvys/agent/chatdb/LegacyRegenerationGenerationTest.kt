@@ -53,7 +53,15 @@ class LegacyRegenerationGenerationTest {
             answer
         }
         db.testChatSql.execSQL("DELETE FROM storage_meta WHERE key=?",arrayOf(ConnectionProjectionRepository.GENERATION_KEY))
-        assertThrows(IllegalStateException::class.java) {ChatDatabaseBridge.getInstance(context).regenerateIfLatestAssistantSync(session,assistant.messageId)}
+        val bridge=ChatDatabaseBridge.getInstance(context)
+        val before=bridge.readMessageSync(session,assistant.messageId)
+        val source=bridge.readMessageSync(session,assistant.ownerUserMessageId!!)
+        val result=bridge.regenerateIfLatestAssistantSync(session,assistant.messageId)
+        assertTrue(result is ChatDbResult.Invalid)
+        assertEquals("Queued or uncertain Central submission cannot be regenerated",(result as ChatDbResult.Invalid).reason)
+        assertEquals(before,bridge.readMessageSync(session,assistant.messageId))
+        assertEquals(source,bridge.readMessageSync(session,assistant.ownerUserMessageId!!))
+        assertEquals(0L,db.testChatSql.query("SELECT COUNT(*) FROM conversation_items WHERE conversation_id=? AND item_kind='assistant_regenerated'",arrayOf(session)).use {it.moveToFirst();it.getLong(0)})
         assertNull(generation(db))
     }
     private fun assertUnsupportedConserved(status:String?,runId:String?,explicitOwner:Boolean=true) {

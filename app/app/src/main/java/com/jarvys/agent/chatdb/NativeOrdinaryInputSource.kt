@@ -18,6 +18,18 @@ class NativeOrdinaryInputSource private constructor(
         check(row.text==text && row.parts==parts && row.attachments==attachments) {"Ordinary input canonical source changed"}
     }
     companion object {
+        internal fun readFollowUpLedger(database:JarvysChatDatabase,session:String,id:String,pending:Boolean):List<String> {
+        val values=mutableListOf<String>()
+        database.chatSql.query("SELECT seq,content,dispatched_message_id,dispatched_seq,input_state FROM interrupt_requests WHERE conversation_id=? AND request_id=?",arrayOf(session,id)).use { c ->
+            check(c.moveToFirst() && c.getString(2)==id && !c.isNull(3))
+            check(c.isNull(4) || !pending && c.getString(4)=="incorporated")
+            for(i in 0..3)values.add(c.getString(i));check(!c.moveToNext())
+        }
+        database.chatSql.query("SELECT ordinal,skill_id FROM interrupt_request_skills WHERE conversation_id=? AND request_id=? ORDER BY ordinal",arrayOf(session,id)).use { c ->
+            while(c.moveToNext()){values.add(c.getString(0));values.add(c.getString(1))}
+        }
+        return values
+        }
         internal fun captureFollowUp(row:StoredMessage,input:ConversationInput,generation:String,
             lifecycle:ConnectionStateCoordinator.DestinationEvidence,ledger:List<String>):NativeOrdinaryInputSource {
             check(WorkspaceIdentity.isCentral(input.conversationId) && input.origin==ConversationInput.Origin.USER && input.provenance==null)
