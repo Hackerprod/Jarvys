@@ -93,7 +93,7 @@ class WorkspaceRegistry(context: Context) : Closeable {
                 SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY,
                     DatabaseErrorHandler { incompatible() }).use { actual ->
                     val version = actual.version
-                    if (version !in 1..2) incompatible()
+                    if (version !in 1..3) incompatible()
                     SQLiteDatabase.create(null).use { expected ->
                         statements(version).forEach(expected::execSQL)
                         if (schema(actual) != schema(expected)) incompatible()
@@ -108,6 +108,7 @@ class WorkspaceRegistry(context: Context) : Closeable {
         private fun statements(version: Int): List<String> = when (version) {
             1 -> CREATE_SQL
             2 -> CREATE_SQL + WorkspaceTreeSchema.CREATE_SQL
+            3 -> CREATE_SQL + WorkspaceTreeSchema.CREATE_SQL + WorkspaceCentralResumeSchema.CREATE_SQL
             else -> incompatible()
         }
 
@@ -126,11 +127,28 @@ class WorkspaceRegistry(context: Context) : Closeable {
                     while (cursor.moveToNext()) {
                         val name = cursor.getString(1)
                         // SQLite-owned autoindexes/statistics and Android locale metadata are not application DDL.
-                        if (name.startsWith("sqlite_") || name == "android_metadata") continue
+                        if (isPlatformObject(cursor.getString(0), name, cursor.getString(2), if (cursor.isNull(3)) null else cursor.getString(3))) continue
                         add((0..3).map { if (cursor.isNull(it)) null else cursor.getString(it) })
                     }
                 }
             }
+
+        // Match platform objects by type, ownership and DDL, never by a name-only wildcard.
+        private fun isPlatformObject(type: String, name: String, owner: String, ddl: String?): Boolean {
+            if (type == "index" && ddl == null && owner.isNotBlank() &&
+                name.startsWith("sqlite_autoindex_${owner}_") &&
+                name.removePrefix("sqlite_autoindex_${owner}_").matches(Regex("[1-9][0-9]*"))) return true
+            if (type == "table" && name == owner) {
+                val normalized = ddl?.replace(Regex("\\s+"), "")?.lowercase()
+                return when(name) {
+                    "android_metadata" -> normalized == "createtableandroid_metadata(localetext)"
+                    "sqlite_stat1" -> normalized == "createtablesqlite_stat1(tbl,idx,stat)"
+                    "sqlite_stat4" -> normalized == "createtablesqlite_stat4(tbl,idx,neq,nlt,ndlt,sample)"
+                    else -> false
+                }
+            }
+            return false
+        }
 
         private fun statOrNull(file: java.io.File): android.system.StructStat? = try {
             android.system.Os.lstat(file.path)
@@ -231,14 +249,14 @@ class WorkspaceRegistry(context: Context) : Closeable {
             fun validateSchema() {
                 requireCurrent()
                 val version = sql.query("PRAGMA user_version").use { c ->
-                    check(c.moveToFirst() && c.getType(0) == Cursor.FIELD_TYPE_INTEGER && c.getLong(0) in 1L..2L) { "doctor_registry_schema_invalid" }
+                    check(c.moveToFirst() && c.getType(0) == Cursor.FIELD_TYPE_INTEGER && c.getLong(0) in 1L..3L) { "doctor_registry_schema_invalid" }
                     c.getLong(0).toInt()
                 }
                 val expected = expectedSchema(version)
                 val actual = sql.query("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").use { c ->
                     buildList { while (c.moveToNext()) {
                         val name = c.getString(1)
-                        if (!name.startsWith("sqlite_") && name != "android_metadata") {
+                        if (!isPlatformObject(c.getString(0), name, c.getString(2), if(c.isNull(3)) null else c.getString(3))) {
                             add((0..3).map { column ->
                                 check(c.getType(column) == Cursor.FIELD_TYPE_STRING) { "doctor_registry_schema_invalid" }
                                 c.getString(column)
@@ -278,7 +296,21 @@ class WorkspaceRegistry(context: Context) : Closeable {
                 WorkspaceTreeSchema.CREATE_SQL.forEach(db::execSQL)
                 db.version = 2
             }
-            2 -> Unit
+            2, 3 -> Unit
+            else -> incompatible()
+        }
+    }
+
+    /** Explicit pre-write compatibility operation; ordinary reads never invoke it. */
+    fun upgradeCentralResumeSchema() = transaction { db ->
+        when (db.version) {
+            1, 2 -> {
+                if (db.version == 1) WorkspaceTreeSchema.CREATE_SQL.forEach(db::execSQL)
+                WorkspaceCentralResumeSchema.CREATE_SQL.forEach(db::execSQL)
+                if (schema(db) != expectedSchema(3)) incompatible()
+                db.version = 3
+            }
+            3 -> Unit
             else -> incompatible()
         }
     }
@@ -287,7 +319,7 @@ class WorkspaceRegistry(context: Context) : Closeable {
         block(helper.readableDatabase)
     }
     internal fun <T> treeTransaction(block: (SQLiteDatabase) -> T): T = transaction { db ->
-        check(db.version == 2) { "Tree schema has not been explicitly enabled" }
+        check(db.version in 2..3) { "Tree schema has not been explicitly enabled" }
         block(db)
     }
 
