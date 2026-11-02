@@ -17,12 +17,16 @@ final class CodexAuthenticatedRequestExecutor {
 
     static ProviderHttp.Response execute(JSONObject request, String sessionId, CancellationToken token,
                                          String model, CredentialProvider credentials, Sender sender) {
+        requireInferenceOwner();
         Object current = credentials.get(false, token);
         ProviderHttp.Response response = sender.send(request, current, sessionId, token);
         if (response.status != 401) return response;
         token.throwIfCancelled();
+        requireInferenceOwner();
         try {
             current = credentials.get(true, token);
+        } catch (ProviderAttemptLease.YieldRequested yielded) {
+            throw yielded;
         } catch (java.util.concurrent.CancellationException cancelled) {
             throw cancelled;
         } catch (RuntimeException refreshFailure) {
@@ -31,4 +35,9 @@ final class CodexAuthenticatedRequestExecutor {
         }
         return sender.send(request, current, sessionId, token);
     }
+    private static void requireInferenceOwner() {
+        ProviderAttemptLease lease = ProviderAttemptLease.current();
+        if (lease != null) lease.requireOwnerCurrent();
+    }
+
 }

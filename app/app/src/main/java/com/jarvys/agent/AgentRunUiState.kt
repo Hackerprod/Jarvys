@@ -1834,6 +1834,24 @@ object AgentRunUiState {
         )
     } }
 
+    /** Display-only release after a confirmed durable yield; no assistant/completion event is created. */
+    @JvmStatic
+    fun parkCentralGeneration(sessionId:String,generation:Long)=inSession(sessionId) { synchronized(lock) {
+        val ownership=owner()
+        if(!ownedRunActive || ownedSessionId!=sessionId || activeGeneration!=generation
+            || ownership.stoppingGeneration==generation)return@synchronized
+        clearAssistantTextStreamsLocked(sessionId,generation)
+        ownedRunActive=false
+        ownedLiveSnapshot=null
+        ownership.systemOriginGeneration=null
+        ownership.internalInputGeneration=null
+        pendingProgress.clear()
+        val current=_state.value
+        if(current.sessionId==sessionId)_state.value=current.copy(running=false,stopping=false,outcome="WAITING",
+            interactiveOwnerSessionId=null,liveMascotTool=null,liveModelWaitId=null,liveUserWaitId=null,
+            events=interruptActivities(current.events))
+    } }
+
     @JvmStatic
     fun completeGeneration(sessionId: String, generation: Long, runId: String, outcome: String,
         text: String, messageId: String, durationMs: Long) = inSession(sessionId) { synchronized(lock) {

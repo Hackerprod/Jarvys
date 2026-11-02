@@ -15,6 +15,7 @@ import java.util.Set;
 import java.util.UUID;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.json.JSONException;
 
 /** Durable model observations, deliberately separate from memory/reflection input and UI cards. */
 final class MainChatTranscriptStore {
@@ -68,6 +69,122 @@ final class MainChatTranscriptStore {
             this.runId=runId;this.ownerMessageId=ownerMessageId;this.digest=digest;
             this.committedIncomingIds=Collections.unmodifiableSet(new java.util.LinkedHashSet<>(incoming));
         }
+    }
+    /** Confirmed checkpoint facts only; the native tree owner separately authorizes parking. */
+    public static final class ConfirmedCentralYield {
+        private final TreeExitReceipt checkpointReceipt;
+        private final CoreAgentLoop.Checkpoint retained;
+        private final String oldCycle, certificate, digest;
+        private final CentralSubmissionAdmission.LivePermit request;
+        private ConfirmedCentralYield(TreeExitReceipt receipt, CoreAgentLoop.Checkpoint retained,
+                String oldCycle, CentralSubmissionAdmission.LivePermit request) {
+            this.checkpointReceipt=receipt;this.retained=retained;this.oldCycle=oldCycle;this.request=request;
+            this.digest=exactCheckpointDigest(receipt,retained);
+            try {
+                certificate=new JSONObject().put("version",1).put("kind","CENTRAL_YIELD")
+                    .put("runId",receipt.runId).put("oldCycleId",oldCycle).put("ownerMessageId",receipt.ownerMessageId)
+                    .put("checkpointDigest",digest).put("submissionId",request.getSubmissionId())
+                    .put("submissionUserMessageId",request.getUserMessageId()).put("submissionSourceSha256",request.getSourceSha256())
+                    .put("storageGeneration",request.getStorageGeneration()).put("submissionRevision",request.getRevision()).toString();
+            } catch (JSONException invalid) { throw new IllegalStateException(invalid); }
+        }
+        public String runId(){return checkpointReceipt.runId;}
+        public String oldCycleId(){return oldCycle;}
+        public String ownerMessageId(){return checkpointReceipt.ownerMessageId;}
+        public String checkpointDigest(){return digest;}
+        public String certificate(){return certificate;}
+        public CentralSubmissionAdmission.LivePermit request(){return request;}
+        public CoreAgentLoop.Checkpoint retainedCheckpoint(){return retained;}
+    }
+    public static final class ConfirmedCentralSuccessor {
+        private final String runId,digest,resumeId;
+        private final ConfirmedCentralYield original;
+        private ConfirmedCentralSuccessor(String runId,String digest,String resumeId,ConfirmedCentralYield original){
+            this.runId=runId;this.digest=digest;this.resumeId=resumeId;this.original=original;
+        }
+        public String runId(){return runId;}
+        public String checkpointDigest(){return digest;}
+        public String resumeId(){return resumeId;}
+        public ConfirmedCentralYield original(){return original;}
+    }
+    ConfirmedCentralYield confirmYield(CoreAgentLoop.YieldCandidate candidate,String runId,String oldCycle,
+            NativeCentralYieldBoundary boundary,CancellationToken token) {
+        token.throwIfCancelled();boundary.requireCurrent(candidate.request);
+        if(oldCycle==null || oldCycle.isEmpty())throw new IllegalStateException("Exact old tree cycle required");
+        TreeExitReceipt receipt=confirmTreeExit(candidate.checkpoint,runId);
+        if(!sessionId.equals(candidate.request.getSessionId()) ||
+                candidate.checkpoint.appliedIncomingIds.contains(candidate.request.getUserMessageId()))
+            throw new IllegalStateException("New submission belongs outside the old checkpoint");
+        requireSafeYieldCheckpoint(candidate.checkpoint);
+        return new ConfirmedCentralYield(receipt,candidate.checkpoint,oldCycle,candidate.request);
+    }
+    ConfirmedCentralSuccessor confirmYieldSuccessor(CentralTreeAdmission.SuspensionClaim claim,
+            ConfirmedCentralYield original,CoreAgentLoop.Checkpoint checkpoint,String runId,CancellationToken token) {
+        claim.requireCurrent(token);
+        if(claim.confirmedYield()!=original || !claim.sourceCheckpointDigest().equals(original.checkpointDigest()) ||
+                !claim.runId().equals(runId))throw new IllegalStateException("Suspension successor source changed");
+        requireSafeYieldCheckpoint(original.retainedCheckpoint());requireSafeYieldCheckpoint(checkpoint);
+        if(!checkpoint.transcript.equals(original.retained.transcript) ||
+                !checkpoint.toolLifecycle.equals(original.retained.toolLifecycle) ||
+                !checkpoint.appliedIncomingIds.equals(original.retained.appliedIncomingIds) ||
+                !checkpoint.incorporations.equals(original.retained.incorporations))
+            throw new IllegalStateException("Suspension successor did not conserve the exact retained checkpoint");
+        TreeExitReceipt receipt=confirmTreeExit(checkpoint,runId);
+        if(!receipt.ownerMessageId.equals(original.ownerMessageId()))
+            throw new IllegalStateException("Suspension successor cannot acquire the new USER source");
+        claim.requireCurrent(token);
+        return new ConfirmedCentralSuccessor(runId,exactCheckpointDigest(receipt,checkpoint),claim.resumeId(),original);
+    }
+    /** Hash all exact retained content, not only rows newly appended by the last checkpoint. */
+    private static String exactCheckpointDigest(TreeExitReceipt receipt, CoreAgentLoop.Checkpoint checkpoint) {
+        try {
+            JSONObject encoded = CrewCheckpointStore.encodeLoop(checkpoint);
+            JSONArray turns = encoded.getJSONArray("transcript");
+            for (int i=0;i<checkpoint.transcript.size();i++) {
+                ConversationTurn turn=checkpoint.transcript.get(i); JSONObject row=turns.getJSONObject(i);
+                row.put("content",turn.content).put("modelContent",turn.modelContent).put("thinking",turn.thinking)
+                    .put("durableMessageId",turn.durableMessageId).put("systemEventReferenceId",turn.systemEventReferenceId)
+                    .put("imageCount",turn.imageCount);
+                JSONArray images=new JSONArray();
+                for(ConversationTurn.Image image:turn.images) images.put(new JSONObject()
+                    .put("width",image.width).put("height",image.height).put("jpegBase64",image.jpegBase64));
+                row.put("images",images);
+                ConversationTurn.Source source=turn.source();
+                if(source!=null)row.put("source",new JSONObject().put("kind",source.kind.name())
+                    .put("conversationId",source.conversationId).put("sourceId",source.sourceId).put("callId",source.callId));
+                if(turn.incomingMetadata!=null) {
+                    ConversationTurn.IncomingMetadata incoming=turn.incomingMetadata;
+                    row.getJSONObject("incomingMetadata").put("id",incoming.id).put("source",incoming.source)
+                        .put("sender",incoming.sender).put("type",incoming.type);
+                }
+                if(turn.kind==ConversationTurn.Kind.TOOL_CALLS) {
+                    JSONArray calls=row.getJSONArray("calls");
+                    for(int c=0;c<turn.toolCalls.size();c++) calls.getJSONObject(c)
+                        .put("arguments",new JSONObject(turn.toolCalls.get(c).arguments));
+                }
+            }
+            encoded.put("completedToolResults",new JSONObject(checkpoint.completedToolResults));
+            encoded.put("confirmedReceipt",receipt.digest).put("runId",receipt.runId).put("ownerMessageId",receipt.ownerMessageId);
+            byte[] hash=java.security.MessageDigest.getInstance("SHA-256")
+                .digest(encoded.toString().getBytes(StandardCharsets.UTF_8));
+            StringBuilder value=new StringBuilder();
+            for(byte b:hash)value.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
+            return value.toString();
+        } catch(Exception invalid) { throw new IllegalStateException("Exact native checkpoint digest unavailable",invalid); }
+    }
+
+    static void requireSafeYieldCheckpoint(CoreAgentLoop.Checkpoint checkpoint) {
+        for(String state:checkpoint.toolLifecycle.values())
+            if(!"RESULT".equals(state) && !"NEVER_LAUNCHED".equals(state))
+                throw new IllegalStateException("Yield checkpoint has unresolved tool intent/effects");
+        Set<String> calls = new HashSet<>();
+        for (ConversationTurn turn : checkpoint.transcript)
+            for (ModelReply.Call call : turn.toolCalls) calls.add(call.id);
+        if (!calls.equals(checkpoint.toolLifecycle.keySet()))
+            throw new IllegalStateException("Yield checkpoint tool lifecycle coverage changed");
+        CoreAgentLoop.Checkpoint validated=checkpoint.reconciled();
+        if(!validated.transcript.equals(checkpoint.transcript) || !validated.toolLifecycle.equals(checkpoint.toolLifecycle))
+            throw new IllegalStateException("Yield checkpoint requires recovery and cannot auto-resume");
     }
     private boolean captureTreeExit;
     private CoreAgentLoop.Checkpoint confirmedTreeCheckpoint;

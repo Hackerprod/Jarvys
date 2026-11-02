@@ -40,6 +40,7 @@ class AttachmentDraftViewModel internal constructor(
     private var sessionId = ""
     private val protectedIdsBySession = mutableMapOf<String, Set<String>>()
     private val activeSubmissions = mutableMapOf<String, ActiveSubmission>()
+    private val activeRecoveries = mutableMapOf<String, NativeRecoveryAction>()
     var cameraFile: File? = null
         private set
     var cameraSession: String? = null
@@ -108,6 +109,9 @@ class AttachmentDraftViewModel internal constructor(
                 || (text.isBlank() && pending.isEmpty())) return false
             protectedIdsBySession[session] = pending.map { it.id }.toSet()
             val attempt = ActiveSubmission(session, SubmissionCancellation())
+            if (CentralAvailabilityPolicy.admissionEnabled() && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(session))
+                attempt.nativeAction = NativeSendAction(this, session, UUID.randomUUID().toString(), text,
+                    java.util.Collections.unmodifiableList(pending.mapNotNull { it.attachment }))
             activeSubmissions[session] = attempt
             updateSendingProjectionLocked()
             pending to attempt
@@ -124,8 +128,11 @@ class AttachmentDraftViewModel internal constructor(
                     attempt.cancellation.throwIfCancelledBeforePersistence()
                     val attachments = attachmentsToSend.mapNotNull { it.attachment }
                     attempt.cancellation.throwIfCancelledBeforePersistence()
+                    var nativePermit:CentralSubmissionAdmission.LivePermit?=null
                     val messageId = try {
-                        messageSubmitter.persistMessage(getApplication(), session, text, attachments)
+                        val action=attempt.nativeAction
+                        if(action==null) messageSubmitter.persistMessage(getApplication(), session, text, attachments)
+                        else messageSubmitter.persistNativeMessage(getApplication(),action).also {nativePermit=it}.userMessageId
                     } catch (failure: Exception) {
                         AgentErrorReporter.reportChatDatabaseFailure(app, failure)
                         throw failure
@@ -133,7 +140,9 @@ class AttachmentDraftViewModel internal constructor(
                     persisted = true
                     attempt.cancellation.markPersisted()
                     AgentRunUiState.bindCurrentUserMessage(session, messageId, optimisticEventId)
-                    messageSubmitter.startAgent(getApplication(), session, messageId, skills)
+                    val admitted=nativePermit
+                    if(admitted==null) messageSubmitter.startAgent(getApplication(), session, messageId, skills)
+                    else AgentForegroundService.startCentralSubmission(getApplication(),admitted,skills)
                 } catch (failure: Exception) {
                     error = message(if (failure is CancellationException && !persisted) R.string.chat_attachment_send_cancelled
                         else R.string.chat_attachment_send_failed)
@@ -235,6 +244,8 @@ class AttachmentDraftViewModel internal constructor(
     override fun onCleared() {
         synchronized(lock) {
             activeSubmissions.values.forEach { it.cancellation.cancelBeforePersistence() }
+            activeRecoveries.values.forEach { it.cancelled.set(true) }
+            activeRecoveries.clear()
             val session = sessionId
             val protectedIds = protectedIdsBySession[session].orEmpty()
             mutableDrafts.value.filterNot { it.id in protectedIds }.forEach { item -> item.attachment?.let {
@@ -248,7 +259,54 @@ class AttachmentDraftViewModel internal constructor(
         submissionExecutor.shutdown()
         attachmentIo.shutdown()
     }
-    private class ActiveSubmission(val sessionId: String, val cancellation: SubmissionCancellation)
+    private class ActiveSubmission(val sessionId: String, val cancellation: SubmissionCancellation) {
+        var nativeAction:NativeSendAction?=null
+    }
+
+    /** Construction alone grants nothing: the private active attempt must own this exact object. */
+    class NativeSendAction internal constructor(private val owner:AttachmentDraftViewModel,
+        val sessionId:String,val submissionId:String,val text:String,val attachments:List<ChatAttachment>) {
+        private val begun=AtomicBoolean(false)
+        fun beginPersistence() {check(begun.compareAndSet(false,true));requireCurrent(sessionId,submissionId)}
+        fun requireCurrent(session:String,id:String)=synchronized(owner.lock) {
+            check(session==sessionId && id==submissionId && begun.get()) {"Native Send target changed"}
+            val active=owner.activeSubmissions[sessionId]
+            check(active?.nativeAction===this) {"Native Send action is not active"}
+            active!!.cancellation.throwIfCancelledBeforePersistence()
+        }
+    }
+    class NativeRecoveryAction internal constructor(private val owner:AttachmentDraftViewModel,
+        val sessionId:String,val submissionId:String,val revision:Long) {
+        private val begun=AtomicBoolean(false)
+        internal val cancelled=AtomicBoolean(false)
+        fun beginPersistence() {check(begun.compareAndSet(false,true));requireCurrent(sessionId,submissionId,revision)}
+        fun requireCurrent(session:String,id:String,expectedRevision:Long)=synchronized(owner.lock) {
+            check(!cancelled.get() && begun.get() && session==sessionId && id==submissionId && revision==expectedRevision
+                && owner.activeRecoveries[submissionId]===this) {"Native exact recovery action expired or changed"}
+        }
+    }
+
+    /** Only an explicit existing-row UI action calls this; merely reading PREPARED rows is inert. */
+    fun recoverPreparedSubmission(row:com.jarvys.agent.chatdb.CentralSubmissionSnapshot,skills:ArrayList<String>):Boolean {
+        val action=synchronized(lock) {
+            if(!CentralAvailabilityPolicy.admissionEnabled() || row.sessionId!=sessionId || row.state!="PREPARED"
+                || activeRecoveries.containsKey(row.submissionId))return false
+            NativeRecoveryAction(this,row.sessionId,row.submissionId,row.revision).also {activeRecoveries[row.submissionId]=it}
+        }
+        try { submissionExecutor.execute {
+            try {
+                CentralSubmissionAdmission.beginRecovery(action).use {authority ->
+                    val permit=AgentForegroundService.recoverCentralSubmission(app,authority,row.sessionId,row.submissionId,row.revision)
+                    AgentForegroundService.startCentralSubmission(app,permit,skills)
+                }
+            } catch(failure:Exception) {AgentErrorReporter.reportChatDatabaseFailure(app,failure)}
+            finally {synchronized(lock) {if(activeRecoveries[row.submissionId]===action)activeRecoveries.remove(row.submissionId)}}
+        }} catch(failure:RuntimeException) {
+            synchronized(lock) {activeRecoveries.remove(row.submissionId,action)}
+            AgentErrorReporter.reportChatDatabaseFailure(app,failure);return false
+        }
+        return true
+    }
 
     private class SubmissionCancellation {
         private val cancelled = AtomicBoolean(false)
@@ -277,9 +335,16 @@ class AttachmentDraftViewModel internal constructor(
 internal interface AttachmentMessageSubmitter {
     fun persistMessage(application: Application, session: String, text: String, attachments: List<ChatAttachment>): String
     fun startAgent(application: Application, session: String, messageId: String, skills: ArrayList<String>)
+    fun persistNativeMessage(application:Application,action:AttachmentDraftViewModel.NativeSendAction):CentralSubmissionAdmission.LivePermit =
+        throw IllegalStateException("Native NEW_TURN storage adapter is required")
 }
 
 private object LocalAttachmentMessageSubmitter : AttachmentMessageSubmitter {
+    override fun persistNativeMessage(application:Application,action:AttachmentDraftViewModel.NativeSendAction):CentralSubmissionAdmission.LivePermit =
+        CentralSubmissionAdmission.beginSend(action).use {authority ->
+            AgentForegroundService.admitCentralSubmission(application,authority)
+        }
+
     override fun persistMessage(application: Application, session: String, text: String, attachments: List<ChatAttachment>) =
         LocalRunStore(application).appendConversationMessage(session, "user", text, attachments)
 

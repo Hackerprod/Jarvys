@@ -873,7 +873,7 @@ class MainActivity : ComponentActivity() {
         val message = goalInput
         if (message.isBlank() && attachmentDrafts.drafts.value.isEmpty()) return
         val state = AgentRunUiState.state.value
-        if (state.running || state.compacting || state.reflecting) return
+        if (!CentralAvailabilityPolicy.admissionEnabled() && (state.running || state.compacting || state.reflecting)) return
         val sessionId = conversationSessionId
         val enabledSkillIds = skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id }
         if (attachmentDrafts.submit(sessionId, message, ArrayList(enabledSkillIds))) {
@@ -1915,7 +1915,7 @@ private fun JarvysApp(
                     }) else onSubmitMessage,
                     onInterruptAndSend = if (workspaceChatActive) ({}) else onInterruptAndSend,
                     sendAllowed = if (workspaceChatActive) workspaceSelectedAssignment?.canCorrect == true
-                        else agentState.interactiveOwnerSessionId == null,
+                        else CentralAvailabilityPolicy.admissionEnabled() || agentState.interactiveOwnerSessionId == null,
                     canInterrupt = !workspaceChatActive && agentState.running && agentState.sessionId == conversationSessionId
                         && agentState.interactiveOwnerSessionId == conversationSessionId
                         && MessageReactionTool.isOrdinaryChat(conversationSessionId)
@@ -1968,8 +1968,9 @@ private fun JarvysApp(
                     showModelSelector = !workspaceChatActive,
                     showContextActions = !workspaceChatActive,
                     showMicrophoneButton = !workspaceChatActive,
-                    separateStopAction = workspaceChatActive,
-                    stopActionEnabled = !workspaceChatActive ||
+                    separateStopAction = workspaceChatActive || CentralAvailabilityPolicy.admissionEnabled(),
+                    stopActionEnabled = if(!workspaceChatActive && CentralAvailabilityPolicy.admissionEnabled())
+                        agentState.running || attachmentSending else !workspaceChatActive ||
                         workspacePauseEnabled(workspaceChatState.value, workspaceSelectedAssignmentId, workspaceHasActiveWork),
                     stopActionLabel = if (workspaceChatActive) stringResource(R.string.workspace_pause) else null,
             )

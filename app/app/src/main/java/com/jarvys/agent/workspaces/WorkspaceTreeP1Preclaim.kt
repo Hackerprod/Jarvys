@@ -12,8 +12,28 @@ import com.jarvys.agent.workspaces.WorkspaceTreeStore.Companion.integrity
 
 /** Enrolled-only P2 constraint on P1 PREPARED. Never mints a result permit or changes P1 metadata. */
 internal object WorkspaceTreeP1Preclaim {
-    internal data class Enrollment(val storage:String,val rootId:String,val rootCycle:String) {
+    internal data class Enrollment(val storage:String,val rootId:String,val rootCycle:String,val reservation:CentralResumeRecord?=null) {
         fun requireNotStopped()=WorkspaceTreeStops.requireAllowed(storage,rootId,rootId,rootCycle)
+        fun uncertain(context:Context) {
+            val saved=reservation ?: return
+            WorkspaceRegistry(context).use{WorkspaceTreeStore(it).uncertainCentralResume(saved)}
+        }
+    }
+    fun reserveForClaim(context:Context,value:JSONObject,token:com.jarvys.agent.CancellationToken,run:String):Enrollment? {
+        val eligible=requireEligible(context,value) ?: return null
+        if(!com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled())return eligible
+        return WorkspaceRegistry(context).use{registry->
+            check(registry.schemaVersion()==3){"Central resume schema not ready"}
+            val core=WorkspaceTreeStore(registry)
+            val parent=requireNotNull(core.getNode(eligible.rootId,eligible.rootId))
+            val child=requireNotNull(core.findAssignment(value.getString("workspaceId"),value.getString("assignmentId")))
+            eligible.requireNotStopped();token.throwIfCancelled()
+            val reserved=core.reserveCentralChild(TreeNodeFence.of(parent),child.nodeId,run,
+                com.jarvys.agent.crew.CrewProcessIdentity.ID,run,token.generation().toString(),
+                com.jarvys.agent.crew.CrewProcessIdentity.ID+":"+token.generation())
+                ?: throw WorkspaceContinuationDelivery.AdmissionIneligible("Another exact Central resume has priority")
+            eligible.copy(reservation=reserved)
+        }
     }
     fun requireEligible(context:Context,value:JSONObject):Enrollment? {
         val workspace=value.getString("workspaceId");val assignment=value.getString("assignmentId")

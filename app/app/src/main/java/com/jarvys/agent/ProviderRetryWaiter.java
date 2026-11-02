@@ -17,6 +17,11 @@ public class ProviderRetryWaiter implements CoreAgentLoop.RateLimitWaiter {
     public ProviderRetryWaiter() {
         this((millis, token) -> {
             token.throwIfCancelled();
+            ProviderAttemptLease lease = ProviderAttemptLease.current();
+            if (lease != null) {
+                lease.awaitBackoff(millis);
+                return;
+            }
             CountDownLatch cancelled = new CountDownLatch(1);
             Runnable unregister = token.registerCancelAction(cancelled::countDown);
             try {
@@ -52,7 +57,12 @@ public class ProviderRetryWaiter implements CoreAgentLoop.RateLimitWaiter {
         // Retry-After is a provider floor and remains uncapped; cancellation and the
         // active run timeout still interrupt the wait through the existing token gate.
         long delay = Math.max(backoff, retryAfter);
+        ProviderAttemptLease lease = ProviderAttemptLease.current();
+        if (lease != null) lease.requireOwnerCurrent();
+        // Custom clocks retain their existing deterministic sleep contract. Only the native
+        // clock above waits on the lease monitor; no clock or effect is moved to a worker.
         clock.sleep(delay, token);
+        if (lease != null) lease.requireOwnerCurrent();
     }
 
     private static long retryAfter(Throwable failure) {

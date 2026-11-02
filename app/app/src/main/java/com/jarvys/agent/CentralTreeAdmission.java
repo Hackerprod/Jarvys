@@ -145,6 +145,7 @@ public final class CentralTreeAdmission implements AutoCloseable {
                 for(String session:sessions) WorkspaceResultDelivery.schedule(context,session);
             }
         }
+        terminalEvidence=new TerminalEvidence(this,assistantId,receipt.runId,finalOwner,sha256(receipt.digest+":"+assistantId+":"+finalOwner+":"+chain));
     }
     void acknowledgeClaimed(Context context,ConversationInput input) {
         requireCurrent(token);String claim=WorkspaceContinuationDelivery.claimedRunId(context,input,token);
@@ -193,5 +194,205 @@ public final class CentralTreeAdmission implements AutoCloseable {
             }
         } finally {fence.unlock();}
     }
+    /** Only an exact native STARTED submission can create a fresh request root. */
+    static CentralTreeAdmission beginSubmission(Context context,LocalRunStore store,
+            CentralSubmissionAdmission.ClaimAuthority claim,CancellationToken token) {
+        if(!CentralAvailabilityPolicy.admissionEnabled())throw new IllegalStateException("Central availability disabled");
+        claim.requireCurrent(claim.getPermit());
+        if(claim.getTokenGeneration()!=token.generation())throw new IllegalStateException("Submission token changed");
+        ChatDatabaseBridge.getInstance(context).loadCentralSubmissionContextSync(claim);
+        return beginUser(context,store,claim.getPermit().getSessionId(),claim.getPermit().getUserMessageId(),token);
+    }
+
+    public static final class TerminalEvidence {
+        private final CentralTreeAdmission authority;
+        private final String assistantId,runId,finalOwner,chainDigest;
+        private TerminalEvidence(CentralTreeAdmission authority,String assistantId,String runId,String finalOwner,String chainDigest){
+            this.authority=authority;this.assistantId=assistantId;this.runId=runId;this.finalOwner=finalOwner;this.chainDigest=chainDigest;
+        }
+        public String getAssistantId(){return assistantId;}
+        public String getChainDigest(){return chainDigest;}
+        public com.jarvys.agent.connectors.ConnectionStateCoordinator.DestinationEvidence getLifecycle(){return authority.origin.getLifecycle();}
+        public String getRunId(){return runId;}
+        public String getFinalOwnerMessageId(){return finalOwner;}
+        public String getOriginalUserMessageId(){return authority.originUserMessageId();}
+        public String getStorageGeneration(){return authority.storageGeneration();}
+        public String getOriginDigest(){return authority.originDigest();}
+        public void requireOwnerPure(CancellationToken token){
+            authority.requireInvocationCurrent(token);
+            if(authority.terminalEvidence!=this)throw new IllegalStateException("Terminal evidence changed");
+        }
+        public void requireCurrent(CancellationToken token){
+            authority.requireCurrent(token);
+            if(authority.terminalEvidence!=this)throw new IllegalStateException("Terminal evidence changed");
+        }
+    }
+    private TerminalEvidence terminalEvidence;
+    public TerminalEvidence getTerminalEvidence(){return Objects.requireNonNull(terminalEvidence,"Confirmed terminal evidence required");}
+
+    /** Positive live permission minted only after confirmed checkpoint plus atomic native park. */
+    public static final class SuspensionPermit {
+        private final Context context;
+        private final LocalRunStore store;
+        private final CentralUserRootCheckpoint source;
+        private final MainChatTranscriptStore.ConfirmedCentralYield confirmed;
+        private final CentralResumeRecord parked;
+        private final String process=CrewProcessIdentity.ID;
+        private boolean consumed;
+        private SuspensionPermit(Context context,LocalRunStore store,CentralUserRootCheckpoint source,
+                MainChatTranscriptStore.ConfirmedCentralYield confirmed,CentralResumeRecord parked){
+            this.context=context.getApplicationContext();this.store=store;this.source=source;this.confirmed=confirmed;this.parked=parked;
+        }
+        public String getResumeId(){return parked.getResumeId();}
+        public String getSourceDigest(){return parked.getSourceDigest();}
+        public String getRootCycle(){return parked.getParentCycle();}
+        public void requireCurrent(){
+            if(consumed || !process.equals(CrewProcessIdentity.ID))throw new IllegalStateException("Suspension permission no longer live");
+            java.util.concurrent.locks.ReentrantLock lock=source.getLifecycle().fenceIdentity();lock.lock();
+            try {if(!source.getLifecycle().isCurrentPure())throw new IllegalStateException("Suspension lifetime changed");}
+            finally {lock.unlock();}
+            CentralUserRootCheckpoint current=store.captureCentralUserRoot(source.getOwnerCentralSessionId(),source.getOriginUserMessageId());
+            if(!current.getOriginDigest().equals(source.getOriginDigest()) || !current.getStorageGeneration().equals(source.getStorageGeneration()))
+                throw new IllegalStateException("Suspension source changed");
+            try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){
+                WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);CentralResumeRecord actual=trees.getCentralResume(getResumeId());
+                if(actual==null || !"PREPARED".equals(actual.getState()) || actual.getRevision()!=parked.getRevision() || !actual.getSourceDigest().equals(getSourceDigest()))
+                    throw new IllegalStateException("Suspension is no longer unclaimed");
+                TreeRoot root=Objects.requireNonNull(trees.getRoot(parked.getRootId()));
+                if(root.getAdmissionsClosed() || root.getWakesClosed())throw new IllegalStateException("Suspension root closed");
+                TreeNode node=Objects.requireNonNull(trees.getNode(parked.getRootId(),parked.getNodeId()));
+                if(node.getStopEpoch()!=parked.getStopEpoch() || !node.getCycleId().equals(getRootCycle()))
+                    throw new IllegalStateException("Suspension STOP fence changed");
+            }
+        }
+        public synchronized SuspensionClaim reserve(CancellationToken token,String runId){
+            requireCurrent();token.throwIfCancelled();
+            com.jarvys.agent.chatdb.CentralSubmissionSnapshot original=store.readCentralSubmissionForSource(source);
+            String originalRun=original==null?null:original.getClaimRunId();
+            try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){
+                WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);
+                CentralResumeRecord reserved=trees.reserveCentralSuspension(parked,process,runId,Long.toString(token.generation()),process+":"+token.generation());
+                if(reserved==null)return null;
+                consumed=true;
+                return new SuspensionClaim(this,reserved,token,originalRun);
+            } catch(RuntimeException failure){
+                // An unconfirmed transaction outcome must never reuse this process permission.
+                consumed=true;throw failure;
+            }
+        }
+        public synchronized void invalidate(){consumed=true;}
+        public synchronized void stopFromNativeBoundary(){
+            consumed=true;java.util.concurrent.locks.ReentrantLock lock=source.getLifecycle().fenceIdentity();lock.lock();
+            try {
+                if(!source.getLifecycle().isCurrentPure())throw new IllegalStateException("Stopped suspension lifetime changed");
+                try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){new WorkspaceTreeStore(registry).stopCentralResume(parked);}
+            } finally {lock.unlock();}
+        }
+    }
+    public static final class SuspensionClaim {
+        private final SuspensionPermit permit;
+        private final CentralResumeRecord reservation;
+        private final CancellationToken token;
+        private final String originalRun;
+        private CentralTreeAdmission successor;
+        private volatile boolean bound;
+        private volatile boolean invalid;
+        private String successorCertificate;
+        private SuspensionClaim(SuspensionPermit permit,CentralResumeRecord reservation,CancellationToken token,String originalRun){
+            this.permit=permit;this.reservation=reservation;this.token=token;this.originalRun=originalRun;
+        }
+        public String resumeId(){return reservation.getResumeId();}
+        public String rootId(){return reservation.getRootId();}
+        public String cycleId(){return reservation.getSuccessorCycle();}
+        public String runId(){return reservation.getOwnerRun();}
+        public String sourceCheckpointDigest(){return permit.confirmed.checkpointDigest();}
+        public String sourceCertificate(){return permit.confirmed.certificate();}
+        public MainChatTranscriptStore.ConfirmedCentralYield confirmedYield(){return permit.confirmed;}
+        public String getResumeId(){return resumeId();}
+        public String getRunId(){return runId();}
+        public String getOriginalRunId(){return originalRun;}
+        public String getOriginalUserMessageId(){return permit.source.getOriginUserMessageId();}
+        public String getStorageGeneration(){return permit.source.getStorageGeneration();}
+        public String getOriginDigest(){return permit.source.getOriginDigest();}
+        public com.jarvys.agent.connectors.ConnectionStateCoordinator.DestinationEvidence getLifecycle(){return permit.source.getLifecycle();}
+        public String getSuccessorCertificateSha256(){if(!bound)throw new IllegalStateException("Resume not bound");return successorCertificate;}
+        public void requireCurrent(CancellationToken expected){
+            if(expected!=token || invalid || !permit.process.equals(CrewProcessIdentity.ID))throw new IllegalStateException("Suspension claimant changed");
+            token.throwIfCancelled();java.util.concurrent.locks.ReentrantLock lock=getLifecycle().fenceIdentity();lock.lock();
+            try{if(!getLifecycle().isCurrentPure())throw new IllegalStateException("Suspension lifetime changed");}finally{lock.unlock();}
+        }
+        public void requireOwnerPure(CancellationToken expected){
+            if(expected!=token || invalid || !bound || successor==null || !permit.process.equals(CrewProcessIdentity.ID))
+                throw new IllegalStateException("Suspension owner changed");
+            successor.requireInvocationCurrent(expected);
+        }
+        public void requireBound(CancellationToken expected){
+            requireCurrent(expected);if(!bound || successor==null)throw new IllegalStateException("Suspension successor not bound");
+            successor.requireCurrent(expected);
+            try(WorkspaceRegistry registry=new WorkspaceRegistry(permit.context)){
+                WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);CentralResumeRecord current=trees.getCentralResume(resumeId());
+                TreeRoot root=Objects.requireNonNull(trees.getRoot(rootId()));TreeNode node=Objects.requireNonNull(trees.getNode(rootId(),rootId()));
+                if(current==null || !"INCORPORATED".equals(current.getState()) || !Objects.equals(current.getOwnerRun(),runId()) ||
+                    !Objects.equals(current.getOwnerToken(),Long.toString(token.generation())) || !Objects.equals(current.getSourceDigest(),reservation.getSourceDigest()) ||
+                    root.getAdmissionsClosed() || root.getWakesClosed() || node.getAdmissionsClosed() || node.getWakesClosed() ||
+                    !cycleId().equals(node.getCycleId()) || node.getStopEpoch()!=reservation.getStopEpoch())
+                    throw new IllegalStateException("Bound suspension source/owner revoked");
+            }
+        }
+        public void requireTerminalEvidence(CancellationToken expected,TerminalEvidence evidence){
+            requireCurrent(expected);
+            if(!bound || successor==null || evidence==null || evidence.authority!=successor)
+                throw new IllegalStateException("Terminal suspension owner changed");
+            evidence.requireCurrent(expected);
+        }
+        public boolean isBound(){return bound && !invalid;}
+        public void markUncertain(Context context,String reason){
+            if(reason==null || reason.isEmpty())throw new IllegalArgumentException("Uncertainty reason required");
+            invalid=true;
+            try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){
+                new WorkspaceTreeStore(registry).uncertainCentralResume(reservation);
+            }
+        }
+        public CentralTreeAdmission attachSuccessorOwner(Context context,CancellationToken expected){
+            requireCurrent(expected);if(successor!=null)throw new IllegalStateException("Successor owner already attached");
+            CentralTreeAdmission authority=new CentralTreeAdmission(permit.store,permit.source,token,false);
+            authority.bindRoot(rootId());authority.registerStop(context);successor=authority;return authority;
+        }
+        public void bindAndIncorporate(Context context,MainChatTranscriptStore.ConfirmedCentralSuccessor receipt,CancellationToken expected){
+            requireCurrent(expected);
+            if(successor==null || receipt.original()!=permit.confirmed || !receipt.resumeId().equals(resumeId()) || !receipt.runId().equals(runId()))
+                throw new IllegalStateException("Successor receipt changed");
+            successor.revalidateSource(token);
+            try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){
+                WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);
+                String evidence="central-successor-v1:"+resumeId()+":"+runId()+":"+receipt.checkpointDigest();
+                CentralResumeRecord attached=successor.withCurrentWorkspaceTransaction(token,()->trees.bindCentralResume(reservation,evidence));
+                successor.withCurrentWorkspaceTransaction(token,()->trees.incorporateCentralResume(attached,evidence));
+                successorCertificate=sha256(evidence);bound=true;
+            }catch(RuntimeException failure){
+                invalid=true;
+                try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){new WorkspaceTreeStore(registry).uncertainCentralResume(reservation);}
+                catch(RuntimeException cleanup){if(cleanup!=failure)failure.addSuppressed(cleanup);}
+                throw failure;
+            }
+        }
+    }
+    private static String sha256(String value){
+        try{byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder out=new StringBuilder();for(byte b:hash)out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();
+        }catch(java.security.NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}
+    }
+    public SuspensionPermit park(Context context,MainChatTranscriptStore.ConfirmedCentralYield receipt){
+        requireCurrent(token);
+        if(!CentralAvailabilityPolicy.admissionEnabled() || Thread.currentThread()!=ownerThread || !cycleId().equals(receipt.oldCycleId()))
+            throw new IllegalStateException("Yield owner changed");
+        revalidateSource(token);receipt.request().requirePrepared();
+        try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){
+            WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);TreeNode parent=Objects.requireNonNull(trees.getNode(rootId(),rootId()));
+            CentralResumeRecord parked=withCurrentWorkspaceTransaction(token,()->trees.parkCentral(TreeNodeFence.Companion.of(parent),receipt.runId(),receipt.certificate()));
+            return new SuspensionPermit(context,store,origin,receipt,parked);
+        }
+    }
+
     @Override public void close(){if(closed.compareAndSet(false,true))unregisterStop.run();}
 }

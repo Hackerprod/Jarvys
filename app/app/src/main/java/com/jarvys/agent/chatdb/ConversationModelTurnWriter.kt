@@ -64,6 +64,28 @@ internal class ConversationModelTurnWriter(
     private val conversations: ConversationRepository,
     private val transcript: ModelTranscriptRepository,
 ) {
+    /** Positive NEW_TURN: USER, attachment references/rows and queue evidence commit together. */
+    suspend fun appendCentralSubmission(input:AppendMessageInput,
+        authority:com.jarvys.agent.CentralSubmissionAdmission.AppendAuthority):CentralSubmissionSnapshot =
+        database.withChatWriteTransaction {
+            check(com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled()) {"Central submission admission disabled"}
+            authority.requireInput(input)
+            check(input.role=="user" && input.interruptRequestId==null && input.proactiveThreadKey==null && input.stableId==authority.submissionId)
+            val result=appendPreparedCentralSubmission(input,authority.submissionId,authority.processId)
+            authority.requireInput(input)
+            result
+        }
+
+    /** Internal atomic persistence primitive; native public admission still requires its live action. */
+    internal suspend fun appendPreparedCentralSubmission(input:AppendMessageInput,submissionId:String,
+        processId:String):CentralSubmissionSnapshot = database.withChatWriteTransaction {
+        check(input.role=="user" && input.interruptRequestId==null && input.proactiveThreadKey==null && input.stableId==submissionId)
+        val submissions=CentralTurnSubmissionRepository(database);submissions.requireAvailable()
+        val generation=ConnectionProjectionRepository(database).generation()
+        val message=requireSuccess(conversations.appendMessage(input))
+        submissions.insertPrepared(message,submissionId,processId,generation)
+    }
+
     /** Commits steering admission and its user-row dispatch before any provider callback runs. */
     suspend fun appendAndDispatchInterruptRequest(
         conversationId: String,

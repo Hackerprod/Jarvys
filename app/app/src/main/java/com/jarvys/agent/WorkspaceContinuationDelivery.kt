@@ -74,6 +74,13 @@ internal object WorkspaceContinuationDelivery {
             it.process == CrewProcessIdentity.ID && it.files == files }.toList()
     }
 
+    /** Event nudge over existing live capabilities only; persisted history never supplies authority. */
+    @JvmStatic fun nudgeLiveCentralResults(context:Context) {
+        val files=context.applicationContext.filesDir.absolutePath
+        liveResults.values.filter{it.process==CrewProcessIdentity.ID && it.files==files && it.key !in stoppedEpisodes}
+            .map{it.reference.executionSessionId}.distinct().forEach{WorkspaceResultDelivery.schedule(context,it)}
+    }
+
     private fun requireLiveResult(context: Context, value: JSONObject): IssuedResultPermit {
         val permit = requireNotNull(liveResults[value.getString("continuationKey")]) { "No exact live result authority" }
         val ref = permit.reference
@@ -320,7 +327,8 @@ internal object WorkspaceContinuationDelivery {
             val run = UUID.nameUUIDFromBytes((value.getString("continuationKey") + "\u0000generation").toByteArray(StandardCharsets.UTF_8)).toString()
             // Tree constraint is checked BEFORE consuming fresh P1 authority or crossing its durable STARTED boundary.
             // Historical v98 assignments without tree enrollment retain the unmodified P1 path.
-            val treeEnrollment = WorkspaceTreeP1Preclaim.requireEligible(context, value)
+            val treeEnrollment = WorkspaceTreeP1Preclaim.reserveForClaim(context, value, token, run)
+            try {
             treeEnrollment?.requireNotStopped()
             requireDispatchAuthority(context, value, consume = true)
             value.put("dispatchState", "STARTED").put("dispatchOwnerProcessId", CrewProcessIdentity.ID)
@@ -339,6 +347,10 @@ internal object WorkspaceContinuationDelivery {
             token.throwIfCancelled()
             ChatDatabaseBridge.getInstance(context).prepareContinuationGenerationSync(run, value.getString("assistantMessageStableId"), input.messageId)
             true
+            } catch(failure:Throwable) {
+                try { treeEnrollment?.uncertain(context) } catch(cleanup:Throwable) { if(cleanup!==failure)failure.addSuppressed(cleanup) }
+                throw failure
+            }
         }
     }
 

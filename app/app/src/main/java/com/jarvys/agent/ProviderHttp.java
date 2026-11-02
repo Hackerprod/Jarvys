@@ -86,6 +86,17 @@ final class ProviderHttp {
         }
     }
 
+    /** Explicit principal inference adapter. Generic tool/effect HTTP never enters this path. */
+    static Response postInference(String endpoint, Map<String, String> headers, byte[] body,
+            CancellationToken ownerToken, boolean followRedirects, ConnectionFactory connectionFactory) {
+        ProviderAttemptLease lease = ProviderAttemptLease.current();
+        if (lease == null) return post(endpoint, headers, body, ownerToken, followRedirects, connectionFactory);
+        lease.requireOwnerCurrent();
+        return SealedInferenceTransport.exchange(lease, new SealedInferenceTransport.Request(endpoint,
+                headers, body, followRedirects, SealedInferenceTransport.Framing.JSON,
+                MAX_RESPONSE_BYTES, true, connectionFactory), ownerToken, null);
+    }
+
     static long parseRetryAfterMillis(String value) {
         if (value == null || value.trim().isEmpty()) return 0L;
         try { return Math.max(0L, Math.multiplyExact(Long.parseLong(value.trim()), 1000L)); }

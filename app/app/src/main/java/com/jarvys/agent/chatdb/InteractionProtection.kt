@@ -125,6 +125,17 @@ internal class InteractionProtection(private val database: JarvysChatDatabase) {
             if(row["hidden_kind"] != null || (role != "assistant" && row["status"] in setOf(
                 "STOPPED","PARTIAL","FAILED","ERROR","MODEL_ERROR","TIMED_OUT","TIMEOUT","INTERRUPTED","ABORTED","CANCELLED"))) g.uncertain=true
         }
+        val submissions=CentralTurnSubmissionRepository(database)
+        for(submission in submissions.list(conversation)) {
+            evidence.put(JSONArray().put("central_turn_submissions").put(submission.submissionId)
+                .put(submission.userMessageId).put(submission.userSeq).put(submission.sourceSha256)
+                .put(submission.storageGeneration).put(submission.originalAdmissionProcess)
+                .put(submission.currentAdmissionProcess).put(submission.revision).put(submission.state)
+                .put(submission.claimProcess ?: JSONObject.NULL).put(submission.claimRunId ?: JSONObject.NULL)
+                .put(submission.claimTokenGeneration ?: JSONObject.NULL).put(submission.terminalEvidence ?: JSONObject.NULL)
+                .put(submission.recoveryReceipt ?: JSONObject.NULL))
+            if(!submissions.confirmedCompleted(submission)) group(submission.userMessageId).uncertain=true
+        }
         val calls = rows("tool_calls").groupBy { it["batch_id"] }
         val results = rows("tool_results").groupBy { it["batch_id"] }
         val batches = rows("tool_batches")

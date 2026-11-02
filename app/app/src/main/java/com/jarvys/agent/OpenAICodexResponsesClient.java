@@ -138,7 +138,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
             settings.getModel(),
             credentialProvider,
             (payload, credentials, currentSession, currentToken) ->
-                send(
+                sendInference(
                     payload,
                     (SecretStore.CodexCredentials) credentials,
                     currentSession,
@@ -162,6 +162,40 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         parsed.contextTokensUsed,
         ResponseDiagnostics.fromCodex(response.rawBody),
         identifyReasoningItems(parsed.providerOutputItems, requestModel));
+  }
+
+  /** Only principal inference may use an isolated sealed socket. Image/effect send remains synchronous. */
+  private static ProviderHttp.Response sendInference(JSONObject request, SecretStore.CodexCredentials credentials,
+      String sessionId, CancellationToken token, boolean logErrors, boolean captureRetryAfter,
+      ProviderHttp.ConnectionFactory factory, TextDeltaListener listener) {
+    ProviderAttemptLease lease = ProviderAttemptLease.current();
+    if (lease == null) return send(request, credentials, sessionId, token, logErrors,
+        captureRetryAfter, factory, listener);
+    lease.requireOwnerCurrent();
+    Map<String, String> headers = new LinkedHashMap<>();
+    headers.put("Accept", "text/event-stream");
+    headers.put("Authorization", "Bearer " + credentials.accessToken);
+    headers.put("chatgpt-account-id", credentials.accountId);
+    headers.put("OpenAI-Beta", OPENAI_BETA);
+    headers.put("originator", "jarvys");
+    headers.put("User-Agent", "Jarvys/1.2.0 (Android " + Build.VERSION.RELEASE + "; "
+        + (Build.SUPPORTED_ABIS.length == 0 ? "unknown" : Build.SUPPORTED_ABIS[0]) + ")");
+    if (sessionId != null && !sessionId.isEmpty()) {
+      headers.put("session-id", sessionId);
+      headers.put("session_id", sessionId);
+      headers.put("conversation_id", sessionId);
+    }
+    ProviderHttp.Response raw = SealedInferenceTransport.exchange(lease,
+        new SealedInferenceTransport.Request(ENDPOINT, headers,
+            request.toString().getBytes(StandardCharsets.UTF_8), captureRetryAfter ? Boolean.FALSE : null,
+            SealedInferenceTransport.Framing.CODEX_SSE,
+            captureRetryAfter ? CodexImageGenerationClient.MAX_RESPONSE_BYTES : Integer.MAX_VALUE,
+            captureRetryAfter, factory), token, listener);
+    lease.requireOwnerCurrent();
+    boolean successful = raw.status >= 200 && raw.status < 300;
+    String body = successful ? normalizeSseBody(raw.rawBody) : raw.rawBody;
+    if (!successful && logErrors) logHttpError(raw.status, sessionId, raw.rawBody);
+    return new ProviderHttp.Response(raw.status, body, raw.rawBody, raw.retryAfterMillis);
   }
 
   private JSONObject buildRequest(

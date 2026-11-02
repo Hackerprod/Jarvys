@@ -39,6 +39,8 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class AgentForegroundService extends Service {
   public static final String ACTION_START_STOP_TEST = "com.jarvys.agent.START_STOP_TEST";
   public static final String ACTION_MANUAL_DEVICE_TEST = "com.jarvys.agent.MANUAL_DEVICE_TEST";
+  private static final String ACTION_CENTRAL_SUBMISSION = "com.jarvys.agent.CENTRAL_SUBMISSION";
+  private static final String ACTION_CENTRAL_HANDOFF = "com.jarvys.agent.CENTRAL_HANDOFF";
   public static final String ACTION_REAL_AGENT = "com.jarvys.agent.REAL_AGENT";
   public static final String ACTION_COMPACT_CONVERSATION = "com.jarvys.agent.COMPACT_CONVERSATION";
   public static final String ACTION_REFLECT_MEMORY = "com.jarvys.agent.REFLECT_MEMORY";
@@ -108,6 +110,9 @@ public final class AgentForegroundService extends Service {
     final Runnable onStoppedCleanup;
     final String followUpClaimId;
     final AtomicBoolean stopped = new AtomicBoolean();
+    CentralSubmissionAdmission.LivePermit newTurnPermit;
+    boolean suspensionAttempt;
+    volatile boolean resumeReserved;
     SessionRequest(SessionWork work, boolean interactive) {
       this(null, null, work, interactive, null, "", null);
     }
@@ -162,7 +167,10 @@ public final class AgentForegroundService extends Service {
     final StopController controller;
     final CancellationToken token;
     final long generation;
+    final String runId = "central-host-" + java.util.UUID.randomUUID();
     volatile Future<?> future;
+    volatile NativeCentralBoundary yieldBoundary;
+    volatile boolean handoffNudgeEligible = true;
     ActiveRun(String sessionId, StopController controller, CancellationToken token) {
       this.sessionId = sessionId;
       this.controller = controller;
@@ -170,6 +178,41 @@ public final class AgentForegroundService extends Service {
       this.generation = token.generation();
     }
   }
+
+  /** Exact physical owner proof, issued only after the native serial lane owns this token. */
+  public static final class CentralSubmissionOwner {
+    private final AgentForegroundService service;
+    private final ActiveRun active;
+    private CentralSubmissionOwner(AgentForegroundService service, ActiveRun active) {
+      this.service=service;this.active=active;
+    }
+    public String getRunId(){return active.runId;}
+    public long getTokenGeneration(){return active.generation;}
+    public void requireTerminalEvidence(CentralTreeAdmission.TerminalEvidence evidence) {
+      requireCurrent(active.sessionId);evidence.requireCurrent(active.token);
+    }
+    public void requireCurrent(String session) {
+      active.token.throwIfCancelled();
+      if(!active.sessionId.equals(session) || service.activeRuns.get(session)!=active
+          || service.activeRunTokens.get(session)!=active.token)
+        throw new IllegalStateException("Native submission physical owner changed");
+    }
+  }
+  /** Denial-only STOP boundary; an inactive old token cannot cancel later admitted rows. */
+  public static final class CentralSubmissionStopBoundary {
+    private final AgentForegroundService service;
+    private final String sessionId;
+    private final CancellationToken stoppedToken;
+    private CentralSubmissionStopBoundary(AgentForegroundService service,String sessionId,CancellationToken token) {
+      this.service=service;this.sessionId=sessionId;this.stoppedToken=token;
+    }
+    public void requireCurrent() {
+      if(!service.submissionStopBoundaries.contains(this)
+          || (stoppedToken!=null && !stoppedToken.wasStoppedByUser()))
+        throw new IllegalStateException("Native submission STOP boundary is unavailable");
+    }
+  }
+  private final Set<CentralSubmissionStopBoundary> submissionStopBoundaries=ConcurrentHashMap.newKeySet();
 
   /** Host-only admission: a serialized receipt or a finished Future cannot manufacture this. */
   public static final class MemoryResumeAdmission {
@@ -285,7 +328,13 @@ public final class AgentForegroundService extends Service {
               lane.preparing = null;
               return;
             }
-            request = lane.queued.pollFirst();
+            SessionRequest prioritized=null;
+            if(CentralAvailabilityPolicy.admissionEnabled() && WorkspaceIdentity.isCentral(sessionId)) {
+              for(SessionRequest queued:lane.queued) if(queued.newTurnPermit!=null
+                  && (prioritized==null || queued.newTurnPermit.getUserSeq()<prioritized.newTurnPermit.getUserSeq())) prioritized=queued;
+            }
+            if(prioritized!=null) {lane.queued.remove(prioritized);request=prioritized;}
+            else request = lane.queued.pollFirst();
             if (request == null) {
               lane.active = null;
               lane.draining = false;
@@ -437,6 +486,8 @@ public final class AgentForegroundService extends Service {
           // cancelled run physically exits so its still-pending durable ID starts a fresh turn.
           enqueuePendingInternalConversationInputs(sessionId);
         }
+        if(WorkspaceIdentity.isCentral(sessionId) && active.handoffNudgeEligible && (!request.suspensionAttempt || request.resumeReserved))
+          nudgeCentralHandoff(this);
         refreshForegroundNotification();
         stopServiceIfIdle();
       }
@@ -812,6 +863,205 @@ public final class AgentForegroundService extends Service {
                 skillIds == null ? new ArrayList<>() : new ArrayList<>(skillIds));
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
     else context.startService(intent);
+  }
+
+  static CentralSubmissionAdmission.LivePermit admitCentralSubmission(Context context,
+      CentralSubmissionAdmission.AppendAuthority authority) {
+    if(!CentralAvailabilityPolicy.admissionEnabled())throw new IllegalStateException("NEW_TURN admission is disabled");
+    synchronized(interruptAdmissionLock(authority.getSessionId())) {
+      if(CentralAvailabilityPolicy.registryMigrationEnabled())
+        try(com.jarvys.agent.workspaces.WorkspaceRegistry registry=new com.jarvys.agent.workspaces.WorkspaceRegistry(context)) {
+          registry.upgradeCentralResumeSchema();
+        }
+      com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt receipt=new LocalRunStore(context).appendCentralSubmission(authority);
+      return CentralSubmissionAdmission.register(authority,receipt);
+    }
+  }
+
+  static CentralSubmissionAdmission.LivePermit recoverCentralSubmission(Context context,
+      CentralSubmissionAdmission.RecoveryAuthority authority,String session,String id,long revision) {
+    if(!CentralAvailabilityPolicy.admissionEnabled())throw new IllegalStateException("NEW_TURN recovery is disabled");
+    synchronized(interruptAdmissionLock(session)) {
+      com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt receipt=
+          new LocalRunStore(context).recoverCentralSubmission(session,id,revision,authority);
+      return CentralSubmissionAdmission.registerRecovered(authority,receipt,revision);
+    }
+  }
+
+  static void startCentralSubmission(Context context,CentralSubmissionAdmission.LivePermit permit,ArrayList<String> skills) {
+    synchronized(interruptAdmissionLock(permit.getSessionId())) {
+      if(!CentralAvailabilityPolicy.admissionEnabled())throw new IllegalStateException("NEW_TURN dispatch is disabled");
+      permit.requirePrepared();
+      Intent intent=new Intent(context,AgentForegroundService.class).setAction(ACTION_CENTRAL_SUBMISSION)
+          .putExtra("central_submission_id",permit.getSubmissionId()).putExtra("chat_session_id",permit.getSessionId())
+          .putStringArrayListExtra("agent_skill_ids",skills==null?new ArrayList<>():new ArrayList<>(skills));
+      try {if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.O)context.startForegroundService(intent);else context.startService(intent);}
+      catch(RuntimeException failure){CentralSubmissionAdmission.invalidate(permit);throw failure;}
+      AgentForegroundService service=currentInstance;
+      if(service!=null)service.requestYieldForCommittedSubmission(permit);
+    }
+  }
+
+  private final class NativeCentralBoundary implements NativeCentralYieldBoundary {
+    private final ActiveRun owner;
+    private final MainChatTurnContextProvider reader;
+    private volatile ProviderAttemptLease attempt;
+    private NativeCentralBoundary(ActiveRun owner,MainChatTurnContextProvider reader){this.owner=owner;this.reader=reader;}
+    private void requireOwner() {
+      owner.token.throwIfCancelled();
+      if(activeRuns.get(owner.sessionId)!=owner || owner.yieldBoundary!=this)
+        throw new IllegalStateException("Central yield owner changed");
+    }
+    @Override public CentralSubmissionAdmission.LivePermit pendingNewTurn() {
+      synchronized(interruptAdmissionLock(owner.sessionId)) {
+        requireOwner();
+        for(CentralSubmissionAdmission.LivePermit permit:CentralSubmissionAdmission.prepared(owner.sessionId)) {
+          try {permit.requirePrepared();return permit;}catch(IllegalStateException unavailable){CentralSubmissionAdmission.invalidate(permit);}
+        }
+        return null;
+      }
+    }
+    @Override public void requireCurrent(CentralSubmissionAdmission.LivePermit permit) {
+      requireOwner();permit.requirePrepared();
+      if(!owner.sessionId.equals(permit.getSessionId()))throw new IllegalStateException("Central yield source belongs to another session");
+    }
+    @Override public boolean closeInputForYield(CentralSubmissionAdmission.LivePermit permit) {
+      synchronized(interruptAdmissionLock(owner.sessionId)) {
+        requireCurrent(permit);
+        if(reader!=null && reader.hasUnconsumedMessages())return false;
+        if(reader!=null)reader.closeForRunExit();
+        return true;
+      }
+    }
+    @Override public void providerAttemptStarted(ProviderAttemptLease value) {
+      synchronized(interruptAdmissionLock(owner.sessionId)) {
+        requireOwner();
+        if(value.generation!=owner.generation || !owner.sessionId.equals(value.sessionId) || attempt!=null)
+          throw new IllegalStateException("Central provider attempt identity changed");
+        attempt=value;
+        if(pendingNewTurn()!=null)value.requestYield();
+      }
+    }
+    @Override public void providerAttemptFinished(ProviderAttemptLease value) {
+      synchronized(interruptAdmissionLock(owner.sessionId)) {if(attempt==value)attempt=null;}
+    }
+    void requestYield(CentralSubmissionAdmission.LivePermit permit) {
+      requireCurrent(permit);ProviderAttemptLease current=attempt;if(current!=null)current.requestYield();
+    }
+  }
+  private void requestYieldForCommittedSubmission(CentralSubmissionAdmission.LivePermit permit) {
+    ActiveRun active=activeRuns.get(permit.getSessionId());
+    if(active!=null && active.yieldBoundary!=null && !active.token.isCancellationRequested())
+      active.yieldBoundary.requestYield(permit);
+  }
+
+  private static final Map<String,CentralTreeAdmission.SuspensionPermit> LIVE_SUSPENSIONS=new ConcurrentHashMap<>();
+  private final Set<String> queuedSuspensionIds=ConcurrentHashMap.newKeySet();
+  private final Map<String,Long> lastSuspensionAttempt=new ConcurrentHashMap<>();
+  private final java.util.concurrent.atomic.AtomicLong centralHandoffEpoch=new java.util.concurrent.atomic.AtomicLong();
+  private static String suspensionKey(CentralTreeAdmission.SuspensionPermit permit) {
+    return permit.getResumeId()+":"+permit.getSourceDigest()+":"+permit.getRootCycle();
+  }
+  static void registerCentralSuspension(Context context,CentralTreeAdmission.SuspensionPermit permit) {
+    permit.requireCurrent();
+    String key=suspensionKey(permit);
+    CentralTreeAdmission.SuspensionPermit prior=LIVE_SUSPENSIONS.putIfAbsent(key,permit);
+    if(prior!=null && prior!=permit)throw new IllegalStateException("Suspension capability identity already registered");
+    nudgeCentralHandoff(context);
+  }
+  public static void nudgeCentralHandoff(Context context) {
+    if(!CentralAvailabilityPolicy.admissionEnabled())return;
+    AgentForegroundService service=currentInstance;
+    if(service==null) {
+      if(!LIVE_SUSPENSIONS.isEmpty())start(context,ACTION_CENTRAL_HANDOFF);
+      return;
+    }
+    long epoch=service.centralHandoffEpoch.incrementAndGet();
+    try {service.worker.execute(()->service.scheduleCentralHandoff(epoch));}
+    catch(java.util.concurrent.RejectedExecutionException rejected) {
+      // Keep live capabilities, but do not infer a new service permission from persisted rows.
+    }
+  }
+  private void scheduleCentralHandoff(long epoch) {
+    String session=WorkspaceIdentity.CENTRAL_SESSION;
+    synchronized(interruptAdmissionLock(session)) {
+      if(uncertainStopInputSessions.contains(session) || activeRuns.containsKey(session))return;
+      // Positive USER admission has priority even in the commit→Intent-delivery gap.
+      if(!CentralSubmissionAdmission.prepared(session).isEmpty())return;
+      SessionLane lane=sessionLanes.get(session);
+      if(lane!=null) synchronized(lane) {if(lane.active!=null || lane.preparing!=null || !lane.queued.isEmpty())return;}
+      for(Map.Entry<String,CentralTreeAdmission.SuspensionPermit> entry:LIVE_SUSPENSIONS.entrySet()) {
+        String key=entry.getKey();CentralTreeAdmission.SuspensionPermit permit=entry.getValue();
+        if(queuedSuspensionIds.contains(key) || lastSuspensionAttempt.getOrDefault(key,-1L)>=epoch)continue;
+        try {permit.requireCurrent();}
+        catch(RuntimeException unavailable) {LIVE_SUSPENSIONS.remove(key,permit);permit.invalidate();continue;}
+        if(!queuedSuspensionIds.add(key))continue;
+        lastSuspensionAttempt.put(key,epoch);
+        Runnable cleanup=()->queuedSuspensionIds.remove(key);
+        AtomicReference<SessionRequest> requestRef=new AtomicReference<>();
+        SessionRequest request=new SessionRequest(candidate->{
+          synchronized(interruptAdmissionLock(session)) {
+            if(!CentralSubmissionAdmission.prepared(session).isEmpty()){cleanup.run();return false;}
+            try {permit.requireCurrent();return true;}
+            catch(RuntimeException unavailable){LIVE_SUSPENSIONS.remove(key,permit);permit.invalidate();cleanup.run();return false;}
+          }
+        },failure->{cleanup.run();reportStopPersistenceFailure(failure);},active->{
+          CentralTreeAdmission.SuspensionClaim claim=null;
+          try {
+            synchronized(interruptAdmissionLock(session)) {
+              if(!CentralSubmissionAdmission.prepared(session).isEmpty())return;
+              claim=permit.reserve(active.token,active.runId);
+              if(claim==null)return;
+              LIVE_SUSPENSIONS.remove(key,permit);
+            }
+            // Reservation belongs to this actual dequeue owner. Runtime binds before inference.
+            requestRef.get().resumeReserved=true;
+            runRealAgent(active.token,"",java.util.Collections.emptyList(),session,"",true,false,
+                claim.confirmedYield().ownerMessageId(),null,null,claim);
+          } catch(RuntimeException failure) {
+            LIVE_SUSPENSIONS.remove(key,permit);permit.invalidate();
+            if(claim!=null && !claim.isBound())try {claim.markUncertain(this,"service_resume_failure");}
+            catch(RuntimeException cleanupFailure){if(cleanupFailure!=failure)failure.addSuppressed(cleanupFailure);}
+            reportStopPersistenceFailure(failure);
+          } finally {cleanup.run();}
+        },true,cleanup,"",()->{LIVE_SUSPENSIONS.remove(key,permit);permit.invalidate();},cleanup);
+        request.suspensionAttempt=true;requestRef.set(request);
+        // Successful reserve sets native-owner bookkeeping independently of permission.
+        enqueueSessionRun(session,request);
+        return;
+      }
+      WorkspaceContinuationDelivery.nudgeLiveCentralResults(this);
+    }
+  }
+
+  private final Set<String> queuedSubmissionIds=ConcurrentHashMap.newKeySet();
+  private void enqueueCentralSubmission(CentralSubmissionAdmission.LivePermit permit,List<String> skills) {
+    String session=permit.getSessionId(),id=permit.getSubmissionId();
+    synchronized(interruptAdmissionLock(session)) {
+      try {permit.requirePrepared();}catch(IllegalStateException unavailable){return;}
+      if(!queuedSubmissionIds.add(id))return;
+      Runnable cleanup=()->queuedSubmissionIds.remove(id);
+      SessionRequest request=new SessionRequest(candidate->{
+        try {permit.requirePrepared();return true;}catch(IllegalStateException unavailable){cleanup.run();return false;}
+      },failure->{cleanup.run();reportStopPersistenceFailure(failure);},active->{
+        CentralSubmissionAdmission.ClaimAuthority claim=null;
+        try {
+          synchronized(interruptAdmissionLock(session)) {
+            permit.requirePrepared();
+            claim=CentralSubmissionAdmission.claim(permit,new CentralSubmissionOwner(this,active));
+            new LocalRunStore(this).claimCentralSubmission(permit,claim);
+            claim.requireCurrent(permit);
+          }
+          runRealAgent(active.token,"",skills,session,"",true,false,permit.getUserMessageId(),null,claim);
+        } catch(RuntimeException unavailable) {
+          CentralSubmissionAdmission.invalidate(permit);
+          reportStopPersistenceFailure(unavailable);
+        } finally {cleanup.run();}
+      },true,()->{cleanup.run();CentralSubmissionAdmission.invalidate(permit);},"",
+          ()->CentralSubmissionAdmission.invalidate(permit),cleanup);
+      request.newTurnPermit=permit;
+      enqueueSessionRun(session,request);
+    }
   }
 
   /** Persist a steering message for the active main-chat loop to consume at its next checkpoint. */
@@ -1387,6 +1637,21 @@ public final class AgentForegroundService extends Service {
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
     latestStartId = Math.max(latestStartId, startId);
+    if(intent!=null && ACTION_CENTRAL_HANDOFF.equals(intent.getAction())) {
+      nudgeCentralHandoff(this);return START_NOT_STICKY;
+    }
+    if(intent!=null && ACTION_CENTRAL_SUBMISSION.equals(intent.getAction())) {
+      if(!CentralAvailabilityPolicy.admissionEnabled())return START_NOT_STICKY;
+      String session=intent.getStringExtra("chat_session_id"),id=intent.getStringExtra("central_submission_id");
+      if(session!=null && id!=null) {
+        CentralSubmissionAdmission.LivePermit permit=CentralSubmissionAdmission.find(session,id);
+        if(permit!=null) {
+          ArrayList<String> skills=intent.getStringArrayListExtra("agent_skill_ids");
+          enqueueCentralSubmission(permit,skills==null?java.util.Collections.emptyList():skills);
+        }
+      }
+      return START_NOT_STICKY;
+    }
     if (intent != null && ACTION_RECOVER_PENDING_INPUTS.equals(intent.getAction())) {
       enqueuePendingInputRecovery(null);
       return START_NOT_STICKY;
@@ -1487,6 +1752,13 @@ public final class AgentForegroundService extends Service {
             && !existingUserMessageId.isEmpty()
             ? submittedInputStore.readConversationInput(chatSessionId, existingUserMessageId) : null;
         submittedInputRef.set(submittedInput);
+        if(CentralAvailabilityPolicy.admissionEnabled() && submittedInput!=null && submittedInput.origin==ConversationInput.Origin.USER) {
+          for(com.jarvys.agent.chatdb.CentralSubmissionSnapshot row:submittedInputStore.readCentralSubmissions(chatSessionId))
+            if(existingUserMessageId.equals(row.getUserMessageId())) {
+              if(releaseInternalInputClaim!=null)releaseInternalInputClaim.run();
+              return false;
+            }
+        }
         // This admission runs at physical lane dequeue, before allocating a token/UI generation.
         // A predecessor can hot-incorporate the exact USER while its direct intent is queued.
         // Explicit regeneration retains its separate native authority and is not a duplicate.
@@ -1762,16 +2034,31 @@ public final class AgentForegroundService extends Service {
       boolean userMessageAlreadyRecorded,
       boolean regeneration,
       String existingUserMessageId, MemoryResumeAdmission memoryResumeAdmission) {
+    runRealAgent(token,goal,selectedSkillIds,sessionId,displayGoal,userMessageAlreadyRecorded,regeneration,
+        existingUserMessageId,memoryResumeAdmission,null);
+  }
+
+  private void runRealAgent(CancellationToken token,String goal,List<String> selectedSkillIds,String sessionId,
+      String displayGoal,boolean userMessageAlreadyRecorded,boolean regeneration,String existingUserMessageId,
+      MemoryResumeAdmission memoryResumeAdmission,CentralSubmissionAdmission.ClaimAuthority submissionClaim) {
+    runRealAgent(token,goal,selectedSkillIds,sessionId,displayGoal,userMessageAlreadyRecorded,regeneration,
+        existingUserMessageId,memoryResumeAdmission,submissionClaim,null);
+  }
+
+  private void runRealAgent(CancellationToken token,String goal,List<String> selectedSkillIds,String sessionId,
+      String displayGoal,boolean userMessageAlreadyRecorded,boolean regeneration,String existingUserMessageId,
+      MemoryResumeAdmission memoryResumeAdmission,CentralSubmissionAdmission.ClaimAuthority submissionClaim,
+      CentralTreeAdmission.SuspensionClaim suspensionClaim) {
     // Mission lifetime is independent of elapsed wall time. STOP still owns cancellation.
     new JarvysUiPreferences(this); // Retire restored legacy deadline settings before starting.
     LocalRunStore conversationStore = new LocalRunStore(this);
     String chatMessage = userFacingFailure("");
     boolean userMessageRecorded = userMessageAlreadyRecorded;
     String userMessageId = existingUserMessageId;
-    ConversationInput storedInput = userMessageAlreadyRecorded && existingUserMessageId != null
+    ConversationInput storedInput = suspensionClaim==null && userMessageAlreadyRecorded && existingUserMessageId != null
         && !existingUserMessageId.isEmpty()
         ? conversationStore.readConversationInput(sessionId, existingUserMessageId) : null;
-    boolean internalInput = storedInput != null && storedInput.origin != ConversationInput.Origin.USER;
+    boolean internalInput = suspensionClaim!=null || storedInput != null && storedInput.origin != ConversationInput.Origin.USER;
     final AtomicReference<String> assistantOwnerMessageId =
         new AtomicReference<>(existingUserMessageId == null ? "" : existingUserMessageId);
     final AtomicBoolean assistantOwnerInternal = new AtomicBoolean(internalInput);
@@ -1784,8 +2071,12 @@ public final class AgentForegroundService extends Service {
       token.throwIfCancelled();
       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
         try {
-          if (!WorkspaceContinuationDelivery.claim(this, storedInput, token)) return;
+          if (!WorkspaceContinuationDelivery.claim(this, storedInput, token)) {
+            ActiveRun empty=activeRuns.get(sessionId);if(empty!=null && empty.token==token)empty.handoffNudgeEligible=false;
+            return;
+          }
         } catch (Exception blockedClaim) {
+          ActiveRun empty=activeRuns.get(sessionId);if(empty!=null && empty.token==token)empty.handoffNudgeEligible=false;
           // Claim may already be STARTED. Never append a fresh failure or requeue this episode.
           // The unchanged input and durable continuation metadata remain available for inspection.
           return;
@@ -1805,7 +2096,7 @@ public final class AgentForegroundService extends Service {
         userMessageId = conversationStore.latestUserMessageId(sessionId);
       }
       List<ChatAttachment> attachments =
-          userMessageId == null || userMessageId.isEmpty()
+          suspensionClaim!=null || userMessageId == null || userMessageId.isEmpty()
               ? java.util.Collections.emptyList()
               : conversationStore.readConversationAttachments(sessionId, userMessageId);
       if (!internalInput && (goal == null || goal.trim().isEmpty()) && attachments.isEmpty()) {
@@ -1825,7 +2116,9 @@ public final class AgentForegroundService extends Service {
       userMessageRecorded = true;
       assistantOwnerMessageId.set(userMessageId == null ? "" : userMessageId);
       if (!internalInput) AgentRunUiState.bindCurrentUserMessage(sessionId, userMessageId);
-      List<ConversationTurn> conversationHistory = conversationStore.loadConversationContext(sessionId);
+      List<ConversationTurn> conversationHistory = suspensionClaim!=null ? java.util.Collections.emptyList()
+          : submissionClaim==null ? conversationStore.loadConversationContext(sessionId)
+          : conversationStore.loadCentralSubmissionContext(submissionClaim);
       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
         conversationHistory = new ArrayList<>(conversationHistory);
         conversationHistory.add(ConversationTurn.internalInput(storedInput.content, -1,
@@ -1838,13 +2131,16 @@ public final class AgentForegroundService extends Service {
               : skills.selectedForRun(selectedSkillIds);
       List<String> usedSkillIds = new ArrayList<>();
       for (SkillEntry skill : enabledSkills) usedSkillIds.add(skill.getMetadata().getId());
-      if(com.jarvys.agent.workspaces.WorkspaceTreePolicy.admissionEnabled()
+      if(submissionClaim!=null)treeAdmission=CentralTreeAdmission.beginSubmission(this,conversationStore,submissionClaim,token);
+      else if(!CentralAvailabilityPolicy.admissionEnabled() && com.jarvys.agent.workspaces.WorkspaceTreePolicy.admissionEnabled()
           && WorkspaceIdentity.isCentral(sessionId) && !internalInput && !regeneration && exactUserOrigin)
         treeAdmission=CentralTreeAdmission.beginUser(this,conversationStore,sessionId,userMessageId,token);
       if(storedInput!=null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance))
         treeAdmission=CentralTreeAdmission.captureClaimed(this,conversationStore,storedInput,token);
       CoreAgentRuntime runtime = runtimeFactory.create(this, sessionId, enabledSkills);
-      if(treeAdmission!=null)runtime.bindCentralTreeAdmission(treeAdmission,token);
+      if(submissionClaim!=null)runtime.bindCentralSubmissionClaim(submissionClaim,token);
+      if(suspensionClaim!=null)treeAdmission=runtime.bindSuspensionClaim(suspensionClaim,token);
+      else if(treeAdmission!=null)runtime.bindCentralTreeAdmission(treeAdmission,token);
       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance))
         runtime.bindClaimedContinuation(storedInput, token);
       runtime.withMemorySessionRegeneration(regeneration, memoryResumeAdmission);
@@ -1853,6 +2149,14 @@ public final class AgentForegroundService extends Service {
       runtime.setCurrentTurnOwnerMessageId(userMessageId);
       steeringProvider = runtime.mainChatSteeringProvider();
       if (steeringProvider != null) registerMainChatSteeringProvider(sessionId, steeringProvider);
+      if(CentralAvailabilityPolicy.admissionEnabled() && treeAdmission!=null) {
+        CentralAvailabilityPolicy.requireRegistrySchemaReady(this);
+        if(!conversationStore.centralSubmissionSchemaReady())throw new IllegalStateException("Central submission schema is not ready");
+        ActiveRun owner=activeRuns.get(sessionId);
+        if(owner==null || owner.token!=token)throw new IllegalStateException("Central yield has no physical service owner");
+        NativeCentralBoundary boundary=new NativeCentralBoundary(owner,steeringProvider);
+        owner.yieldBoundary=boundary;runtime.setNativeCentralYieldBoundary(boundary);
+      }
       skills.markUsed(usedSkillIds);
       final String reflectionUserMessageId = userMessageId == null ? "" : userMessageId;
       assistantOwnerMessageId.set(reflectionUserMessageId);
@@ -1862,7 +2166,8 @@ public final class AgentForegroundService extends Service {
             @Override
             public void onInitialUserMessageIncorporated() {
               String incorporatedId = assistantOwnerMessageId.get();
-              conversationStore.markConversationMessagesIncorporatedThrough(sessionId, incorporatedId);
+              if(submissionClaim!=null)conversationStore.acknowledgeCentralSubmission(submissionClaim);
+              else conversationStore.markConversationMessagesIncorporatedThrough(sessionId, incorporatedId);
             }
 
             @Override
@@ -1954,6 +2259,14 @@ public final class AgentForegroundService extends Service {
             }
 
             @Override
+            public void onAssistantTextDelta(String runId,ProviderAttemptLease attempt,String delta) {
+              if(!attempt.acceptsDelta())return;
+              token.runIfActive(()->AgentRunUiState.withGeneration(sessionId,token.generation(),()->{
+                if(attempt.acceptsDelta())AgentRunUiState.assistantTextStreamDelta(sessionId,token.generation(),runId,delta);
+              }));
+            }
+
+            @Override
             public void onAssistantTextStreamEnded(String runId) {
               AgentRunUiState.assistantTextStreamEnded(sessionId, token.generation(), runId);
             }
@@ -2020,6 +2333,14 @@ public final class AgentForegroundService extends Service {
           };
       CoreAgentLoop.Result result =
           mainChatRunner.run(runtime, goal.trim(), conversationHistory, attachments, token, progress);
+      if(result.isYielded()) {
+        if(treeAdmission==null)throw new IllegalStateException("Typed yield has no original root authority");
+        CentralTreeAdmission.SuspensionPermit parked=treeAdmission.park(this,result.yieldReceipt());
+        treeExitDisposed=true;
+        registerCentralSuspension(this,parked);
+        AgentRunUiState.parkCentralGeneration(sessionId,token.generation());
+        return;
+      }
       boolean steeringRemainsUnconsumed = steeringProvider != null && steeringProvider.hasUnconsumedMessages();
       if (steeringRemainsUnconsumed) {
         synchronized (interruptAdmissionLock(sessionId)) {
@@ -2055,7 +2376,18 @@ public final class AgentForegroundService extends Service {
               proactiveThreadKey);
       if(treeAdmission!=null && "COMPLETED".equals(responseOutcome)) {
         treeAdmission.finishSuccessful(this,assistantMessageId);
+        if(suspensionClaim!=null && suspensionClaim.getOriginalRunId()!=null)
+          conversationStore.finishSuspendedCentralSubmission(suspensionClaim,token,assistantMessageId,"COMPLETED",treeAdmission.getTerminalEvidence());
+        if(submissionClaim!=null) {
+          submissionClaim.bindTerminalEvidence(treeAdmission.getTerminalEvidence());
+          conversationStore.finishCentralSubmission(submissionClaim,assistantMessageId,"COMPLETED");
+          CentralSubmissionAdmission.invalidate(submissionClaim.getPermit());
+        }
         treeExitDisposed=true;
+      }
+      if(submissionClaim!=null && isTerminalFailure(responseOutcome) && !token.wasStoppedByUser()) {
+        conversationStore.finishCentralSubmission(submissionClaim,assistantMessageId,"FAILED");
+        CentralSubmissionAdmission.invalidate(submissionClaim.getPermit());
       }
       if (isTerminalFailure(responseOutcome) && !assistantOwnerInternal.get()) {
         conversationStore.markConversationMessagesResolved(sessionId,
@@ -2075,6 +2407,13 @@ public final class AgentForegroundService extends Service {
       }
       if ("STOPPED".equals(result.outcome)) lastRunReport = chatMessage;
     } catch (RuntimeException failure) {
+      if(suspensionClaim!=null && !suspensionClaim.isBound()) {
+        try {suspensionClaim.markUncertain(this,"successor_not_confirmed");}
+        catch(RuntimeException cleanupFailure){if(cleanupFailure!=failure)failure.addSuppressed(cleanupFailure);}
+        treeExitDisposed=true;
+        reportStopPersistenceFailure(failure);
+        return;
+      }
       if (!token.isCancelled()) {
         // Preserve bounded structural evidence only. The recorder never retains messages, bodies,
         // filenames or arbitrary stack text.

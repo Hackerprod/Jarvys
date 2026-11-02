@@ -703,6 +703,95 @@ public final class LocalRunStore {
         return appendConversationMessage(sessionId, role, content, durationMs, runId, userMessageId, status, null);
     }
 
+    /** Genuine native Send; ordinary historical USER writes never become queued submissions. */
+    public com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt appendCentralSubmission(
+            CentralSubmissionAdmission.AppendAuthority authority) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        String sessionId = authority.getSessionId();
+        authority.requireCurrent(sessionId, authority.getSubmissionId());
+        List<MessageAttachmentInput> stored = new ArrayList<>();
+        List<ChatAttachment> attachments = authority.getAttachments();
+        AttachmentStore attachmentStore = attachments.isEmpty() ? null : new AttachmentStore(root.getParentFile());
+        for (ChatAttachment attachment : attachments) {
+            if (attachment == null) throw new IllegalArgumentException("Null native Send attachment");
+            try {
+                File file = attachmentStore.resolve(sessionId, attachment);
+                stored.add(new MessageAttachmentInput(attachment.id, attachment.name, attachment.mimeType,
+                        attachment.sizeBytes, attachment.kind.name(), attachment.relativePath, fileSha256(file)));
+            } catch (IOException failure) { throw new IllegalStateException("Could not verify submission attachment", failure); }
+        }
+        AppendMessageInput input = new AppendMessageInput(sessionId, "user",
+                Collections.singletonList(new MessagePartInput("text", authority.getText())),
+                null, null, null, null, null, null, null, null, null, false,
+                Collections.unmodifiableList(stored), Collections.emptyList(), null, "chat", authority.getSubmissionId());
+        authority.bindInput(input);
+        return chatDatabaseBridge.appendCentralSubmissionSync(input, authority);
+    }
+    public com.jarvys.agent.chatdb.CentralSubmissionSnapshot readCentralSubmissionForSource(
+            com.jarvys.agent.chatdb.CentralUserRootCheckpoint source) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.readCentralSubmissionForSourceSync(source);
+    }
+    public boolean centralSubmissionSchemaReady() {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.centralSubmissionSchemaReadySync();
+    }
+    public java.util.List<com.jarvys.agent.chatdb.CentralSubmissionSnapshot> readCentralSubmissions(String sessionId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.readCentralSubmissionsSync(sessionId);
+    }
+    public com.jarvys.agent.chatdb.CentralSubmissionSnapshot claimCentralSubmission(
+            CentralSubmissionAdmission.LivePermit permit, CentralSubmissionAdmission.ClaimAuthority authority) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.claimCentralSubmissionSync(permit, authority);
+    }
+    public com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt recoverCentralSubmission(String sessionId,
+            String submissionId, long revision, CentralSubmissionAdmission.RecoveryAuthority authority) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.recoverCentralSubmissionSync(sessionId, submissionId, revision, authority);
+    }
+    public java.util.List<com.jarvys.agent.chatdb.CentralSubmissionSnapshot> cancelCentralSubmissionCohort(
+            CentralSubmissionAdmission.CancelAuthority authority) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.cancelCentralSubmissionCohortSync(authority);
+    }
+    public com.jarvys.agent.chatdb.CentralSubmissionSnapshot finishCentralSubmission(
+            CentralSubmissionAdmission.ClaimAuthority authority, String assistantId, String state) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.finishCentralSubmissionSync(authority, assistantId, state);
+    }
+    public java.util.List<String> acknowledgeCentralSubmission(CentralSubmissionAdmission.ClaimAuthority authority) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.acknowledgeCentralSubmissionSync(authority);
+    }
+    public java.util.List<ConversationTurn> loadCentralSubmissionContext(CentralSubmissionAdmission.ClaimAuthority authority) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.loadCentralSubmissionContextSync(authority);
+    }
+    public com.jarvys.agent.chatdb.InteractionProtectionSnapshot validateCentralSubmissionContext(
+            CentralSubmissionAdmission.ClaimAuthority authority, java.util.List<ConversationTurn> turns) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.validateCentralSubmissionContextSync(authority, turns);
+    }
+
+    public java.util.List<ConversationTurn> loadSuspendedCentralSubmissionContext(
+            com.jarvys.agent.CentralTreeAdmission.SuspensionClaim claim, CancellationToken token) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.loadSuspendedCentralSubmissionContextSync(claim, token);
+    }
+    public com.jarvys.agent.chatdb.InteractionProtectionSnapshot validateSuspendedCentralSubmissionContext(
+            com.jarvys.agent.CentralTreeAdmission.SuspensionClaim claim, CancellationToken token,
+            java.util.List<ConversationTurn> turns) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.validateSuspendedCentralSubmissionContextSync(claim, token, turns);
+    }
+    public com.jarvys.agent.chatdb.CentralSubmissionSnapshot finishSuspendedCentralSubmission(
+            com.jarvys.agent.CentralTreeAdmission.SuspensionClaim claim, CancellationToken token,
+            String assistantId, String state, CentralTreeAdmission.TerminalEvidence evidence) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.finishSuspendedCentralSubmissionSync(claim, token, assistantId, state, evidence);
+    }
+
     public synchronized String appendConversationMessage(String sessionId, String role, String content,
                                                           List<ChatAttachment> attachments) {
         return appendConversationMessage(sessionId, role, content, null, "", "", "", null, attachments);

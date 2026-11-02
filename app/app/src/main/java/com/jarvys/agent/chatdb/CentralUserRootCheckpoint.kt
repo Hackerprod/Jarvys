@@ -13,7 +13,10 @@ class CentralUserRootCheckpoint internal constructor(
 )
 
 internal suspend fun captureCentralUserRootDigest(database:JarvysChatDatabase,conversationId:String,messageId:String):String =
-    database.withChatReadTransaction {
+    database.withChatReadTransaction { captureCentralUserRootDigestInTransaction(database,conversationId,messageId) }
+
+/** Caller already owns the native transaction; used for atomic submission/source conservation. */
+internal fun captureCentralUserRootDigestInTransaction(database:JarvysChatDatabase,conversationId:String,messageId:String):String {
         check(WorkspaceIdentity.isCentral(conversationId) && messageId.isNotBlank())
         val args=arrayOf(conversationId,messageId)
         database.chatSql.query("SELECT m.role,m.hidden_kind FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.conversation_id=? AND m.message_id=?",args).use { c ->
@@ -38,5 +41,5 @@ internal suspend fun captureCentralUserRootDigest(database:JarvysChatDatabase,co
         database.chatSql.query("SELECT ordinal,attachment_id,name,mime_type,size_bytes,kind,relative_path,sha256,file_ref_id FROM message_attachments WHERE conversation_id=? AND message_id=? ORDER BY ordinal",args).use { c ->
             while(c.moveToNext()) { field("attachment");for(i in 0 until c.columnCount) field(if(c.isNull(i)) null else c.getString(i)) }
         }
-        digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
     }

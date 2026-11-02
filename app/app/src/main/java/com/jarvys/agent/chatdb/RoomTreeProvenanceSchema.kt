@@ -331,12 +331,19 @@ internal object RoomTreeProvenanceSchema {
         }
     }
 
+    /** Exact prospective v3 structure while original supported identity/version remain unchanged. */
+    internal fun validateProspectiveV3(connection: SQLiteConnection, expectedV3Identity: String) {
+        check(validateChecked(connection,expectedV3Identity,true,3) in 1..2) {
+            "Prospective submission schema requires retained v1/v2 identity"
+        }
+    }
+
     private fun validateChecked(connection: SQLiteConnection, expectedV2Identity: String, allowV1: Boolean,
         prospectiveVersion: Int? = null): Int {
         val sql = DriverChatSqlDatabase(connection)
         val version = sql.query("PRAGMA user_version").use { check(it.moveToFirst()); it.getInt(0) }
-        if (version != 1 && version != 2) throw RoomCurrentSchemaUnavailable("Unsupported current database version; data preserved")
-        val expectedIdentity = if (version == 1) V1_IDENTITY else expectedV2Identity
+        if (version !in 1..3) throw RoomCurrentSchemaUnavailable("Unsupported current database version; data preserved")
+        val expectedIdentity = when(version) { 1 -> V1_IDENTITY; 2 -> RoomCentralSubmissionSchema.V2_IDENTITY; else -> expectedV2Identity }
         val identity = try { sql.query("SELECT identity_hash FROM room_master_table WHERE id=42").use {
             if (!it.moveToFirst()) null else {
                 check(it.getType(0)==android.database.Cursor.FIELD_TYPE_STRING) { "Room identity must retain its canonical TEXT type" }
@@ -393,7 +400,16 @@ internal object RoomTreeProvenanceSchema {
             }
             if(!native) throw RoomCurrentSchemaUnavailable("Implicit index ownership mismatch; data preserved")
         }
-        val expected = if((prospectiveVersion ?: version) == 1) v1Objects else v1Objects + ("table:crew_message_input_provenance" to digest(CREATE_SQL))
+        val targetVersion = prospectiveVersion ?: version
+        val expected = buildMap {
+            putAll(v1Objects)
+            if(targetVersion >= 2) put("table:crew_message_input_provenance", digest(CREATE_SQL))
+            if(targetVersion == 3) {
+                put("table:central_turn_submissions", digest(RoomCentralSubmissionSchema.CREATE_SQL))
+                put("index:idx_central_submission_user", digest(RoomCentralSubmissionSchema.INDEX_SQL[0]))
+                put("index:idx_central_submission_pending", digest(RoomCentralSubmissionSchema.INDEX_SQL[1]))
+            }
+        }
         if(expected.any { (key,value) -> actual[key] != value })
             throw RoomCurrentSchemaUnavailable("Current database schema mismatch; data preserved")
         val shadows = sql.query("PRAGMA table_list").use { c -> buildSet<String> {
@@ -470,6 +486,32 @@ internal object RoomTreeProvenanceUpgrade {
                 }
                 connection.execSQL("PRAGMA user_version=2")
                 check(RoomTreeProvenanceSchema.validate(connection,expectedV2Identity,false)==2)
+            }
+            connection.execSQL("COMMIT")
+        } catch(failure:Throwable) {
+            try { connection.execSQL("ROLLBACK") } catch(rollback:Throwable) { failure.addSuppressed(rollback) }
+            throw failure
+        }
+    }
+}
+
+/** Additive v1/v2→v3, with no intermediate publication or callback/dispatch. */
+internal object RoomCentralSubmissionUpgrade {
+    fun upgrade(connection: SQLiteConnection, expectedV3Identity: String) {
+        connection.execSQL("BEGIN IMMEDIATE")
+        try {
+            val version=RoomTreeProvenanceSchema.validate(connection,expectedV3Identity,true)
+            if(version < 3) {
+                if(version == 1) connection.execSQL(RoomTreeProvenanceSchema.CREATE_SQL)
+                connection.execSQL(RoomCentralSubmissionSchema.CREATE_SQL)
+                RoomCentralSubmissionSchema.INDEX_SQL.forEach { connection.execSQL(it) }
+                RoomTreeProvenanceSchema.validateProspectiveV3(connection,expectedV3Identity)
+                val prior=if(version==1) RoomTreeProvenanceSchema.V1_IDENTITY else RoomCentralSubmissionSchema.V2_IDENTITY
+                val sql=DriverChatSqlDatabase(connection)
+                sql.execSQL("UPDATE room_master_table SET identity_hash=? WHERE id=42 AND identity_hash=?",arrayOf(expectedV3Identity,prior))
+                check(sql.query("SELECT changes()").use { it.moveToFirst() && it.getLong(0)==1L })
+                connection.execSQL("PRAGMA user_version=3")
+                check(RoomTreeProvenanceSchema.validate(connection,expectedV3Identity,false)==3)
             }
             connection.execSQL("COMMIT")
         } catch(failure:Throwable) {

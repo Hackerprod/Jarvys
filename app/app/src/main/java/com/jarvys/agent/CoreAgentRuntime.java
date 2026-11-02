@@ -109,6 +109,51 @@ public final class CoreAgentRuntime {
   private volatile String currentUserMessageId = "";
   private volatile String currentTurnOwnerMessageId = "";
   private CentralTreeAdmission centralTreeAdmission;
+  private NativeCentralYieldBoundary nativeCentralYieldBoundary;
+  private CentralTreeAdmission.SuspensionClaim suspensionClaim;
+  private CancellationToken suspensionToken;
+  private boolean suspensionUsed;
+
+  synchronized CentralTreeAdmission bindSuspensionClaim(CentralTreeAdmission.SuspensionClaim claim, CancellationToken token) {
+    if (!CentralAvailabilityPolicy.admissionEnabled() || context == null || depth != 0
+        || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
+        || suspensionClaim != null || centralSubmissionClaim != null || claimedContinuationInput != null
+        || centralTreeAdmission != null)
+      throw new IllegalStateException("Invalid Central suspension binding");
+    claim.requireCurrent(token);
+    suspensionClaim = claim;
+    suspensionToken = token;
+    centralTreeAdmission = claim.attachSuccessorOwner(context, token);
+    currentTurnOwnerMessageId = claim.confirmedYield().ownerMessageId();
+    return centralTreeAdmission;
+  }
+
+  private CentralSubmissionAdmission.ClaimAuthority centralSubmissionClaim;
+  private CancellationToken centralSubmissionToken;
+  private boolean centralSubmissionUsed;
+
+  synchronized void bindCentralSubmissionClaim(CentralSubmissionAdmission.ClaimAuthority claim,
+      CancellationToken token) {
+    if (!CentralAvailabilityPolicy.admissionEnabled() || context == null || depth != 0
+        || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
+        || centralSubmissionClaim != null || claimedContinuationInput != null || suspensionClaim != null)
+      throw new IllegalStateException("Invalid native Central submission binding");
+    token.throwIfCancelled();
+    claim.requireCurrent(claim.getPermit());
+    if (!sessionId.equals(claim.getPermit().getSessionId())
+        || token.generation() != claim.getTokenGeneration())
+      throw new IllegalStateException("Central submission owner changed");
+    centralSubmissionClaim = claim;
+    centralSubmissionToken = token;
+  }
+
+  synchronized void setNativeCentralYieldBoundary(NativeCentralYieldBoundary boundary) {
+    if (!CentralAvailabilityPolicy.admissionEnabled() || context == null || depth != 0 ||
+        !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId) || centralTreeAdmission == null ||
+        nativeCentralYieldBoundary != null) throw new IllegalStateException("Native Central yield admission unavailable");
+    nativeCentralYieldBoundary = java.util.Objects.requireNonNull(boundary);
+  }
+
   synchronized void bindCentralTreeAdmission(CentralTreeAdmission authority,CancellationToken token) {
     if(centralTreeAdmission!=null || context==null || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId))
       throw new IllegalStateException("Invalid Central tree capability binding");
@@ -122,7 +167,7 @@ public final class CoreAgentRuntime {
   synchronized void bindClaimedContinuation(ConversationInput input, CancellationToken token) {
     if (context == null || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
         || input == null || !WorkspaceContinuationDelivery.isProtocol(input.provenance)
-        || claimedContinuationInput != null)
+        || claimedContinuationInput != null || centralSubmissionClaim != null || suspensionClaim != null)
       throw new IllegalStateException("Invalid continuation runtime binding");
     token.throwIfCancelled();
     WorkspaceContinuationDelivery.claimedRunId(context, input, token);
@@ -131,6 +176,21 @@ public final class CoreAgentRuntime {
   }
 
   private synchronized String nextRuntimeRunId(boolean mainChat, CancellationToken token) {
+    if (suspensionClaim != null) {
+      if (!mainChat || depth != 0 || token != suspensionToken || suspensionUsed)
+        throw new IllegalStateException("Suspension runtime already consumed or owner changed");
+      suspensionClaim.requireCurrent(token);
+      suspensionUsed = true;
+      return suspensionClaim.runId();
+    }
+    if (centralSubmissionClaim != null) {
+      if (!mainChat || depth != 0 || token != centralSubmissionToken || centralSubmissionUsed)
+        throw new IllegalStateException("Central submission runtime already consumed or owner changed");
+      token.throwIfCancelled();
+      centralSubmissionClaim.requireCurrent(centralSubmissionClaim.getPermit());
+      centralSubmissionUsed = true;
+      return centralSubmissionClaim.getRunId();
+    }
     if (claimedContinuationInput == null) return java.util.UUID.randomUUID().toString();
     if (!mainChat || depth != 0 || token != claimedContinuationToken || claimedContinuationUsed)
       throw new IllegalStateException("Continuation runtime already consumed or owner changed");
@@ -362,7 +422,12 @@ public final class CoreAgentRuntime {
       final CancellationToken token,
       CoreAgentLoop.ProgressListener listener) {
     final String runId = nextRuntimeRunId(mainChat, token);
-    if(centralTreeAdmission!=null)centralTreeAdmission.revalidateSource(token);
+    if (suspensionClaim != null) {
+      suspensionClaim.requireCurrent(token);
+      history = suspensionClaim.confirmedYield().retainedCheckpoint().transcript;
+      if (request != null && !request.isBlank() || attachments != null && !attachments.isEmpty())
+        throw new IllegalStateException("Suspension restores only the exact retained checkpoint");
+    } else if(centralTreeAdmission!=null)centralTreeAdmission.revalidateSource(token);
     CoreToolRegistry toolRegistry = createTools();
     if (!mainChat) {
       List<String> available = new ArrayList<>(toolRegistry.names());
@@ -400,6 +465,7 @@ public final class CoreAgentRuntime {
     MemorySessionActivity.Handle memoryActivity = null;
     MemoryWriteGate.Ticket memorySessionTicket = null;
     String memorySessionOutcome = "failed";
+    boolean confirmedNativeYield = false;
     if (transcriptStore != null) toolRegistry = toolRegistry.with(Collections.singletonList(transcriptStore.recoveryTool()));
     final MessageReactionTool reactionTool = reactionToolForRun(mainChat);
     if (reactionTool != null) toolRegistry = toolRegistry.with(Collections.singletonList(reactionTool));
@@ -503,12 +569,29 @@ public final class CoreAgentRuntime {
           new CoreAgentLoop(
               scopedModel, observedToolRegistry, runInstructions, sessionId, budget, compactor,
               CoreAgentLoop.ToolResultBudget.BOUNDED, turnContextProvider, new ProviderRetryWaiter());
+      if (nativeCentralYieldBoundary != null) loop.setNativeCentralYieldBoundary(sessionId,nativeCentralYieldBoundary);
       if (transcriptStore != null) {
         if(centralTreeAdmission!=null)transcriptStore.enableTreeExitReceipt();
         transcriptStore.attach(loop, history, currentTurnOwnerMessageId, runId);
       }
+      if (suspensionClaim != null) {
+        if (transcriptStore == null) throw new IllegalStateException("Suspension transcript store unavailable");
+        loop.restoreAndConfirmNativeSuccessor(suspensionClaim.confirmedYield().retainedCheckpoint());
+        MainChatTranscriptStore.ConfirmedCentralSuccessor successor = transcriptStore.confirmYieldSuccessor(
+            suspensionClaim, suspensionClaim.confirmedYield(), loop.checkpointSnapshot(), runId, token);
+        suspensionClaim.bindAndIncorporate(context, successor, token);
+        suspensionClaim.requireBound(token);
+      }
       CoreAgentLoop.Result completed = loop.run(request, history, attachments, token, listener, currentUserMessageId, runId);
-      if(centralTreeAdmission!=null)centralTreeAdmission.confirmExit(transcriptStore.confirmTreeExit(loop.checkpointSnapshot(),runId),token);
+      if (completed.isYielded()) {
+        if (centralTreeAdmission == null || nativeCentralYieldBoundary == null || transcriptStore == null)
+          throw new IllegalStateException("Yield has no exact native owner");
+        centralTreeAdmission.requireCurrent(token);
+        completed.withConfirmedYield(transcriptStore.confirmYield(completed.yieldCandidate(),runId,
+            centralTreeAdmission.cycleId(),nativeCentralYieldBoundary,token));
+        confirmedNativeYield = true;
+        return completed;
+      } else if(centralTreeAdmission!=null)centralTreeAdmission.confirmExit(transcriptStore.confirmTreeExit(loop.checkpointSnapshot(),runId),token);
       if (runKind() == RunKind.PRINCIPAL && mainChat && depth == 0 && context != null
           && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
           && memorySessionBinding != null && memorySessionTicket != null && "COMPLETED".equals(completed.outcome)) {
@@ -538,12 +621,12 @@ public final class CoreAgentRuntime {
             crewMissionId, null, token.isStoppedByUser() ? "STOPPED" : "FAILED");
       throw failure;
     } finally {
-      if (memorySessionBinding != null && memorySessionTicket != null) {
+      if (!confirmedNativeYield && memorySessionBinding != null && memorySessionTicket != null) {
         try { com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
             .finishMemorySession(memorySessionTicket, memorySessionBinding, memorySessionOutcome); }
         catch (RuntimeException unconfirmedEnd) { memoryUnconfirmed(listener, "Memory session completion was not confirmed."); }
       }
-      if (context != null && depth == 0 && mainChat) {
+      if (!confirmedNativeYield && context != null && depth == 0 && mainChat) {
         try { com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
             .personalAgentReconcileEpisodeRunSync(runId); } catch (RuntimeException ignored) { }
       }
@@ -585,6 +668,16 @@ public final class CoreAgentRuntime {
   com.jarvys.agent.chatdb.InteractionProtectionSnapshot validateRuntimeProtectedContext(
       List<ConversationTurn> transcript, CancellationToken token) {
     token.throwIfCancelled();
+    if (suspensionClaim != null) {
+      if (token != suspensionToken) throw new IllegalStateException("context_suspension_token_changed");
+      suspensionClaim.requireBound(token);
+      return new LocalRunStore(context).validateSuspendedCentralSubmissionContext(suspensionClaim, token, transcript);
+    }
+    if (centralSubmissionClaim != null) {
+      if (token != centralSubmissionToken) throw new IllegalStateException("context_submission_token_changed");
+      centralSubmissionClaim.requireCurrent(centralSubmissionClaim.getPermit());
+      return new LocalRunStore(context).validateCentralSubmissionContext(centralSubmissionClaim, transcript);
+    }
     List<ConversationTurn> ordinary = transcript;
     if (claimedContinuationInput != null) {
       if (token != claimedContinuationToken)

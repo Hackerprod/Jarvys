@@ -68,6 +68,7 @@ public final class CoreAgentModel {
         sessionId,
         token);
     } catch (RuntimeException failure) {
+      if (failure instanceof ProviderAttemptLease.YieldRequested) throw failure;
       recordProviderFailure(failure, token);
       throw failure;
     }
@@ -96,6 +97,7 @@ public final class CoreAgentModel {
             AttachmentModelContext.withoutAttachments(transcript), prompt,
             java.util.Collections.emptyList(), tools, sessionId, token, listener);
       } catch (RuntimeException failure) {
+      if (failure instanceof ProviderAttemptLease.YieldRequested) throw failure;
         recordProviderFailure(failure, token);
         throw failure;
       }
@@ -114,6 +116,7 @@ public final class CoreAgentModel {
         token,
         listener);
     } catch (RuntimeException failure) {
+      if (failure instanceof ProviderAttemptLease.YieldRequested) throw failure;
       recordProviderFailure(failure, token);
       if (AttachmentModelContext.hasImages(prepared))
         throw AttachmentModelContext.providerFailure(localized, failure);
@@ -146,6 +149,7 @@ public final class CoreAgentModel {
       return provider.completeConversation(request.instructions, request.transcript, request.prompt,
           java.util.Collections.emptyList(), request.tools, sessionId, token, listener);
     } catch (RuntimeException failure) {
+      if (failure instanceof ProviderAttemptLease.YieldRequested) throw failure;
       recordProviderFailure(failure, token);
       if (context != null && AttachmentModelContext.hasImages(request.transcript))
         throw AttachmentModelContext.providerFailure(AppLanguageRuntime.localizedContext(context), failure);
@@ -171,6 +175,7 @@ public final class CoreAgentModel {
         sessionId,
         token);
     } catch (RuntimeException failure) {
+      if (failure instanceof ProviderAttemptLease.YieldRequested) throw failure;
       recordProviderFailure(failure, token);
       throw failure;
     }

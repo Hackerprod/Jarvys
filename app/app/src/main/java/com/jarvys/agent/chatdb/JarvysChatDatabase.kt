@@ -208,7 +208,7 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
 
 /** One lazy app-process database instance per current-generation agent.db path. */
 internal object JarvysChatDatabaseProvider {
-    private const val DATABASE_VERSION = 2
+    private const val DATABASE_VERSION = 3
     private const val DATABASE_NAME = "agent.db"
     private const val BUSY_TIMEOUT_MILLIS = 5_000
     private const val WAL_AUTOCHECKPOINT_PAGES = 1_000
@@ -300,13 +300,17 @@ internal object JarvysChatDatabaseProvider {
      * connection PRAGMAs. It is internal so production callers use only the process singleton.
      */
     internal fun openDatabaseFileForTests(context: Context, databaseFile: File): JarvysChatDatabase =
-        openDatabaseFileForTests(context,databaseFile,RoomTreeProvenanceSchema.UPGRADE_ENABLED)
+        openDatabaseFileForTests(context,databaseFile,RoomTreeProvenanceSchema.UPGRADE_ENABLED,com.jarvys.agent.CentralAvailabilityPolicy.roomMigrationEnabled())
 
     /** Explicit permission only for an isolated test-owned file; never changes the process gate. */
     internal fun openDatabaseFileForTests(context: Context, databaseFile: File,
-        allowCurrentUpgrade: Boolean): JarvysChatDatabase {
+        allowCurrentUpgrade: Boolean): JarvysChatDatabase =
+        openDatabaseFileForTests(context,databaseFile,allowCurrentUpgrade,false)
+
+    internal fun openDatabaseFileForTests(context: Context, databaseFile: File,
+        allowCurrentUpgrade: Boolean, allowSubmissionUpgrade: Boolean): JarvysChatDatabase {
         val resources = ExplicitFileResources(context, databaseFile, reportFailures = true,
-            allowCurrentUpgrade = allowCurrentUpgrade)
+            allowCurrentUpgrade = allowCurrentUpgrade, allowSubmissionUpgrade = allowSubmissionUpgrade)
         return try { resources.open() } catch (failure: Throwable) {
             runCatching { resources.close(awaitTermination = false) }
             throw failure
@@ -323,7 +327,8 @@ internal object JarvysChatDatabaseProvider {
 
     /** Shared explicit-file implementation, also used by schema tests; no alternate Room engine. */
     private class ExplicitFileResources(val context: Context, val file: File, val reportFailures: Boolean,
-        val allowCurrentUpgrade: Boolean = RoomTreeProvenanceSchema.UPGRADE_ENABLED) {
+        val allowCurrentUpgrade: Boolean = RoomTreeProvenanceSchema.UPGRADE_ENABLED,
+        val allowSubmissionUpgrade: Boolean = com.jarvys.agent.CentralAvailabilityPolicy.roomMigrationEnabled()) {
         private var executors: List<ExecutorService> = emptyList()
         private var database: JarvysChatDatabase? = null
         private var pool: ReadDatabasePool? = null
@@ -336,7 +341,7 @@ internal object JarvysChatDatabaseProvider {
             projectionAnchor(file).opening()
             file.parentFile?.mkdirs()
             executors = createExecutors()
-            val db = buildDatabase(context.applicationContext, file, executors, reportFailures, allowCurrentUpgrade)
+            val db = buildDatabase(context.applicationContext, file, executors, reportFailures, allowCurrentUpgrade, allowSubmissionUpgrade)
             database = db // Retain each partial resource before the next potentially failing step.
             kotlinx.coroutines.runBlocking { db.useWriterConnection { } }
             pool = ReadDatabasePool(file, if (!reportFailures) ({ partialCloseUnconfirmed = true }) else null)
@@ -602,6 +607,18 @@ internal object JarvysChatDatabaseProvider {
         cursor.getLong(0)
     }
 
+    /** Eligibility inspection only: opening app/history never upgrades through this API. */
+    internal fun currentSubmissionSchemaReady(context:Context):Boolean {
+        check(Looper.myLooper()!=Looper.getMainLooper()) {"Submission schema inspection must run off the main thread"}
+        val files=context.applicationContext.filesDir
+        val root=File(File(files,"jarvys"),com.jarvys.agent.StorageGeneration.NAME)
+        check(root.canonicalFile==File(File(files.canonicalFile,"jarvys"),com.jarvys.agent.StorageGeneration.NAME)) {"Current storage path changed"}
+        val file=File(root,DATABASE_NAME)
+        if(!file.exists() || file.length()==0L)return false
+        rejectNewerDatabaseWithoutMutation(file)
+        return openReadOnlyConnection(file).use {RoomTreeProvenanceSchema.validate(it,JarvysChatDatabaseV3_Impl().expectedFreshIdentity(),true)==3}
+    }
+
     /** Startup worker preflight only: never construct Room or create a directory/database. */
     internal fun preflightFreshStorage(context: Context) {
         check(Looper.myLooper() != Looper.getMainLooper()) { "Storage preflight must run off the main thread" }
@@ -611,7 +628,7 @@ internal object JarvysChatDatabaseProvider {
         if (root.canonicalFile != expectedRoot) throw com.jarvys.agent.CleanInstallRequiredException()
         val file = File(root, DATABASE_NAME)
         rejectNewerDatabaseWithoutMutation(file)
-        requireFreshIdentity(file, JarvysChatDatabase_Impl().expectedFreshIdentity())
+        requireFreshIdentity(file, JarvysChatDatabaseV3_Impl().expectedFreshIdentity())
     }
 
     private fun buildDatabase(
@@ -620,6 +637,7 @@ internal object JarvysChatDatabaseProvider {
         executors: List<ExecutorService>,
         reportFailures: Boolean = true,
         allowCurrentUpgrade: Boolean = RoomTreeProvenanceSchema.UPGRADE_ENABLED,
+        allowSubmissionUpgrade: Boolean = com.jarvys.agent.CentralAvailabilityPolicy.roomMigrationEnabled(),
     ): JarvysChatDatabase {
         runVersionPreflightOnQueryExecutor(databaseFile, executors[0])
         // Even closing an initialized Room object may open its lazy Android connection. Reject an
@@ -630,9 +648,12 @@ internal object JarvysChatDatabaseProvider {
         val registered = synchronized(databaseFiles) { databaseFiles.values.any {
             it.canonicalPath == databaseFile.canonicalPath
         } }
-        runOwnedSchemaPreparation(databaseFile, JarvysChatDatabase_Impl().expectedFreshIdentity(), executors[0],
-            allowCurrentUpgrade, registered)
-        return Room.databaseBuilder(context, JarvysChatDatabase::class.java, databaseFile.absolutePath)
+        val selectedVersion = runOwnedSchemaPreparation(databaseFile, JarvysChatDatabaseV3_Impl().expectedFreshIdentity(), executors[0],
+            allowCurrentUpgrade, allowSubmissionUpgrade, registered)
+        val builder: RoomDatabase.Builder<out JarvysChatDatabase> = if(selectedVersion == 3)
+            Room.databaseBuilder(context, JarvysChatDatabaseV3::class.java, databaseFile.absolutePath)
+        else Room.databaseBuilder(context, JarvysChatDatabase::class.java, databaseFile.absolutePath)
+        return builder
             // Room and the independent read-only pool use the same bundled SQLite engine/file.
             .setDriver(BundledSQLiteDriver())
             .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
@@ -640,7 +661,7 @@ internal object JarvysChatDatabaseProvider {
             // committed reads use the bounded read-only pool and never share a writer lease.
             .setQueryExecutor(executors[1])
             .setTransactionExecutor(executors[1])
-            // Current-v1 upgrade already committed under the native lifecycle fence. No Room
+            // Current-data upgrade already committed under the native lifecycle fence. No Room
             // migration/import/destructive fallback may rewrite existing auxiliary definitions.
             .addCallback(connectionPragmasCallback(context.applicationContext, reportFailures))
             .build()
@@ -691,41 +712,46 @@ internal object JarvysChatDatabaseProvider {
         } catch (error: Throwable) {
             throw IllegalStateException("Could not inspect chat database schema version at ${databaseFile.absolutePath}", error)
         }
-        if (foundVersion != 1 && foundVersion != DATABASE_VERSION) {
+        if (foundVersion !in 1..DATABASE_VERSION) {
             throw RoomCurrentSchemaUnavailable("Unsupported current database version; data preserved")
         }
     }
 
     /** Lifecycle-owned pre-Room preparation. The existing query worker is the temporary schema
      * owner only while no Room writer/read pool is registered; afterward normal writer policy applies.
-     * Gate-OFF and already-v2 recognition are strictly read-only. Never called by startup preflight.
+     * Gate-OFF and already-current recognition are strictly read-only. Never called by startup preflight.
      */
     private fun runOwnedSchemaPreparation(file: File, expected: String, executor: ExecutorService,
-        allowCurrentUpgrade: Boolean, hasRegisteredHandle: Boolean) {
+        allowCurrentUpgrade: Boolean, allowSubmissionUpgrade: Boolean, hasRegisteredHandle: Boolean): Int {
         var interrupted=false
         try {
-            val operation=executor.submit<Unit> {
-                if(file.exists() && file.length()>0L) {
+            val operation=executor.submit<Int> {
+                if(!file.exists() || file.length()==0L) {
+                    if(allowSubmissionUpgrade) 3 else 2
+                } else {
                     val version=openReadOnlyConnection(file).use {
                         RoomTreeProvenanceSchema.validate(it,expected,allowCurrentUpgrade)
                     }
-                    if(version==1) {
+                    val target=if(allowSubmissionUpgrade || version==3) 3 else 2
+                    if(version<target) {
                         check(!hasRegisteredHandle) { "Current database upgrade requires all registered readers to close; data preserved" }
-                        // No CREATE flag: an absent/replaced path cannot silently become a new store.
                         rejectNewerDatabaseWithoutMutation(file)
                         BundledSQLiteDriver().open(file.absolutePath,SQLITE_OPEN_READWRITE or SQLITE_OPEN_FULLMUTEX).use {
-                            RoomTreeProvenanceUpgrade.upgrade(it,expected)
+                            if(target==3) RoomCentralSubmissionUpgrade.upgrade(it,expected)
+                            else RoomTreeProvenanceUpgrade.upgrade(it,RoomCentralSubmissionSchema.V2_IDENTITY)
                         }
                     }
+                    target
                 }
             }
-            // A caller interruption cannot release the lifecycle fence while a schema write is
-            // still running. Join its physical outcome first; never cancel/replay this transaction.
+            var selectedVersion:Int
+            // Never release the lifecycle fence while a physical schema write is still running.
             while(true) {
-                try { operation.get();break }
+                try { selectedVersion=operation.get();break }
                 catch(error:InterruptedException) { interrupted=true }
             }
             if(interrupted)throw IllegalStateException("Interrupted during owned schema preparation; physical outcome joined")
+            return selectedVersion
         } catch (error: ExecutionException) {
             throw (error.cause ?: error)
         } finally {

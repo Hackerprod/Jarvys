@@ -959,12 +959,17 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     suspend fun markInputState(conversationId:String,messageIds:List<String>,state:String):ChatDbResult<List<String>> =
         markInputStateForMission(conversationId,messageIds,state,null)
 
-    internal suspend fun markInputStateForMission(conversationId: String, messageIds: List<String>, state: String,missionAuthorization:MissionReceiptAuthorization?): ChatDbResult<List<String>> = transactionResult {
+    internal suspend fun markInputStateForMission(conversationId: String, messageIds: List<String>, state: String,missionAuthorization:MissionReceiptAuthorization?,
+        submissionAuthorization:com.jarvys.agent.CentralSubmissionAdmission.ClaimAuthority? = null): ChatDbResult<List<String>> = transactionResult {
         if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
         if (state != INPUT_INCORPORATED && state != INPUT_RESOLVED) return@transactionResult ChatDbResult.Invalid("unknown input state")
         if (messageIds.isEmpty()) return@transactionResult ChatDbResult.Success(emptyList())
+        val submissions=CentralTurnSubmissionRepository(database)
+        val admitted=submissionAuthorization?.let {submissions.requireClaim(it).also { row ->check(row.sessionId==conversationId) }.userMessageId}
+        val excluded=submissions.historyExcluded(conversationId) - setOfNotNull(admitted)
         val changed = mutableListOf<String>()
         for (id in messageIds.distinct()) {
+            if(id in excluded) continue
             val message = findMessage(conversationId, id)
             val requestState = sql.query(
                 "SELECT input_state FROM interrupt_requests WHERE conversation_id=? AND request_id=?", arrayOf(conversationId, id),
@@ -1732,6 +1737,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
 
     private fun resolveOwnedInputAfterFailure(conversationId: String, ownerUserMessageId: String?, status: String?) {
         if (ownerUserMessageId.isNullOrBlank() || status?.uppercase() !in INPUT_RESOLVING_FAILURE_STATUSES) return
+        if(ownerUserMessageId in CentralTurnSubmissionRepository(database).historyExcluded(conversationId)) return
         val owner = findMessage(conversationId, ownerUserMessageId) ?: return
         if (owner.role != ROLE_USER || owner.inputState != null) return
         val seq = allocateSequence(conversationId)

@@ -2024,6 +2024,153 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         }
     }
 
+    /** Native action only; preflight never upgrades Registry or runs under the Room writer. */
+    fun appendCentralSubmissionSync(input:AppendMessageInput,
+        authority:com.jarvys.agent.CentralSubmissionAdmission.AppendAuthority):CentralSubmissionAppendReceipt {
+        com.jarvys.agent.CentralAvailabilityPolicy.requireRegistrySchemaReady(applicationContext)
+        return executeOnWorker { repos ->
+            val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            anchor.fenced {
+                val snapshot=runBlocking { repos.modelTurnWriter.appendCentralSubmission(input,authority) }
+                val source=CentralUserRootCheckpoint(snapshot.storageGeneration,snapshot.sessionId,snapshot.userMessageId,
+                    snapshot.sourceSha256,anchor.attest(repos.database,snapshot.storageGeneration))
+                CentralSubmissionAppendReceipt(snapshot,source)
+            }
+        }
+    }
+    /** Exact source lookup only; never creates or restores a live permission. */
+    fun readCentralSubmissionForSourceSync(source:CentralUserRootCheckpoint):CentralSubmissionSnapshot? = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            check(anchor.accepts(source.lifecycle,repos.database)) {"Submission source lifetime changed"}
+            runBlocking {repos.database.withChatReadTransaction {
+                check(captureCentralUserRootDigestInTransaction(repos.database,source.ownerCentralSessionId,source.originUserMessageId)==source.originDigest)
+                CentralTurnSubmissionRepository(repos.database).list(source.ownerCentralSessionId)
+                    .singleOrNull {it.userMessageId==source.originUserMessageId}?.also {
+                        check(it.sourceSha256==source.originDigest && it.storageGeneration==source.storageGeneration)
+                    }
+            }}
+        }
+    }
+    /** Strict read-only file inspection; no provider creation, migration or capability mint. */
+    fun centralSubmissionSchemaReadySync():Boolean = JarvysChatDatabaseProvider.currentSubmissionSchemaReady(applicationContext)
+    fun readCentralSubmissionsSync(sessionId:String):List<CentralSubmissionSnapshot> = execute { repos ->
+        repos.database.withChatReadTransaction {CentralTurnSubmissionRepository(repos.database).list(sessionId)}
+    }
+    fun claimCentralSubmissionSync(permit:com.jarvys.agent.CentralSubmissionAdmission.LivePermit,
+        authority:com.jarvys.agent.CentralSubmissionAdmission.ClaimAuthority):CentralSubmissionSnapshot {
+        com.jarvys.agent.CentralAvailabilityPolicy.requireRegistrySchemaReady(applicationContext)
+        return executeOnWorker { repos ->
+            JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).fenced {
+                val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+                check(anchor.accepts(permit.lifecycle,repos.database));authority.requireCurrent(permit)
+                val result=runBlocking {repos.database.withChatWriteTransaction {CentralTurnSubmissionRepository(repos.database).claim(permit,authority)}}
+                authority.requireCurrent(permit);result
+            }
+        }
+    }
+    fun recoverCentralSubmissionSync(sessionId:String,submissionId:String,expectedRevision:Long,
+        authority:com.jarvys.agent.CentralSubmissionAdmission.RecoveryAuthority):CentralSubmissionAppendReceipt {
+        com.jarvys.agent.CentralAvailabilityPolicy.requireRegistrySchemaReady(applicationContext)
+        return executeOnWorker { repos ->
+            val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            anchor.fenced {
+                val snapshot=runBlocking {repos.database.withChatWriteTransaction {CentralTurnSubmissionRepository(repos.database).recover(sessionId,submissionId,expectedRevision,authority)}}
+                CentralSubmissionAppendReceipt(snapshot,CentralUserRootCheckpoint(snapshot.storageGeneration,snapshot.sessionId,
+                    snapshot.userMessageId,snapshot.sourceSha256,anchor.attest(repos.database,snapshot.storageGeneration)))
+            }
+        }
+    }
+    fun cancelCentralSubmissionCohortSync(authority:com.jarvys.agent.CentralSubmissionAdmission.CancelAuthority):List<CentralSubmissionSnapshot> = execute { repos ->
+        repos.database.withChatWriteTransaction {CentralTurnSubmissionRepository(repos.database).cancel(authority)}
+    }
+    fun finishCentralSubmissionSync(authority:com.jarvys.agent.CentralSubmissionAdmission.ClaimAuthority,
+        assistantMessageId:String,terminalState:String):CentralSubmissionSnapshot = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            check(anchor.accepts(authority.permit.lifecycle,repos.database));authority.requireCurrent(authority.permit)
+            val evidence=if(terminalState=="COMPLETED")checkNotNull(authority.terminalEvidence) else null
+            if(evidence!=null)authority.requireTerminalEvidence(evidence)
+            val result=runBlocking {repos.database.withChatWriteTransaction {CentralTurnSubmissionRepository(repos.database).finish(authority,assistantMessageId,terminalState)}}
+            if(evidence!=null)authority.requireTerminalEvidence(evidence)
+            result
+        }
+    }
+    fun acknowledgeCentralSubmissionSync(authority:com.jarvys.agent.CentralSubmissionAdmission.ClaimAuthority):List<String> = executeOnWorker { repos ->
+        JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).fenced {
+            check(JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).accepts(authority.permit.lifecycle,repos.database))
+            authority.requireCurrent(authority.permit)
+            val result=runBlocking {repos.database.withChatWriteTransaction {
+                val row=CentralTurnSubmissionRepository(repos.database).requireClaim(authority)
+                requireSuccessSync(repos.conversations.markInputStateForMission(row.sessionId,listOf(row.userMessageId),
+                    "incorporated",null,authority),"acknowledge exact claimed Central input")
+            }}
+            authority.requireCurrent(authority.permit)
+            result
+        }
+    }
+    private fun submissionRecoveryNamespace(sessionId:String):MemoryNamespace? = if(sessionId==MemoryNamespace.CENTRAL) try {
+        MemoryNamespace.resolve(applicationContext,sessionId,null,null,false,true,true)
+    } catch (_:com.jarvys.agent.workspaces.WorkspaceRegistryCorruptException) {null
+    } catch (_:android.database.sqlite.SQLiteException) {null
+    } catch (failure:IllegalArgumentException) {if(failure.message=="memory_owner_denied")null else throw failure
+    } else null
+    fun loadCentralSubmissionContextSync(authority:com.jarvys.agent.CentralSubmissionAdmission.ClaimAuthority):List<ConversationTurn> = executeOnWorker { repos ->
+        val namespace=submissionRecoveryNamespace(authority.permit.sessionId)
+        JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).fenced {
+            check(JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).accepts(authority.permit.lifecycle,repos.database))
+            authority.requireCurrent(authority.permit)
+            val result=runBlocking { repos.reader.loadConversationContext(authority.permit.sessionId,namespace,submissionClaim=authority) }
+            authority.requireCurrent(authority.permit)
+            result
+        }
+    }
+    fun validateCentralSubmissionContextSync(authority:com.jarvys.agent.CentralSubmissionAdmission.ClaimAuthority,
+        turns:List<ConversationTurn>):InteractionProtectionSnapshot = executeOnWorker { repos ->
+        JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).fenced {
+            check(JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).accepts(authority.permit.lifecycle,repos.database))
+            authority.requireCurrent(authority.permit)
+            val result=runBlocking { repos.reader.validateProtectedContext(authority.permit.sessionId,turns,authority) }
+            authority.requireCurrent(authority.permit)
+            result
+        }
+    }
+
+    fun loadSuspendedCentralSubmissionContextSync(claim:com.jarvys.agent.CentralTreeAdmission.SuspensionClaim,
+        token:com.jarvys.agent.CancellationToken):List<ConversationTurn> = executeOnWorker { repos ->
+        val namespace=submissionRecoveryNamespace(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION)
+        JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).fenced {
+            check(JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).accepts(claim.lifecycle,repos.database))
+            claim.requireBound(token)
+            val result=runBlocking {repos.reader.loadConversationContext(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION,namespace,
+                suspensionClaim=claim,suspensionToken=token)}
+            claim.requireBound(token)
+            result
+        }
+    }
+    fun validateSuspendedCentralSubmissionContextSync(claim:com.jarvys.agent.CentralTreeAdmission.SuspensionClaim,
+        token:com.jarvys.agent.CancellationToken,turns:List<ConversationTurn>):InteractionProtectionSnapshot = executeOnWorker { repos ->
+        JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).fenced {
+            check(JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).accepts(claim.lifecycle,repos.database))
+            claim.requireBound(token)
+            val result=runBlocking {repos.reader.validateProtectedContext(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION,
+                turns,suspensionClaim=claim,suspensionToken=token)}
+            claim.requireBound(token)
+            result
+        }
+    }
+    fun finishSuspendedCentralSubmissionSync(claim:com.jarvys.agent.CentralTreeAdmission.SuspensionClaim,
+        token:com.jarvys.agent.CancellationToken,assistantId:String,state:String,
+        evidence:com.jarvys.agent.CentralTreeAdmission.TerminalEvidence?):CentralSubmissionSnapshot? = executeOnWorker { repos ->
+        JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).fenced {
+            check(JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).accepts(claim.lifecycle,repos.database))
+            if(state=="COMPLETED")claim.requireTerminalEvidence(token,checkNotNull(evidence)) else claim.requireBound(token)
+            val result=runBlocking {repos.database.withChatWriteTransaction {CentralTurnSubmissionRepository(repos.database).finishSuspension(claim,token,assistantId,state,evidence)}}
+            if(state=="COMPLETED")claim.requireTerminalEvidence(token,checkNotNull(evidence)) else claim.requireBound(token)
+            result
+        }
+    }
+
     fun appendMessageSync(input: AppendMessageInput): ChatDbResult<StoredMessage> =
         execute { it.conversations.appendMessage(input) }
 

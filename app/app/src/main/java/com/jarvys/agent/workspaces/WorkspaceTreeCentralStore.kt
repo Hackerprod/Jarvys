@@ -16,7 +16,11 @@ import org.json.JSONObject
 internal class WorkspaceTreeCentralStore(private val core:WorkspaceTreeStore) {
     fun attach(fence:TreeNodeFence,cycle:String,source:String,claim:String,childDue:Boolean,childId:String):TreeNode = core.registry.treeTransaction { db ->
         nonempty(cycle);nonempty(source);nonempty(claim)
-        val parent=core.active(db,fence)
+        val reserved=if(db.version>=3)WorkspaceCentralResumeStore(core).byCause(fence.rootId,"CHILD_RESULT",claim) else null
+        val parent=if(reserved==null)core.active(db,fence) else core.requireNode(db,fence.rootId,fence.nodeId).also {
+            eligible(TreeNodeFence.of(it)==fence,"Reserved Central fence changed")
+            integrity(reserved.ownerRun==claim && reserved.successorCycle==cycle,"Reserved P1 owner changed")
+        }
         eligible(parent.mode==TreeMode.CENTRAL && parent.nodeId==parent.rootId,"Not the Central root")
         eligible(childDue,"Only exact claimed P1 continuation can attach")
         val child=core.requireNode(db,parent.rootId,childId)
@@ -31,9 +35,15 @@ internal class WorkspaceTreeCentralStore(private val core:WorkspaceTreeStore) {
         eligible(one(db,"bot_tree_event","root_id=? AND kind='CENTRAL_CLAIM' AND payload_ref=?",arrayOf(parent.rootId,child.terminalRef!!)){it.s("event_key")}==null,
             "Result was already claimed")
         core.appendEvent(db,parent,key,"CENTRAL_CLAIM",receipt,source,identity(receipt),child.terminalRef)
-        val root=core.requireRoot(db,parent.rootId)
-        core.updateRoot(db,root,values("executions" to next(root.executions)))
-        core.updateNode(db,parent,values("cycle_id" to cycle,"state" to "RUNNING","control_intent" to claim))
+        if(reserved!=null) {
+            WorkspaceCentralResumeStore(core).bind(reserved,receipt)
+            core.requireNode(db,parent.rootId,parent.nodeId)
+        } else {
+            val root=core.requireRoot(db,parent.rootId)
+            eligible(root.executions<WorkspaceTreePolicy.MAX_EXECUTIONS,"Execution progress window exhausted")
+            core.updateRoot(db,root,values("executions" to next(root.executions)))
+            core.updateNode(db,parent,values("cycle_id" to cycle,"state" to "RUNNING","control_intent" to claim))
+        }
     }
     fun incorporated(rootId:String,childId:String,claim:String,receipt:String)=core.registry.treeTransaction { db ->
         nonempty(receipt);val child=core.requireNode(db,rootId,childId)
@@ -44,9 +54,11 @@ internal class WorkspaceTreeCentralStore(private val core:WorkspaceTreeStore) {
             proof.getString("digest")==child.terminalHash,"Claim evidence changed")
         val key=identity("central-incorporated",claim)
         core.event(db,rootId,key)?.let { integrity(it==receipt,"Incorporation changed");return@treeTransaction }
-        eligible(central.controlIntent==claim && central.cycleId==proof.getString("cycle"),"Central claimant changed")
+        val resume=if(db.version>=3)WorkspaceCentralResumeStore(core).byCause(rootId,"CHILD_RESULT",claim) else null
+        eligible(central.controlIntent==(resume?.resumeId ?: claim) && central.cycleId==proof.getString("cycle"),"Central claimant changed")
         core.appendEvent(db,central,key,"CENTRAL_INCORPORATED",receipt,claim,identity(receipt),child.terminalRef!!)
-        core.updateNode(db,central,values("control_intent" to null))
+        if(resume!=null)WorkspaceCentralResumeStore(core).incorporate(resume,receipt)
+        else core.updateNode(db,central,values("control_intent" to null))
     }
     private fun withdrawn(db:SQLiteDatabase,child:TreeNode):Boolean {
         if(child.state!=TreeNodeState.TERMINAL || child.terminalOutcome!="CANCELLED" || child.botId!=null || child.executionEventId!=null ||
@@ -98,7 +110,7 @@ internal class WorkspaceTreeCentralStore(private val core:WorkspaceTreeStore) {
         integrity(report==child.reportReceipt && report=="cancelled-admission:"+child.terminalHash,"Withdrawal report changed")
         return true
     }
-    private fun pending(db:SQLiteDatabase,parent:TreeNode):Boolean = core.childrenDb(db,parent.rootId,parent.nodeId).filter {it.reply==TreeReply.AWAIT}.any { child ->
+    private fun pending(db:SQLiteDatabase,parent:TreeNode):Boolean = WorkspaceCentralResumeStore.hasPending(db,parent.rootId) || core.childrenDb(db,parent.rootId,parent.nodeId).filter {it.reply==TreeReply.AWAIT}.any { child ->
         child.state!=TreeNodeState.TERMINAL || child.reportReceipt==null || child.controlIntent!=null ||
             one(db,"bot_tree_event","root_id=? AND kind='CENTRAL_INCORPORATED' AND payload_ref=?",arrayOf(parent.rootId,requireNotNull(child.terminalRef))){it.s("event_key")}==null && !withdrawn(db,child)
     }
@@ -158,6 +170,8 @@ internal class WorkspaceTreeCentralStore(private val core:WorkspaceTreeStore) {
             return@treeTransaction core.requireNode(db,parent.rootId,parent.nodeId)
         }
         core.active(db,fence)
+        // A confirmed yield owns WAITING. A late old-turn finish cannot replace its exact fence.
+        if(parent.state==TreeNodeState.WAITING && WorkspaceCentralResumeStore.hasPending(db,parent.rootId))return@treeTransaction parent
         val key=identity("central-exit",parent.cycleId)
         core.appendEvent(db,parent,key,"CENTRAL_EXIT",receipt,parent.sourceReceipt,identity(receipt),parent.cycleId)
         eligible(parent.controlIntent==null,"Unresolved Central claim")

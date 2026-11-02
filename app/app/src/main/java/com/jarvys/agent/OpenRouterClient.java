@@ -48,6 +48,7 @@ public final class OpenRouterClient implements ModelProviderClient {
       return completeMessages(
           systemPrompt, messages(systemPrompt, userPrompt, images), tools, token);
     } catch (Exception error) {
+      if (error instanceof ProviderAttemptLease.YieldRequested) throw (ProviderAttemptLease.YieldRequested) error;
       if (error instanceof IllegalStateException) throw (IllegalStateException) error;
       throw new IllegalStateException("Could not prepare OpenRouter request", error);
     }
@@ -91,6 +92,7 @@ public final class OpenRouterClient implements ModelProviderClient {
           tools,
           token);
     } catch (Exception error) {
+      if (error instanceof ProviderAttemptLease.YieldRequested) throw (ProviderAttemptLease.YieldRequested) error;
       if (error instanceof IllegalStateException) throw (IllegalStateException) error;
       throw new IllegalStateException("Could not prepare OpenRouter conversation", error);
     }
@@ -127,7 +129,7 @@ public final class OpenRouterClient implements ModelProviderClient {
       headers.put("Authorization", "Bearer " + apiKey.trim());
     headers.putAll(config.getAdditionalHeaders());
     ProviderHttp.Response response =
-        ProviderHttp.post(
+        ProviderHttp.postInference(
             config.getEndpoint(),
             headers,
             request.toString().getBytes(StandardCharsets.UTF_8),

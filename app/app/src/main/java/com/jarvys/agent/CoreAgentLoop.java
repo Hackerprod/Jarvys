@@ -162,6 +162,10 @@ public final class CoreAgentLoop {
 
         /** Incremental user-facing text only; tool arguments and reasoning are excluded upstream. */
         default void onAssistantTextDelta(String runId, String delta) { }
+        /** Native attempt identity remains attached through delayed presentation delivery. */
+        default void onAssistantTextDelta(String runId, ProviderAttemptLease attempt, String delta) {
+            if (attempt == null || attempt.acceptsDelta()) onAssistantTextDelta(runId, delta);
+        }
 
         /** Ends the transient stream after a tool-call preamble had a chance to promote it. */
         default void onAssistantTextStreamEnded(String runId) { }
@@ -232,6 +236,20 @@ public final class CoreAgentLoop {
         public final String outcome;
         public final long durationMs;
         public final InterruptionReason interruptionReason;
+        private YieldCandidate nativeYield;
+        private MainChatTranscriptStore.ConfirmedCentralYield confirmedYield;
+        public boolean isYielded() { return nativeYield != null; }
+        public MainChatTranscriptStore.ConfirmedCentralYield yieldReceipt() {
+            if (!isYielded() || confirmedYield == null) throw new IllegalStateException("Yield checkpoint is not confirmed");
+            return confirmedYield;
+        }
+        Result withConfirmedYield(MainChatTranscriptStore.ConfirmedCentralYield receipt) {
+            if (nativeYield == null || receipt.request() != nativeYield.request)
+                throw new IllegalStateException("Yield source changed");
+            confirmedYield = java.util.Objects.requireNonNull(receipt);
+            return this;
+        }
+        YieldCandidate yieldCandidate() { return nativeYield; }
         // In-memory classification only: never a transcript, persisted payload or model instruction.
         private final transient RuntimeException providerInterruptionCause;
 
@@ -259,7 +277,9 @@ public final class CoreAgentLoop {
         }
 
         public Result withText(String replacement) {
-            return new Result(runId, replacement, turns, outcome, durationMs, interruptionReason, providerInterruptionCause);
+            Result copy = new Result(runId, replacement, turns, outcome, durationMs, interruptionReason, providerInterruptionCause);
+            copy.nativeYield = nativeYield; copy.confirmedYield = confirmedYield;
+            return copy;
         }
 
         /** Existing caller failure policies can retain their typed provider classification. */
@@ -570,6 +590,73 @@ public final class CoreAgentLoop {
     private ConversationTurn protectedGenuineUser;
     private volatile Checkpoint checkpoint = Checkpoint.empty();
     private volatile CheckpointListener checkpointListener;
+    private NativeCentralYieldBoundary nativeYieldBoundary;
+    private String nativeYieldSession;
+    static final class YieldCandidate {
+        final CentralSubmissionAdmission.LivePermit request;
+        final Checkpoint checkpoint;
+        private YieldCandidate(CentralSubmissionAdmission.LivePermit request, Checkpoint checkpoint) {
+            this.request = request; this.checkpoint = checkpoint;
+        }
+    }
+    void setNativeCentralYieldBoundary(String session, NativeCentralYieldBoundary boundary) {
+        if (runActive.get()) throw new IllegalStateException("Yield boundary must be bound before execution");
+        if (!com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(session))
+            throw new IllegalArgumentException("Only native Central may yield");
+        nativeYieldSession = session; nativeYieldBoundary = java.util.Objects.requireNonNull(boundary);
+    }
+    private Result yieldAtBoundary(List<ConversationTurn> transcript, CancellationToken token,
+            String runId, int turns, long startedAtMs) {
+        if (nativeYieldBoundary == null) return null;
+        token.throwIfCancelled();
+        CentralSubmissionAdmission.LivePermit request = nativeYieldBoundary.pendingNewTurn();
+        if (request == null) return null;
+        nativeYieldBoundary.requireCurrent(request);
+        for (String state : toolLifecycle.values())
+            if (!"RESULT".equals(state) && !"NEVER_LAUNCHED".equals(state)) return null;
+        if (!nativeYieldBoundary.closeInputForYield(request)) return null;
+        updateTranscriptSnapshot(transcript);
+        nativeYieldBoundary.requireCurrent(request);
+        if (checkpoint.appliedIncomingIds.contains(request.getUserMessageId()))
+            throw new IllegalStateException("New turn was incorporated into the old execution");
+        Result yielded = new Result(runId, "", turns, "YIELDED", Math.max(0L, System.currentTimeMillis()-startedAtMs));
+        yielded.nativeYield = new YieldCandidate(request, checkpoint);
+        return yielded;
+    }
+    private ModelReply withProviderAttempt(CancellationToken token, String runId,
+            java.util.concurrent.Callable<ModelReply> request) {
+        if (nativeYieldBoundary == null) {
+            try { return request.call(); }
+            catch (RuntimeException failure) { throw failure; }
+            catch (Exception failure) { throw new IllegalStateException(failure); }
+        }
+        try (ProviderAttemptLease lease = new ProviderAttemptLease(nativeYieldSession, runId,
+                UUID.randomUUID().toString(), checkpoint, token)) {
+            nativeYieldBoundary.providerAttemptStarted(lease);
+            try {
+                ModelReply reply = request.call();
+                lease.tryCommitReply();
+                return reply;
+            } catch (RuntimeException failure) { throw failure; }
+            catch (Exception failure) { throw new IllegalStateException(failure); }
+            finally { nativeYieldBoundary.providerAttemptFinished(lease); }
+        }
+    }
+
+
+    private void withProviderBackoff(CancellationToken token, String runId, Runnable wait) {
+        if (nativeYieldBoundary == null) { wait.run(); return; }
+        try (ProviderAttemptLease lease = new ProviderAttemptLease(nativeYieldSession, runId,
+                UUID.randomUUID().toString(), checkpoint, token)) {
+            nativeYieldBoundary.providerAttemptStarted(lease);
+            try {
+                lease.requireOwnerCurrent();
+                wait.run();
+                lease.requireOwnerCurrent();
+            } finally { nativeYieldBoundary.providerAttemptFinished(lease); }
+        }
+    }
+
 
     /**
      * A persistence failure is fatal even if the run is concurrently cancelled or times out.
@@ -704,6 +791,14 @@ public final class CoreAgentLoop {
         }
         transcriptSnapshot = safe.transcript;
         checkpoint = safe;
+    }
+
+    /** Native successor only: publish the conserved snapshot before Registry bind/charge or inference. */
+    void restoreAndConfirmNativeSuccessor(Checkpoint retained) {
+        if (checkpointListener == null) throw new IllegalStateException("Successor requires durable checkpoint listener");
+        MainChatTranscriptStore.requireSafeYieldCheckpoint(retained);
+        restoreCheckpoint(retained);
+        updateTranscriptSnapshot(retained.transcript);
     }
 
     public List<ConversationTurn> transcriptSnapshot() {
@@ -904,6 +999,8 @@ public final class CoreAgentLoop {
             while (true) {
                 token.throwIfCancelled();
                 List<ToolSpec> declarations = tools.declarations();
+                Result nativeYield = yieldAtBoundary(transcript, token, runId, modelTurns, startedAtMs);
+                if (nativeYield != null) return nativeYield;
                 if (drainTurnContext(transcript, false, listener, null, "")) {
                     requestInTranscript = true;
                     modelHasInput = true;
@@ -958,7 +1055,7 @@ public final class CoreAgentLoop {
                             if (listener != null) listener.onAssistantTextStreamStarted(runId);
                             ModelProviderClient.TextDeltaListener stream = delta -> {
                                 if (listener != null && delta != null && !delta.isEmpty())
-                                    listener.onAssistantTextDelta(runId, delta);
+                                    listener.onAssistantTextDelta(runId, ProviderAttemptLease.current(), delta);
                             };
                             if (model.usesPreparedRequests()) {
                                 boolean refreshed = false;
@@ -988,7 +1085,9 @@ public final class CoreAgentLoop {
                                     }
                                     prepared.requireFits(token);
                                     try {
-                                        reply = model.completePrepared(prepared, token, stream);
+                                        final PreparedModelRequest sealedPrepared = prepared;
+                                        reply = withProviderAttempt(token, runId,
+                                                () -> model.completePrepared(sealedPrepared, token, stream));
                                         break;
                                     } catch (CoreAgentRuntime.PreparedContextStale stale) {
                                         token.throwIfCancelled();
@@ -1000,13 +1099,16 @@ public final class CoreAgentLoop {
                                     }
                                 }
                             } else {
-                                reply = model.complete(requestTranscript, turnPrompt, declarations, token, stream);
+                                final List<ConversationTurn> capturedTranscript = requestTranscript;
+                                reply = withProviderAttempt(token, runId,
+                                        () -> model.complete(capturedTranscript, turnPrompt, declarations, token, stream));
                             }
                             emit(listener, "model_response", "Respuesta del modelo recibida");
                             break;
                         } catch (RuntimeException failure) {
                             if (failure instanceof CheckpointFailure) throw failure;
                             token.throwIfCancelled();
+                            if (failure instanceof ProviderAttemptLease.YieldRequested) throw failure;
                             if (!retryableProviderFailure(failure)) throw failure;
                             transcript.add(ConversationTurn.modelError(providerErrorCode(failure)));
                             updateTranscriptSnapshot(transcript);
@@ -1016,7 +1118,7 @@ public final class CoreAgentLoop {
                             long currentRetry = retryNumber;
                             if (retryNumber < Long.MAX_VALUE) retryNumber++;
                             try {
-                                rateLimitWaiter.await(failure, currentRetry, token);
+                                withProviderBackoff(token, runId, () -> rateLimitWaiter.await(failure, currentRetry, token));
                             } finally {
                                 if (rateLimited && turnContextProvider != null) turnContextProvider.onRateLimit(false);
                             }
@@ -1025,6 +1127,16 @@ public final class CoreAgentLoop {
                 } catch (RuntimeException failure) {
                     if (failure instanceof CheckpointFailure) throw failure;
                     token.throwIfCancelled();
+                    if (failure instanceof ProviderAttemptLease.YieldRequested) {
+                        Result yielded = yieldAtBoundary(transcript, token, runId, modelTurns, startedAtMs);
+                        if (yielded != null) return yielded;
+                        // A concurrent explicit STEER may still belong to this owner. Drain it at
+                        // the normal top boundary before retrying yield; never reinterpret it as
+                        // NEW_TURN, and never fail/STOP the old tree because input won this race.
+                        // If the new submission was withdrawn, inference may start afresh here;
+                        // the superseded proposal itself was never accepted or dispatched.
+                        continue;
+                    }
                     if (recoverableProviderFailure(failure)) {
                         // Never replay an ambiguous request or cancel independent work merely because
                         // one bounded provider operation failed. Retain this turn for explicit recovery.
@@ -1107,6 +1219,10 @@ public final class CoreAgentLoop {
                 if (listener != null) listener.onAssistantTextStreamEnded(runId);
                 ToolBatchOutcome batch = executeToolBatch(reply.calls, reply, runId, modelTurns, tools,
                         transcript, requestTranscript, token, listener, loopDetector, activeActivities);
+                if (batch.allCallsTerminal) {
+                    Result yielded = yieldAtBoundary(transcript, token, runId, modelTurns, startedAtMs);
+                    if (yielded != null) return yielded;
+                }
                 if (batch.exclusiveYield) {
                     // A native durable question is a suspension boundary, not an ordinary terminal
                     // suggestion. Neither mixed calls nor arriving steering may reopen inference.

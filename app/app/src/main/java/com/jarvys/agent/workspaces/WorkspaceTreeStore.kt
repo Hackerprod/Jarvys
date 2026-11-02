@@ -335,8 +335,20 @@ internal class WorkspaceTreeStore(internal val registry:WorkspaceRegistry) {
     internal fun closeRoot(db:SQLiteDatabase,id:String,reason:String) {
         val root=requireRoot(db,id)
         if(root.admissionsClosed || root.wakesClosed) return // Never replace the first terminal closure.
+        WorkspaceCentralResumeStore.dispose(db,id)
         updateRoot(db,root,values("admissions_closed" to 1L,"wakes_closed" to 1L,"close_reason" to reason))
     }
+
+    fun parkCentral(fence:TreeNodeFence,cause:String,certificate:String)=WorkspaceCentralResumeStore(this).park(fence,cause,certificate)
+    fun getCentralResume(id:String)=WorkspaceCentralResumeStore(this).get(id)
+    fun reserveCentralSuspension(row:CentralResumeRecord,process:String,run:String,token:String,cycle:String)=
+        WorkspaceCentralResumeStore(this).reserveSuspension(row,process,run,token,cycle)
+    fun reserveCentralChild(fence:TreeNodeFence,child:String,claim:String,process:String,run:String,token:String,cycle:String)=
+        WorkspaceCentralResumeStore(this).reserveChild(fence,child,claim,process,run,token,cycle)
+    fun bindCentralResume(row:CentralResumeRecord,receipt:String)=WorkspaceCentralResumeStore(this).bind(row,receipt)
+    fun incorporateCentralResume(row:CentralResumeRecord,receipt:String)=WorkspaceCentralResumeStore(this).incorporate(row,receipt)
+    fun stopCentralResume(row:CentralResumeRecord)=WorkspaceCentralResumeStore(this).stopPrepared(row)
+    fun uncertainCentralResume(row:CentralResumeRecord)=WorkspaceCentralResumeStore(this).uncertain(row)
 
     fun attachCentralExecution(fence:TreeNodeFence,cycle:String,source:String,claim:String,childDue:Boolean,childId:String)=
         WorkspaceTreeCentralStore(this).attach(fence,cycle,source,claim,childDue,childId)
