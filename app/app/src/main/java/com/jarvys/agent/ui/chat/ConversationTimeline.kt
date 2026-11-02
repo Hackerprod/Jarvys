@@ -473,7 +473,7 @@ private fun JarvysConversationEvent(
     assistantReplyCapabilities: AssistantReplyCapabilities = AssistantReplyCapabilities(),
 ) {
     when (event.kind) {
-        "user" -> TimelineArrival(animateEntry) { IntentMessage(event, generatedImageSessionId) }
+        "user" -> TimelineArrival(animateEntry) { IntentMessage(event, generatedImageSessionId,onRegenerateAssistant) }
         "assistant", "assistant_stream" -> TimelineArrival(animateEntry) {
             AssistantReplyView(event, onOpenSkillFile, event.stage == "FAILED",
                 onTranslateAssistant, onRegenerateAssistant, onSpeakAssistant, speakingMessageId, isLastAssistant,
@@ -521,7 +521,7 @@ internal fun TimelineArrival(animateEntry: Boolean, content: @Composable () -> U
 }
 
 @Composable
-internal fun IntentMessage(event: AgentRunUiEvent, sessionId: String = "") {
+internal fun IntentMessage(event: AgentRunUiEvent, sessionId: String = "",onRecover:(AgentRunUiEvent)->Unit = {}) {
     val context = LocalContext.current
     val hasReaction = event.kind == "user" && event.proactiveThreadKey.isNullOrEmpty() && !event.proactiveNotice &&
         MessageReactionEmoji.isValid(event.reactionEmoji)
@@ -557,7 +557,15 @@ internal fun IntentMessage(event: AgentRunUiEvent, sessionId: String = "") {
                         .testTag("user-message-bubble-${event.id}")) {
                     Column(Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = contentBottom),
                         verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (event.stage == "QUEUED") Text(stringResource(R.string.chat_interrupt_pending),
+                        val availability=event.centralAvailability
+                        if(availability!=null) {
+                            Text(availability.label(context),style=MaterialTheme.typography.labelSmall,
+                                modifier=Modifier.testTag("central-request-status-${event.messageId}"))
+                            if(availability.canRetry && com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled()) TextButton(onClick={onRecover(event)},
+                                modifier=Modifier.testTag("central-request-retry-${event.messageId}")) {
+                                Text(stringResource(R.string.chat_history_load_retry))
+                            }
+                        } else if (event.stage == "QUEUED") Text(stringResource(R.string.chat_interrupt_pending),
                             style = MaterialTheme.typography.labelSmall)
                         if (event.attachments.isNotEmpty()) UserChatAttachments(event.attachments, sessionId, Modifier.widthIn(max = 320.dp))
                         if (event.text.isNotBlank()) SelectionContainer {

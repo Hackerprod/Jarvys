@@ -746,6 +746,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             if (cursor.moveToFirst()) findMessage(conversationId, cursor.getString(0)) else null
         } else null
         if (owner == null) return@transactionResult ChatDbResult.NotFound
+        if(owner.messageId in CentralTurnSubmissionRepository(database).historyExcluded(conversationId))
+            return@transactionResult ChatDbResult.Invalid("Queued or uncertain Central submission cannot be regenerated")
         val prompt = hydrateMessages(conversationId, listOf(owner.messageId)).singleOrNull()
             ?: return@transactionResult ChatDbResult.NotFound
 
@@ -1394,21 +1396,29 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     }
 
     /** Returns the latest `role=user` ID derived from `LocalRunStore.java:readConversationMessages`. */
-    suspend fun latestUserMessageId(conversationId: String): String? {
-        return JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
-        val highWater = maxSeq(conversationId)
-        sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND role='user' AND seq<=? ORDER BY seq DESC LIMIT 1", arrayOf(conversationId, highWater))
-            .use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-        } }
+    suspend fun latestUserMessageId(conversationId: String): String? = JarvysChatDatabaseProvider.onQueryExecutor(database) {
+        database.withChatReadTransaction {
+            val excluded=CentralTurnSubmissionRepository(database).historyExcluded(conversationId)
+            sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND role='user' AND seq<=? ORDER BY seq DESC",arrayOf(conversationId,maxSeq(conversationId))).use { c ->
+                var found:String?=null
+                while(c.moveToNext())if(c.getString(0) !in excluded) {found=c.getString(0);break}
+                found
+            }
+        }
     }
 
-    /** Returns the first `role=user` row, replacing `LocalRunStore.java:readFirstUserMessage` and `LocalRunStore.java:loadConversationContext`. */
-    suspend fun firstUserMessage(conversationId: String): StoredMessage? {
-        return JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
-        val highWater = maxSeq(conversationId)
-        val id = sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND role='user' AND seq<=? ORDER BY seq LIMIT 1", arrayOf(conversationId, highWater)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
-        id?.let { hydrateMessages(conversationId, listOf(it), highWater).firstOrNull() }
-        } }
+    /** First historical USER only; positive queued rows are not fallback source authority. */
+    suspend fun firstUserMessage(conversationId: String): StoredMessage? = JarvysChatDatabaseProvider.onQueryExecutor(database) {
+        database.withChatReadTransaction {
+            val highWater=maxSeq(conversationId)
+            val excluded=CentralTurnSubmissionRepository(database).historyExcluded(conversationId)
+            val id=sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND role='user' AND seq<=? ORDER BY seq",arrayOf(conversationId,highWater)).use { c ->
+                var found:String?=null
+                while(c.moveToNext())if(c.getString(0) !in excluded) {found=c.getString(0);break}
+                found
+            }
+            id?.let {hydrateMessages(conversationId,listOf(it),highWater).firstOrNull()}
+        }
     }
 
     /** Counts `role=user`/`role=assistant` rows from `LocalRunStore.java:readConversationMessages`. */

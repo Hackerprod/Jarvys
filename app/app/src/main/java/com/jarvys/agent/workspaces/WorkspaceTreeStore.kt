@@ -340,6 +340,9 @@ internal class WorkspaceTreeStore(internal val registry:WorkspaceRegistry) {
     }
 
     fun parkCentral(fence:TreeNodeFence,cause:String,certificate:String)=WorkspaceCentralResumeStore(this).park(fence,cause,certificate)
+    fun preparedCentralSuspensions()=WorkspaceCentralResumeStore(this).prepared()
+    fun recoverCentralSuspension(row:CentralResumeRecord,actionId:String,process:String,guard:Runnable)=
+        WorkspaceCentralResumeStore(this).recoverPrepared(row,actionId,process,guard)
     fun getCentralResume(id:String)=WorkspaceCentralResumeStore(this).get(id)
     fun reserveCentralSuspension(row:CentralResumeRecord,process:String,run:String,token:String,cycle:String)=
         WorkspaceCentralResumeStore(this).reserveSuspension(row,process,run,token,cycle)

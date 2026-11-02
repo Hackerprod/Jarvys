@@ -60,6 +60,26 @@ internal class WorkspaceCentralResumeStore(private val core:WorkspaceTreeStore) 
     fun get(id:String):CentralResumeRecord?=core.registry.treeRead{db->requireSchema(db);row(db,id)}
     fun byCause(root:String,kind:String,cause:String):CentralResumeRecord?=core.registry.treeRead{db->
         if(db.version<3)null else row(db,identity("central-resume",root,kind,cause)) }
+    fun prepared():List<CentralResumeRecord> = core.registry.treeRead{db->
+        if(db.version<3)emptyList() else db.query("bot_tree_central_resume",null,"state='PREPARED' AND cause_kind='SUSPENSION'",null,null,null,"created_at,resume_id").use{c->
+            buildList{while(c.moveToNext())add(decode(c))} }
+    }
+    fun recoverPrepared(expected:CentralResumeRecord,actionId:String,process:String,guard:Runnable):CentralResumeRecord=core.registry.treeTransaction{db->
+        requireSchema(db);nonempty(actionId);nonempty(process);guard.run()
+        val current=row(db,expected.resumeId) ?: throw TreeIntegrityException("Recovery resume missing")
+        integrity(current==expected,"Recovery snapshot changed")
+        eligible(current.state=="PREPARED" && current.causeKind=="SUSPENSION","Only unclaimed suspension may recover")
+        val parent=core.requireNode(db,current.rootId,current.nodeId);val root=core.requireRoot(db,current.rootId)
+        eligible(!root.admissionsClosed && !root.wakesClosed && !parent.admissionsClosed && !parent.wakesClosed &&
+            parent.state==TreeNodeState.WAITING && parent.controlIntent==null && parent.cycleId==current.parentCycle &&
+            parent.revision==current.parentRevision && parent.stopEpoch==current.stopEpoch,"Recovery root fence changed")
+        WorkspaceTreeStops.requireAllowed(core.registry.treeStorageIdentity,parent.rootId,parent.nodeId,parent.cycleId)
+        val receipt=JSONObject().put("kind","EXPLICIT_SUSPENSION_RECOVERY").put("actionId",actionId).put("processId",process)
+            .put("resumeId",current.resumeId).put("expectedRevision",current.revision).put("sourceDigest",current.sourceDigest).toString()
+        guard.run()
+        core.appendEvent(db,parent,identity("central-resume-recovery",actionId),"CENTRAL_RESUME_RECOVERY",receipt,current.sourceDigest,identity(receipt),current.resumeId)
+        update(db,current) // Fresh provenance revision, never execution/reset/owner from metadata.
+    }
     private fun update(db:SQLiteDatabase,old:CentralResumeRecord,vararg changes:Pair<String,Any?>):CentralResumeRecord {
         val v=values(*changes);v.put("revision",next(old.revision));v.put("updated_at",timestamp())
         eligible(db.update("bot_tree_central_resume",v,"resume_id=? AND revision=?",arrayOf(old.resumeId,old.revision.toString()))==1,"Resume revision changed")
@@ -136,6 +156,8 @@ internal class WorkspaceCentralResumeStore(private val core:WorkspaceTreeStore) 
             parent.revision==next(current.parentRevision) && parent.stopEpoch==current.stopEpoch,"Reserved Central fence changed")
         WorkspaceTreeStops.requireAllowed(core.registry.treeStorageIdentity,parent.rootId,parent.nodeId,parent.cycleId)
         eligible(root.executions<WorkspaceTreePolicy.MAX_EXECUTIONS,"Execution progress window exhausted")
+        // Existing denial-only predecessor link closes STOP between durable bind and owner registration.
+        WorkspaceTreeStops.linkChildWait(core.registry.treeStorageIdentity,parent.rootId,parent.nodeId,parent.cycleId,requireNotNull(current.successorCycle))
         core.updateRoot(db,root,values("executions" to next(root.executions)))
         core.updateNode(db,parent,values("state" to "RUNNING","cycle_id" to requireNotNull(current.successorCycle)))
         update(db,current,"state" to "BOUND","binding_receipt" to receipt)

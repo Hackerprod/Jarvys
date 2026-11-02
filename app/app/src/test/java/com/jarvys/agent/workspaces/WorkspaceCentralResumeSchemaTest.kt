@@ -58,4 +58,29 @@ class WorkspaceCentralResumeSchemaTest {
         try{open().upgradeCentralResumeSchema();fail("Unknown table must reject")}catch(expected:WorkspaceRegistryCorruptException){}
         raw().use{db->assertEquals(2,db.version);db.rawQuery("PRAGMA table_info(bot_tree_central_resume)",null).use{assertTrue(it.moveToFirst());assertEquals("fake",it.getString(1))}}
     }
+    @Test fun interruptedNativeDdlAtEveryBoundaryConservesV2(){
+        val registry=open();registry.createWorkspace("rollback","Retained");registry.upgradeTreeSchema();val before=snapshots()
+        for(boundary in 1..WorkspaceCentralResumeSchema.CREATE_SQL.size){
+            raw().use{db->db.beginTransaction();try{WorkspaceCentralResumeSchema.CREATE_SQL.take(boundary).forEach(db::execSQL);db.version=3}finally{db.endTransaction()}
+                assertEquals(2,db.version)}
+            assertEquals(before,snapshots());assertEquals(2,open().schemaVersion())
+        }
+    }
+    @Test fun nativeSqliteFullRollsBackResumeTableVersionAndEveryPriorRow(){
+        val registry=open();registry.createWorkspace("full","Retained");registry.upgradeTreeSchema();val before=snapshots()
+        registry.treeRead{db->val pages=db.rawQuery("PRAGMA page_count",null).use{it.moveToFirst();it.getLong(0)}
+            db.rawQuery("PRAGMA max_page_count=$pages",null).use{assertTrue(it.moveToFirst());assertEquals(pages,it.getLong(0))}}
+        val error=runCatching{registry.upgradeCentralResumeSchema()}.exceptionOrNull()
+        assertNotNull(error);assertTrue(generateSequence(error){it.cause}.any{it is android.database.sqlite.SQLiteFullException})
+        assertEquals(2,registry.schemaVersion());assertEquals(before,snapshots())
+        registry.treeRead{db->db.rawQuery("PRAGMA max_page_count=2147483646",null).use{assertTrue(it.moveToFirst())}}
+        registry.upgradeCentralResumeSchema();assertEquals(3,registry.schemaVersion());assertEquals(before,snapshots())
+    }
+    @Test fun resumeForeignKeyRejectsAnOrphanWithoutPartialInsert(){
+        val registry=open();registry.createWorkspace("fk","Retained");registry.upgradeCentralResumeSchema()
+        val error=runCatching{registry.treeTransaction{db->db.execSQL("INSERT INTO bot_tree_central_resume(resume_id,root_id,node_id,cause_kind,cause_id,source_certificate,source_digest,revision,state,parent_cycle_id,parent_revision,root_stop_epoch,created_at,updated_at) VALUES('id','missing','missing','SUSPENSION','cause','cert','hash',1,'PREPARED','cycle',1,0,1,1)")}}.exceptionOrNull()
+        assertTrue(error is android.database.sqlite.SQLiteConstraintException)
+        raw().use{db->db.rawQuery("SELECT count(*) FROM bot_tree_central_resume",null).use{it.moveToFirst();assertEquals(0,it.getInt(0))}}
+    }
+
 }

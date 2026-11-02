@@ -221,7 +221,7 @@ fun ChatComposer(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (showContextActions) {
-                    IconButton(onClick = { trayOpen = !trayOpen }, enabled = inputEnabled && !running && !attachmentSending,
+                    IconButton(onClick = { trayOpen = !trayOpen }, enabled = inputEnabled && (!running || separateStopAction) && !attachmentSending,
                         modifier = Modifier.size(48.dp).testTag("chat-plus-button").semantics {
                             contentDescription = trayToggleDescription
                         }) {
@@ -238,7 +238,7 @@ fun ChatComposer(
                     modelLabel = modelLabel,
                     effortLabel = effortLabel,
                     effortAppearance = effortAppearance,
-                    enabled = inputEnabled && !running && !attachmentSending,
+                    enabled = inputEnabled && (!running || separateStopAction) && !attachmentSending,
                     motionActive = effortMotionActive && !trayOpen && !skillsOpen && unavailableAction == null,
                     onClick = onSelectModel,
                     modifier = Modifier.weight(1f),

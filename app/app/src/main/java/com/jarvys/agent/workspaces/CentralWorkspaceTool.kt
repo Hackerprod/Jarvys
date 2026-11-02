@@ -49,6 +49,10 @@ class CentralWorkspaceTool internal constructor(
                      originalUserRequest: String, token: CancellationToken, admission: Runnable,
                      context: WorkspaceMutationContext?): JSONObject =
             throw UnsupportedOperationException("Durable Central continuation is unavailable")
+        /** Omitted policy is resolved against an existing assignment before a new default is applied. */
+        fun delegateAutomatic(workspaceId:String,key:String,role:String,mission:String,tools:List<String>?,name:String?,
+            missionAccess:String,requestId:String,originalUserRequest:String,token:CancellationToken,admission:Runnable,
+            context:WorkspaceMutationContext?):JSONObject = throw UnsupportedOperationException("Automatic awaited delegation unavailable")
         fun read(workspaceId: String, assignmentId: String?, limit: Int, afterAssignmentId: String?,
                  admission: Runnable): JSONObject
         fun results(workspaceId: String, limit: Int, afterResultId: String?, admission: Runnable): JSONObject =
@@ -191,7 +195,9 @@ class CentralWorkspaceTool internal constructor(
                 "tools" to mapOf("type" to "array", "maxItems" to MAX_TOOLS, "uniqueItems" to true,
                     "items" to tokenSchema("Exact tool name within the parent's available capability scope.")),
                 "name" to textSchema(128, "Optional nonempty single-line worker name."),
-                "continue_result" to mapOf("type" to "boolean", "default" to false, "description" to "Opt into one durable Central result continuation for a native general-purpose child. Interrupted workers require explicit native Resume; never replay uncertain effects."),
+                "continue_result" to mapOf("type" to "boolean", "default" to com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled(), "description" to
+                    if(com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled()) "Omitted: independently admitted work returns its result to Central automatically. Explicit false is detached. Existing assignment retries preserve their original policy; admission is not completion. Never poll or replay uncertain work."
+                    else "Opt into one durable Central result continuation for a native general-purpose child. Interrupted workers require explicit native Resume; never replay uncertain effects."),
                 "mission_access" to mapOf("type" to "string", "enum" to listOf("standard", "read_only"), "default" to "standard"),
                 "assignment_id" to uuidSchema(),
                 "bot_id" to tokenSchema("Exact bot_id bound to assignment_id in the workspace read."),
@@ -271,7 +277,10 @@ class CentralWorkspaceTool internal constructor(
                     "create" -> if (mutation == null) backend.create(payload.string("key"), payload.string("title"),
                         requestId, originalUserRequest, admission) else backend.create(payload.string("key"),
                         payload.string("title"), requestId, originalUserRequest, admission, mutation)
-                    "delegate" -> if (payload.continueResult) backend.delegateContinuing(payload.string("workspace_id"), payload.string("key"),
+                    "delegate" -> if (!payload.continueResultSpecified && com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled())
+                        backend.delegateAutomatic(payload.string("workspace_id"),payload.string("key"),payload.string("role"),payload.string("mission"),
+                            payload.tools,payload.optionalString("name"),payload.string("mission_access"),requestId,originalUserRequest,token,admission,mutation)
+                    else if (payload.continueResult) backend.delegateContinuing(payload.string("workspace_id"), payload.string("key"),
                         payload.string("role"), payload.string("mission"), payload.tools,
                         payload.optionalString("name"), payload.string("mission_access"),
                         requestId, originalUserRequest, token, admission, mutation)
@@ -342,6 +351,7 @@ class CentralWorkspaceTool internal constructor(
     private class Payload(values: Map<String, Any>) {
         private val values = Collections.unmodifiableMap(LinkedHashMap(values))
         val action = string("action")
+        val continueResultSpecified: Boolean get() = values.containsKey("continue_result")
         val continueResult: Boolean get() = values["continue_result"] as? Boolean ?: false
         val isMutation = action == "create" || action == "delegate" || action == "deliver" || action == "reply" || action == "message" || action == "continue_result" || action == "cancel"
         val limit: Int get() = values["limit"] as? Int ?: 1

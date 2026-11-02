@@ -52,6 +52,7 @@ internal object ChatCanvasEventSerializer {
             .put("stage", event.stage)
             .put("text", text)
             .put("detail", if (internalSkill == null) event.detail else null)
+            .put("requestStatus",event.centralAvailability?.label(context))
             .put("messageId", event.messageId)
             .put("label", event.workspaceSenderLabel ?: label)
             .put("previewId", if (internalSkill == null) event.previewId else null)
@@ -77,8 +78,10 @@ internal object ChatCanvasEventSerializer {
         val canOpen = event.previewId?.isNotBlank() == true || event.presentationArtifact != null ||
             event.missionRef != null || event.scheduledTaskArtifact != null
         val canTransfer = event.deliveredArtifact != null || !event.generatedImagePath.isNullOrBlank() || event.attachments.isNotEmpty()
-        val canRetry = allowRetry && !running && event.kind == "assistant" && event.stage == null &&
-            event.messageId.isNotBlank() && event.messageId == latestAssistant
+        val nativeRetry=event.kind=="user" && event.centralAvailability?.canRetry==true
+            && com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled()
+        val canRetry = allowRetry && (nativeRetry || !running && event.kind == "assistant" && event.stage == null && event.canRegenerate &&
+            event.messageId.isNotBlank() && event.messageId == latestAssistant)
         value.put("canCopy", event.kind == "user" || event.kind == "assistant" || event.kind == "assistant_stream")
             .put("canOpen", canOpen).put("canTransfer", canTransfer).put("canRetry", canRetry)
         val options = JSONArray()
@@ -137,8 +140,10 @@ internal object ChatCanvasActionPolicy {
         if (event == null) return ChatCanvasActionDecision(false, "event is not in this conversation window")
         val allowed = when (action) {
             "copy" -> event.kind == "user" || event.kind == "assistant" || event.kind == "assistant_stream"
-            "retry" -> allowRetry && !running && event.kind == "assistant" && event.messageId.isNotBlank() &&
-                (event.stage == "FAILED" || event.messageId == latestAssistantMessageId)
+            "retry" -> allowRetry && (event.kind=="user" && event.centralAvailability?.canRetry==true
+                && com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled()
+                || !running && event.kind == "assistant" && event.canRegenerate && event.messageId.isNotBlank() &&
+                (event.stage == "FAILED" || event.messageId == latestAssistantMessageId))
             "open_viewer" -> event.previewId?.isNotBlank() == true || event.presentationArtifact != null ||
                 event.missionRef != null || event.scheduledTaskArtifact != null
             "download", "share" -> event.deliveredArtifact != null ||

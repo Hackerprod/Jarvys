@@ -237,6 +237,69 @@ public final class CrewContextArtifacts {
         }
     }
 
+    /** Read-only exact main-chat source verification. No constructor, mkdir, metadata bridge or permission mint. */
+    public static String readConfirmedSource(File filesDirectory, String conversationId, String id,
+                                             JSONObject metadata) throws IOException {
+        return readConfirmedSource(filesDirectory, conversationId, id, metadata, null);
+    }
+
+    // Fault injection only: real read followed by every mandatory postcheck; no authority bypass.
+    static String readConfirmedSource(File filesDirectory, String conversationId, String id,
+                                      JSONObject metadata, Runnable afterReadForTests) throws IOException {
+        if (conversationId == null || conversationId.isEmpty() || id == null || !id.matches("[0-9a-f]{64}"))
+            throw new IOException("Invalid retained source identity");
+        final long chars, bytes;
+        try {
+            if (!(metadata.get("chars") instanceof Integer || metadata.get("chars") instanceof Long)
+                    || !(metadata.get("bytes") instanceof Integer || metadata.get("bytes") instanceof Long)
+                    || !id.equals(metadata.get("sha256")) || !(id + ".txt").equals(metadata.get("path")))
+                throw new IOException("Invalid retained source metadata");
+            chars=metadata.getLong("chars");bytes=metadata.getLong("bytes");
+        } catch (org.json.JSONException invalid) { throw new IOException("Missing retained source metadata", invalid); }
+        if (chars < 0 || chars > MainChatTranscriptStore.MAX_ARTIFACT_CHARS || bytes < 0
+                || bytes > 4L * MainChatTranscriptStore.MAX_ARTIFACT_CHARS)
+            throw new IOException("Retained source exceeds native artifact bound");
+        verify(filesDirectory.getAbsoluteFile());
+        File root = new File(new StorageGeneration(filesDirectory).directory("crew-context"),
+                digest(conversationId) + "/" + digest("main-chat-transcript"));
+        File file = new File(root, id + ".txt");
+        verify(root);verify(file);
+        java.nio.file.Path path=file.toPath();
+        java.nio.file.attribute.BasicFileAttributes before=java.nio.file.Files.readAttributes(path,
+                java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        if (!before.isRegularFile() || before.isSymbolicLink() || before.size()!=bytes)
+            throw new IOException("Retained source file shape changed");
+        java.util.Set<java.nio.file.OpenOption> options=new java.util.HashSet<>();
+        options.add(java.nio.file.StandardOpenOption.READ);options.add(java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
+        try (java.nio.channels.SeekableByteChannel channel=java.nio.file.Files.newByteChannel(path, options)) {
+            java.nio.ByteBuffer buffer=java.nio.ByteBuffer.allocate(8192);
+            while(channel.read(buffer)>=0) {
+                buffer.flip();int count=buffer.remaining();
+                if ((long)output.size()+count>bytes)throw new IOException("Retained source grew while reading");
+                output.write(buffer.array(),buffer.position(),count);buffer.clear();
+            }
+        }
+        byte[] encoded=output.toByteArray();
+        if (afterReadForTests != null) afterReadForTests.run();
+        java.nio.file.attribute.BasicFileAttributes after=java.nio.file.Files.readAttributes(path,
+                java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        verify(root);verify(file);
+        if (!after.isRegularFile() || after.isSymbolicLink() || after.size()!=bytes || encoded.length!=bytes
+                || !before.lastModifiedTime().equals(after.lastModifiedTime())
+                || !java.util.Objects.equals(before.fileKey(),after.fileKey()))
+            throw new IOException("Retained source changed while reading");
+        try {
+            StringBuilder hash=new StringBuilder();
+            for(byte value:MessageDigest.getInstance("SHA-256").digest(encoded))hash.append(String.format(Locale.ROOT,"%02x",value & 255));
+            if(!id.contentEquals(hash))throw new IOException("Retained source digest changed");
+            String text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(encoded)).toString();
+            if(text.length()!=chars)throw new IOException("Retained source character count changed");
+            return text;
+        } catch (NoSuchAlgorithmException impossible) {throw new IllegalStateException(impossible);}
+    }
+
     private void verifyArtifact(String id, int chars, long bytes) throws IOException {
         if (!id.matches("[0-9a-f]{64}") || chars < 0 || bytes < 0) throw new IOException("Invalid artifact metadata");
         File file = new File(this.root, id + ".txt");

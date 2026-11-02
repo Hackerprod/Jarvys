@@ -95,6 +95,8 @@ data class AgentRunUiEvent(
     val workspaceSenderLabel: String? = null,
     /** Bot mission this Central message points to; the timeline draws it as a mission card. */
     val missionRef: MissionRef? = null,
+    /** Read-only exact row selection for native recovery; not part of model source or message parts. */
+    val centralAvailability:CentralAvailabilityDisplay? = null,
  ) {
     /** Parsed once per immutable event instance; a data-class copy gets a fresh analysis. */
     internal val visibilityDetailAnalysis: AgentRunUiEventVisibilityDetail by lazy {
@@ -661,6 +663,15 @@ object AgentRunUiState {
     fun containsEvent(sessionId: String, event: AgentRunUiEvent): Boolean = synchronized(lock) {
         eventsForSession(sessionId).any {
             it.id == event.id && it.kind == event.kind && it.messageId == event.messageId
+        }
+    }
+
+    /** Recovery captures the actual immutable displayed selection, not just a caller-selected row ID. */
+    @JvmStatic
+    fun containsExactRecoverySelection(sessionId:String,event:AgentRunUiEvent):Boolean=synchronized(lock) {
+        event.centralAvailability!=null && eventsForSession(sessionId).any {
+            it.id==event.id && it.kind=="user" && event.kind=="user" && it.messageId==event.messageId
+                && it.centralAvailability===event.centralAvailability
         }
     }
 

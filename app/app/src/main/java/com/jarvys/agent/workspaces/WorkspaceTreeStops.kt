@@ -10,6 +10,9 @@ object WorkspaceTreeStops {
     private val stopped=ConcurrentHashMap.newKeySet<String>()
     private fun key(storage:String,root:String,node:String,cycle:String)="$storage\u0000$root\u0000$node\u0000$cycle"
     @JvmStatic fun latchRoot(context:Context,root:String,cycle:String)=latchNode(context,root,root,cycle)
+    /** Denial-only read; native resume owners retain their predecessor STOP fence. */
+    @JvmStatic fun requireRootAllowed(context:Context,root:String,cycle:String) =
+        requireAllowed(context.applicationContext.getDatabasePath(WorkspaceRegistry.DATABASE_NAME).canonicalPath,root,root,cycle)
     @JvmStatic fun latchNode(context:Context,root:String,node:String,cycle:String) {
         latchExact(context.applicationContext.getDatabasePath(WorkspaceRegistry.DATABASE_NAME).canonicalPath,root,node,cycle)
     }

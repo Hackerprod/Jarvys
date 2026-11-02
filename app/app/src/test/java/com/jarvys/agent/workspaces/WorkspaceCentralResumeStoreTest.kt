@@ -85,4 +85,37 @@ class WorkspaceCentralResumeStoreTest {
         try{trees.incorporateCentralResume(bound.copy(ownerRun="other"),"receipt");fail("Owner changed")}catch(expected:TreeIntegrityException){}
         assertEquals(row.resumeId,trees.getNode(root,root)!!.controlIntent)
     }
+    @Test fun predecessorStopAfterBindingStillDeniesSuccessorWithoutTouchingSiblingRoot(){
+        val parked=park();val reserved=reserve(parked);val bound=trees.bindCentralResume(reserved,"successor")
+        trees.incorporateCentralResume(bound,"incorporated")
+        val sibling=trees.beginRoot(TreeOrigin("generation",WorkspaceIdentity.CENTRAL_SESSION,"other-user","b".repeat(64)),"other-source","other-cycle")
+        WorkspaceTreeStops.latchExact(registry.treeStorageIdentity,root,root,parked.parentCycle)
+        try{WorkspaceTreeStops.requireAllowed(registry.treeStorageIdentity,root,root,"cycle1");fail("Lost predecessor STOP")}catch(expected:TreeIneligibleException){}
+        WorkspaceTreeStops.requireAllowed(registry.treeStorageIdentity,sibling.rootId,sibling.rootId,"other-cycle")
+        assertFalse(trees.getRoot(sibling.rootId)!!.admissionsClosed)
+    }
+    @Test fun executionWindowExhaustionCannotChargeOrBind(){
+        val reserved=reserve(park())
+        registry.treeTransaction{it.execSQL("UPDATE bot_tree_root SET executions=? WHERE root_id=?",arrayOf(WorkspaceTreePolicy.MAX_EXECUTIONS,root))}
+        try{trees.bindCentralResume(reserved,"late");fail("Execution window bypassed")}catch(expected:TreeIneligibleException){}
+        assertEquals(WorkspaceTreePolicy.MAX_EXECUTIONS,trees.getRoot(root)!!.executions)
+        assertEquals("RESERVED",trees.getCentralResume(reserved.resumeId)!!.state)
+    }
+    @Test fun explicitRecoveryChangesOnlyUnclaimedProvenanceAndNeverReopensStoppedRoot(){
+        val row=park();val rootBefore=trees.getRoot(root)
+        val renewed=trees.recoverCentralSuspension(row,"fresh-action","new-process",Runnable{})
+        assertEquals(row.revision+1,renewed.revision);assertEquals("PREPARED",renewed.state)
+        assertEquals(rootBefore,trees.getRoot(root));assertNull(renewed.ownerToken)
+        try{trees.recoverCentralSuspension(row,"stale-action","new-process",Runnable{});fail("Stale recovery accepted")}catch(expected:TreeIntegrityException){}
+        trees.stopCentralResume(renewed)
+        try{trees.recoverCentralSuspension(trees.getCentralResume(row.resumeId)!!,"after-stop","new-process",Runnable{});fail("Stopped root recovered")}catch(expected:TreeIneligibleException){}
+    }
+    @Test fun recoveryNativeGuardFailureRollsBackRevisionAndAudit(){
+        val row=park();var calls=0
+        try{trees.recoverCentralSuspension(row,"denied","new-process",Runnable{calls++;if(calls==2)throw IllegalStateException("native action revoked")});fail("Revoked action accepted")}
+        catch(expected:IllegalStateException){}
+        assertEquals(row,trees.getCentralResume(row.resumeId))
+        assertEquals(0,registry.treeRead{db->db.rawQuery("SELECT count(*) FROM bot_tree_event WHERE kind='CENTRAL_RESUME_RECOVERY'",null).use{it.moveToFirst();it.getInt(0)}})
+    }
+
 }

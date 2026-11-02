@@ -48,6 +48,7 @@ internal class CentralTurnSubmissionRepository(private val database: JarvysChatD
     private fun changed() {check(sql.query("SELECT changes()").use {it.moveToFirst() && it.getLong(0)==1L}) {"Central submission CAS conflict"}}
     private fun generation():String=sql.query("SELECT value FROM storage_meta WHERE key=?",arrayOf(ConnectionProjectionRepository.GENERATION_KEY)).use { c ->check(c.moveToFirst() && c.getType(0)==Cursor.FIELD_TYPE_STRING);c.getString(0)}
     private fun requireSource(row:CentralSubmissionSnapshot) {
+        CentralSubmissionRequest.read(database,row.sessionId,row.userMessageId)
         check(generation()==row.storageGeneration) {"Central submission storage generation changed"}
         check(captureCentralUserRootDigestInTransaction(database,row.sessionId,row.userMessageId)==row.sourceSha256) {"Central submission source changed"}
         check(sql.query("SELECT seq FROM messages WHERE conversation_id=? AND message_id=?",arrayOf(row.sessionId,row.userMessageId)).use {it.moveToFirst() && it.getLong(0)==row.userSeq})
@@ -56,6 +57,7 @@ internal class CentralTurnSubmissionRepository(private val database: JarvysChatD
     fun insertPrepared(message:StoredMessage,submissionId:String,processId:String,storageGeneration:String):CentralSubmissionSnapshot {
         requireAvailable();check(WorkspaceIdentity.isCentral(message.conversationId) && message.role=="user" && message.hiddenKind==null)
         check(submissionId.isNotBlank() && processId.isNotBlank() && storageGeneration==generation())
+        CentralSubmissionRequest.read(database,message.conversationId,message.messageId)
         val digest=captureCentralUserRootDigestInTransaction(database,message.conversationId,message.messageId)
         find(message.conversationId,submissionId)?.let { existing ->
             check(existing.userMessageId==message.messageId && existing.sourceSha256==digest && existing.storageGeneration==storageGeneration && existing.originalAdmissionProcess==processId) {"Conflicting Central submission delivery"}
@@ -94,9 +96,15 @@ internal class CentralTurnSubmissionRepository(private val database: JarvysChatD
         requireAvailable();authority.requireCurrent(sessionId,submissionId,revision)
         val row=checkNotNull(find(sessionId,submissionId));requireSource(row)
         check(row.state=="PREPARED" && row.revision==revision)
-        sql.execSQL("UPDATE central_turn_submissions SET current_admission_process=?,revision=revision+1,recovery_receipt=? WHERE conversation_id=? AND submission_id=? AND revision=? AND state='PREPARED'",arrayOf(authority.processId,authority.receiptId,sessionId,submissionId,revision));changed()
+        val result=recoverPreparedInTransaction(row,authority.processId,authority.receiptId)
         authority.requireCurrent(sessionId,submissionId,revision)
-        return checkNotNull(find(sessionId,submissionId))
+        return result
+    }
+    internal fun recoverPreparedInTransaction(expected:CentralSubmissionSnapshot,processId:String,receiptId:String):CentralSubmissionSnapshot {
+        val row=checkNotNull(find(expected.sessionId,expected.submissionId));requireSource(row)
+        check(row==expected && row.state=="PREPARED" && processId.isNotBlank() && receiptId.isNotBlank())
+        sql.execSQL("UPDATE central_turn_submissions SET current_admission_process=?,revision=revision+1,recovery_receipt=? WHERE conversation_id=? AND submission_id=? AND revision=? AND state='PREPARED'",arrayOf(processId,receiptId,row.sessionId,row.submissionId,row.revision));changed()
+        return checkNotNull(find(row.sessionId,row.submissionId))
     }
     private fun finishOwned(row:CentralSubmissionSnapshot,assistantMessageId:String,runId:String,
         terminalState:String,receipt:JSONObject,evidence:CentralTreeAdmission.TerminalEvidence?):CentralSubmissionSnapshot {
@@ -147,16 +155,24 @@ internal class CentralTurnSubmissionRepository(private val database: JarvysChatD
         return finished
     }
     fun cancel(authority:CentralSubmissionAdmission.CancelAuthority):List<CentralSubmissionSnapshot> {
-        requireAvailable();authority.requireCurrent()
+        authority.requireCurrent()
+        val result=cancelCapturedInTransaction(authority.captured)
+        authority.requireCurrent();return result
+    }
+    /** Internal exact-cohort CAS, composed with existing STEER disposition in one writer lease. */
+    internal fun cancelCapturedInTransaction(capturedRows:List<CentralSubmissionSnapshot>):List<CentralSubmissionSnapshot> {
+        if(capturedRows.isEmpty())return emptyList()
+        requireAvailable()
         val result=mutableListOf<CentralSubmissionSnapshot>()
-        for(captured in authority.captured) {
-            val row=checkNotNull(find(captured.sessionId,captured.submissionId))
+        for(captured in capturedRows) {
+            val row=checkNotNull(find(captured.sessionId,captured.submissionId));requireSource(row)
+            check(row.userMessageId==captured.userMessageId && row.sourceSha256==captured.sourceSha256 && row.storageGeneration==captured.storageGeneration)
             if(row.state in setOf("COMPLETED","FAILED","CANCELLED")) {result.add(row);continue}
             check(row==captured) {"Captured Central STOP cohort changed"}
             sql.execSQL("UPDATE central_turn_submissions SET state='CANCELLED',revision=revision+1 WHERE conversation_id=? AND submission_id=? AND revision=? AND state IN ('PREPARED','STARTED')",arrayOf(row.sessionId,row.submissionId,row.revision));changed()
             result.add(checkNotNull(find(row.sessionId,row.submissionId)))
         }
-        authority.requireCurrent();return result
+        return result
     }
     private fun read(c:Cursor):CentralSubmissionSnapshot {
         fun text(name:String):String {val i=c.getColumnIndexOrThrow(name);check(c.getType(i)==Cursor.FIELD_TYPE_STRING);return c.getString(i)}

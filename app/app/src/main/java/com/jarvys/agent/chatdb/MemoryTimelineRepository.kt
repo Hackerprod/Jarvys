@@ -223,7 +223,9 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         val highWater = sql.query("SELECT COALESCE(next_seq-1,0) FROM conversations WHERE id=?", arrayOf(conversationId))
             .use { if (it.moveToFirst()) it.getLong(0) else 0L }
         val rows = readTimelineRows(conversationId, highWater)
+        val excludedSubmissions = CentralTurnSubmissionRepository(database).historyExcluded(conversationId)
         val messages = rows.mapIndexedNotNull { index, row ->
+            if (row.messageId in excludedSubmissions || row.ownerUserMessageId in excludedSubmissions) return@mapIndexedNotNull null
             if (row.role == "user" || row.role == "assistant") row.messageId?.let { id ->
                 ReflectionMessage(id, row.role, row.text.orEmpty(), row.status.orEmpty(), row.ownerUserMessageId.orEmpty(), index)
             } else null

@@ -184,6 +184,7 @@
     (event.imageUrls || []).forEach(function (src) {
       var image = document.createElement("img"); image.src = src; image.alt = event.imageAlt || "Imagen adjunta"; image.loading = "lazy"; article.appendChild(image);
     });
+    if (event.requestStatus) { var status = document.createElement("div"); status.className = "tool-detail"; status.textContent = event.requestStatus; article.appendChild(status); }
     if (event.detail) { var detail = document.createElement("div"); detail.className = "tool-detail"; detail.textContent = event.detail; article.appendChild(detail); }
     if (event.kind === "artifact" && event.thumbnailUrl) {
       var thumb = document.createElement("img"); thumb.src = event.thumbnailUrl; thumb.alt = "Miniatura de " + (event.artifactTitle || event.text || "artefacto"); article.appendChild(thumb);

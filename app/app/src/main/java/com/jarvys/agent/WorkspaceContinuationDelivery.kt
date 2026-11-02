@@ -362,7 +362,10 @@ internal object WorkspaceContinuationDelivery {
         val user = last.getString("userMessageId")
         requireAdmission(last.getString("sourceProcessId") == CrewProcessIdentity.ID &&
             last.getString("storageGeneration") == ChatDatabaseBridge.getInstance(context).connectionProjectionEvidenceSync().generation() &&
-            ledger.latestUserMessageId(WorkspaceIdentity.CENTRAL_SESSION) == user &&
+            ledger.latestCanonicalUserForControlFence(WorkspaceIdentity.CENTRAL_SESSION) == user &&
+            (ledger.latestUserMessageId(WorkspaceIdentity.CENTRAL_SESSION) == user ||
+                CentralSubmissionAdmission.isCurrentInvocationUser(CentralInvocationSource(last.getString("storageGeneration"),WorkspaceIdentity.CENTRAL_SESSION,
+                    user,last.getString("sourceBatchId"),last.getString("sourceCallId"),last.getString("sourceRunId"),last.getString("sourceProcessId")))) &&
             ledger.readConversationMessage(WorkspaceIdentity.CENTRAL_SESSION, user)?.trim() ==
                 "/continue_result " + value.getJSONObject("selectedResult").getString("resultReferenceId"),
             "Explicit Central continuation authority is stale; a fresh user command is required")
@@ -379,7 +382,8 @@ internal object WorkspaceContinuationDelivery {
             check(!token.isCrewRun && source.ownerCentralSessionId == WorkspaceIdentity.CENTRAL_SESSION &&
                 source.sourceProcessId == CrewProcessIdentity.ID &&
                 source.storageGeneration == ChatDatabaseBridge.getInstance(context).connectionProjectionEvidenceSync().generation() &&
-                ledger.latestUserMessageId(WorkspaceIdentity.CENTRAL_SESSION) == source.sourceMessageId &&
+                ledger.latestCanonicalUserForControlFence(WorkspaceIdentity.CENTRAL_SESSION) == source.sourceMessageId &&
+                (ledger.latestUserMessageId(WorkspaceIdentity.CENTRAL_SESSION) == source.sourceMessageId || CentralSubmissionAdmission.isCurrentInvocationUser(source)) &&
                 ledger.readConversationMessage(WorkspaceIdentity.CENTRAL_SESSION, source.sourceMessageId)?.trim() ==
                     "/continue_result $referenceId") { "Use the latest explicit Central user command /continue_result <result_id>" }
         }

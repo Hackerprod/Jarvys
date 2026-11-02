@@ -14,10 +14,24 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Process-local native submission authority. Stored rows and Intent extras cannot reconstruct it. */
 public final class CentralSubmissionAdmission {
     private CentralSubmissionAdmission() {}
-    private static final String PROCESS_ID = UUID.randomUUID().toString();
+    private static final String PROCESS_ID = com.jarvys.agent.crew.CrewProcessIdentity.ID;
     private static final ConcurrentHashMap<String, LivePermit> LIVE = new ConcurrentHashMap<>();
     static String processId() { return PROCESS_ID; }
     private static String key(String session, String id) { return session.length()+":"+session+id; }
+
+    /** Additional exact live-native source fence; never a replacement for committed-call witness checks. */
+    public static boolean isCurrentInvocationUser(CentralInvocationSource source) {
+        if(source==null || !PROCESS_ID.equals(source.sourceProcessId))return false;
+        for(LivePermit permit:LIVE.values()) {
+            ClaimAuthority claim=permit.claim;
+            if(claim==null || !permit.getSessionId().equals(source.ownerCentralSessionId)
+                || !permit.getUserMessageId().equals(source.sourceMessageId)
+                || !permit.getStorageGeneration().equals(source.storageGeneration)
+                || !claim.getRunId().equals(source.sourceRunId))continue;
+            try {claim.requireCurrent(permit);return true;}catch(IllegalStateException obsolete){return false;}
+        }
+        return false;
+    }
 
     public static final class AppendAuthority implements AutoCloseable {
         private final AttachmentDraftViewModel.NativeSendAction action;
@@ -34,6 +48,7 @@ public final class CentralSubmissionAdmission {
         public String getProcessId() { return PROCESS_ID; }
         public String getText() { return action.getText(); }
         public List<ChatAttachment> getAttachments() { return action.getAttachments(); }
+        public List<String> getSelectedSkillIds(){return action.getSelectedSkillIds();}
         public void requireCurrent(String session, String id) {
             if (!open || !submissionId.equals(id)) throw new IllegalStateException("Native Send action expired");
             action.requireCurrent(session,id);
@@ -59,10 +74,11 @@ public final class CentralSubmissionAdmission {
     public static final class LivePermit {
         private final CentralSubmissionSnapshot snapshot;
         private final CentralUserRootCheckpoint source;
+        private final List<String> selectedSkillIds;
         private volatile boolean invalid;
         private volatile ClaimAuthority claim;
-        private LivePermit(CentralSubmissionAppendReceipt receipt) {
-            snapshot=receipt.getSnapshot(); source=receipt.getSource();
+        private LivePermit(CentralSubmissionAppendReceipt receipt,List<String> skills) {
+            snapshot=receipt.getSnapshot(); source=receipt.getSource();selectedSkillIds=Collections.unmodifiableList(new ArrayList<>(skills));
             if (!"PREPARED".equals(snapshot.getState()) || !PROCESS_ID.equals(snapshot.getCurrentAdmissionProcess())
                     || !snapshot.getSessionId().equals(source.getOwnerCentralSessionId())
                     || !snapshot.getUserMessageId().equals(source.getOriginUserMessageId())
@@ -74,6 +90,7 @@ public final class CentralSubmissionAdmission {
         public String getSubmissionId() { return snapshot.getSubmissionId(); }
         public String getUserMessageId() { return snapshot.getUserMessageId(); }
         public long getUserSeq() { return snapshot.getUserSeq(); }
+        public List<String> getSelectedSkillIds(){return selectedSkillIds;}
         public String getSourceSha256() { return snapshot.getSourceSha256(); }
         public String getStorageGeneration() { return snapshot.getStorageGeneration(); }
         public String getProcessId() { return PROCESS_ID; }
@@ -97,10 +114,10 @@ public final class CentralSubmissionAdmission {
     }
     static LivePermit register(AppendAuthority action, CentralSubmissionAppendReceipt receipt) {
         action.requireCurrent(receipt.getSnapshot().getSessionId(),receipt.getSnapshot().getSubmissionId());
-        return registerReceipt(receipt);
+        return registerReceipt(receipt,action.getSelectedSkillIds());
     }
-    private static LivePermit registerReceipt(CentralSubmissionAppendReceipt receipt) {
-        LivePermit fresh=new LivePermit(receipt);
+    private static LivePermit registerReceipt(CentralSubmissionAppendReceipt receipt,List<String> skills) {
+        LivePermit fresh=new LivePermit(receipt,skills);
         String key=key(fresh.getSessionId(),fresh.getSubmissionId());
         LivePermit old=LIVE.putIfAbsent(key,fresh);
         if (old!=null) {
@@ -114,10 +131,16 @@ public final class CentralSubmissionAdmission {
     static LivePermit find(String session,String id) { return LIVE.get(key(session,id)); }
     static List<LivePermit> prepared(String session) {
         List<LivePermit> found=new ArrayList<>();
-        for(LivePermit permit:LIVE.values()) if(session.equals(permit.getSessionId()) && !permit.invalid && permit.claim==null)
-            found.add(permit);
+        for(LivePermit permit:LIVE.values()) if(session.equals(permit.getSessionId()) && !permit.invalid && permit.claim==null) {
+            try {permit.requirePrepared();found.add(permit);}
+            catch(IllegalStateException unavailable){invalidate(permit);}
+        }
         found.sort(java.util.Comparator.comparingLong(LivePermit::getUserSeq));
         return found;
+    }
+    static void retireSource(String session,String userId,String sourceSha) {
+        for(LivePermit permit:LIVE.values())if(session.equals(permit.getSessionId()) && userId.equals(permit.getUserMessageId())
+            && sourceSha.equals(permit.getSourceSha256()))invalidate(permit);
     }
     static void invalidate(LivePermit permit) {
         permit.invalid=true;LIVE.remove(key(permit.getSessionId(),permit.getSubmissionId()),permit);
@@ -176,6 +199,7 @@ public final class CentralSubmissionAdmission {
         private RecoveryAuthority(AttachmentDraftViewModel.NativeRecoveryAction action) {this.action=action;}
         public String getProcessId() {return PROCESS_ID;}
         public String getReceiptId() {return receiptId;}
+        public List<String> getSelectedSkillIds(){return action.getSelectedSkillIds();}
         public void requireCurrent(String session,String id,long revision) {
             if(!open)throw new IllegalStateException("Native recovery action expired");
             action.requireCurrent(session,id,revision);
@@ -187,20 +211,25 @@ public final class CentralSubmissionAdmission {
     }
     static LivePermit registerRecovered(RecoveryAuthority action,CentralSubmissionAppendReceipt receipt,long expectedRevision) {
         action.requireCurrent(receipt.getSnapshot().getSessionId(),receipt.getSnapshot().getSubmissionId(),expectedRevision);
-        return registerReceipt(receipt);
+        return registerReceipt(receipt,action.getSelectedSkillIds());
     }
 
     public static final class CancelAuthority {
         private final AgentForegroundService.CentralSubmissionStopBoundary boundary;
-        private final List<CentralSubmissionSnapshot> captured;
-        private CancelAuthority(AgentForegroundService.CentralSubmissionStopBoundary boundary,List<CentralSubmissionSnapshot> captured) {
-            this.boundary=boundary;this.captured=Collections.unmodifiableList(new ArrayList<>(captured));
+        private final com.jarvys.agent.chatdb.CentralSubmissionCohortSnapshot cohort;
+        private CancelAuthority(AgentForegroundService.CentralSubmissionStopBoundary boundary,
+                com.jarvys.agent.chatdb.CentralSubmissionCohortSnapshot cohort) {
+            this.boundary=boundary;this.cohort=cohort;
+            for(CentralSubmissionSnapshot row:cohort.getRows())if(!boundary.getSessionId().equals(row.getSessionId()))
+                throw new IllegalArgumentException("STOP cohort belongs to another session");
         }
-        public List<CentralSubmissionSnapshot> getCaptured(){return captured;}
+        public com.jarvys.agent.chatdb.CentralSubmissionCohortSnapshot getCohort(){return cohort;}
+        public List<CentralSubmissionSnapshot> getCaptured(){return cohort.getRows();}
         public String getProcessId(){return PROCESS_ID;}
         public void requireCurrent(){boundary.requireCurrent();}
     }
-    static CancelAuthority cancel(AgentForegroundService.CentralSubmissionStopBoundary boundary,List<CentralSubmissionSnapshot> captured) {
-        boundary.requireCurrent();return new CancelAuthority(boundary,captured);
+    static CancelAuthority cancel(AgentForegroundService.CentralSubmissionStopBoundary boundary,
+            com.jarvys.agent.chatdb.CentralSubmissionCohortSnapshot cohort) {
+        boundary.requireCurrent();return new CancelAuthority(boundary,cohort);
     }
 }

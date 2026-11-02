@@ -1998,4 +1998,10 @@ Fuentes retiradas confirmadas:
     <string name="memory_orphan_preview">Ver categorías de relaciones pending</string>
     <string name="workspace_registry_preserved_title">Almacenamiento de espacios no disponible</string>
     <string name="workspace_registry_preserved_body">No se pudo abrir de forma segura el registro de espacios. Se conservaron los datos; no se intentó repararlos, importarlos ni borrarlos. No borres el almacenamiento ni reinstales la app. Conserva esta instalación y solicita asistencia.</string>
+    <string name="central_request_queued">En cola — sin iniciar</string>
+    <string name="central_request_running">En ejecución</string>
+    <string name="central_request_background">En espera en segundo plano</string>
+    <string name="central_request_cancelled">Cancelada</string>
+    <string name="central_request_failed">Fallida</string>
+    <string name="central_request_uncertain">Estado incierto — no se reintenta automáticamente</string>
 </resources>

@@ -109,7 +109,14 @@ internal class ConversationReader(
         submissionClaim: CentralSubmissionAdmission.ClaimAuthority? = null,
         suspensionClaim: com.jarvys.agent.CentralTreeAdmission.SuspensionClaim? = null,
         suspensionToken: CancellationToken? = null,
-    ): List<ConversationTurn> = readProjection {
+    ): List<ConversationTurn> = loadConversationContextEvidence(conversationId,memoryRecoveryNamespace,
+        submissionClaim,suspensionClaim,suspensionToken,null,emptySet())
+
+    private suspend fun loadConversationContextEvidence(conversationId:String,
+        memoryRecoveryNamespace:com.jarvys.agent.chatdb.MemoryNamespace?,
+        submissionClaim:CentralSubmissionAdmission.ClaimAuthority?,
+        suspensionClaim:CentralTreeAdmission.SuspensionClaim?,suspensionToken:CancellationToken?,
+        evidenceOrigin:com.jarvys.agent.chatdb.CentralUserRootCheckpoint?,evidenceIncomingIds:Set<String>):List<ConversationTurn> = readProjection {
         val protection = if (conversationId == WorkspaceIdentity.CENTRAL_SESSION)
             com.jarvys.agent.chatdb.InteractionProtection(database).read(conversationId) else null
         val active = memory.activeCompaction(conversationId)
@@ -137,7 +144,7 @@ internal class ConversationReader(
         check(submissionClaim==null || suspensionClaim==null)
         suspensionClaim?.let { submissions.requireSuspension(it,checkNotNull(suspensionToken)) }
         val claimed=submissionClaim?.let { submissions.requireClaim(it).also { row ->check(row.sessionId==conversationId) } }
-        val excludedSubmissions=submissions.historyExcluded(conversationId) - setOfNotNull(claimed?.userMessageId,suspensionClaim?.originalUserMessageId)
+        val excludedSubmissions=submissions.historyExcluded(conversationId) - setOfNotNull(claimed?.userMessageId,suspensionClaim?.originalUserMessageId,evidenceOrigin?.originUserMessageId)
         val modelSnapshot = transcript.readModelTranscript(conversationId)
         val allModelRows = readModelRows(modelSnapshot, conversationId)
         val excludedBatches=allModelRows.filter { it.row.optString("userMessageId") in excludedSubmissions }
@@ -212,7 +219,7 @@ internal class ConversationReader(
                     val internal = internalConversationTurn(message, index)
                     // Deferred continuation inputs are admitted only by their durable fresh-turn claim.
                     // Generic history/compaction must never consume a pending or uncertain episode.
-                    if (WorkspaceContinuationDelivery.isProtocol(internal.incomingMetadata?.provenance)) return@forEach
+                    if (WorkspaceContinuationDelivery.isProtocol(internal.incomingMetadata?.provenance) && message.messageId !in evidenceIncomingIds) return@forEach
                     context += internal
                 } else if (!assistantItems.isNullOrEmpty()) {
                     context += ConversationTurn.assistantReply(message.text, index, assistantItems)
@@ -231,6 +238,31 @@ internal class ConversationReader(
                 }
             }
         context
+    }
+
+    /** Evidence-only source lookup; never returns a provider context or grants execution. */
+    internal suspend fun centralYieldEvidence(origin:com.jarvys.agent.chatdb.CentralUserRootCheckpoint,
+        retained:List<ConversationTurn>):com.jarvys.agent.chatdb.CentralYieldSourceEvidence = readProjection {
+        val session=origin.ownerCentralSessionId
+        check(session==WorkspaceIdentity.CENTRAL_SESSION)
+        check(com.jarvys.agent.chatdb.captureCentralUserRootDigestInTransaction(database,session,origin.originUserMessageId)==origin.originDigest)
+        database.chatSql.query("SELECT value FROM storage_meta WHERE key=?",arrayOf(com.jarvys.agent.chatdb.ConnectionProjectionRepository.GENERATION_KEY)).use {
+            check(it.moveToFirst() && it.getString(0)==origin.storageGeneration)
+        }
+        val incoming=retained.mapNotNull {turn ->turn.source()?.takeIf {it.kind==ConversationTurn.Source.Kind.MESSAGE}?.sourceId}.toSet()
+        for(id in incoming) {
+            val message=conversations.getMessage(session,id) ?: error("Yield message source missing")
+            if(message.role in setOf("agent","system"))check(message.inputState=="incorporated") {"Yield internal source was not incorporated"}
+        }
+        val context=loadConversationContextEvidence(session,null,null,null,null,origin,incoming).toMutableList()
+        // An exact retained older compaction is evidence, not permission to replace current history.
+        for(source in retained.mapNotNull {it.source()}.filter {it.kind==ConversationTurn.Source.Kind.COMPACTION}) {
+            if(context.none {it.source()==source})database.chatSql.query("SELECT summary,summarized_messages FROM compactions WHERE conversation_id=? AND compaction_id=?",arrayOf(session,source.sourceId)).use { c ->
+                check(c.moveToFirst()) {"Yield compaction source missing"}
+                context.add(ConversationTurn.compactionSummary(c.getString(0),c.getInt(1)).also {it.bindSource(source)})
+            }
+        }
+        com.jarvys.agent.chatdb.CentralYieldSourceEvidence.capture(database,origin,retained,context)
     }
 
     suspend fun readInteractionProtection(conversationId: String): com.jarvys.agent.chatdb.InteractionProtectionSnapshot =
@@ -290,18 +322,10 @@ internal class ConversationReader(
         }
 
     suspend fun latestUserMessageId(conversationId: String): String? =
-        readProjection {
-            val excluded=com.jarvys.agent.chatdb.CentralTurnSubmissionRepository(database).historyExcluded(conversationId)
-            conversations.readMessagesAtOrAfterIndex(conversationId).map(ConversationMessageAt::message)
-                .lastOrNull { it.role=="user" && it.messageId !in excluded }?.messageId
-        }
+        readProjection {conversations.latestUserMessageId(conversationId)}
 
     suspend fun firstUserMessage(conversationId: String): StoredMessage? =
-        readProjection {
-            val excluded=com.jarvys.agent.chatdb.CentralTurnSubmissionRepository(database).historyExcluded(conversationId)
-            conversations.readMessagesAtOrAfterIndex(conversationId).map(ConversationMessageAt::message)
-                .firstOrNull { it.role=="user" && it.messageId !in excluded }
-        }
+        readProjection {conversations.firstUserMessage(conversationId)}
 
     suspend fun latestUserMessageIndex(conversationId: String): Int {
         val messages = readConversationMessages(conversationId)

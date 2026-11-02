@@ -156,6 +156,8 @@ public final class AgentForegroundService extends Service {
     final String sessionId;
     final Set<String> requestIds = new java.util.LinkedHashSet<>();
     boolean captureUncertain;
+    CentralSubmissionAdmission.CancelAuthority submissionAuthority;
+    CentralSubmissionStopBoundary submissionBoundary;
     StoppedInputCohort(String sessionId) { this.sessionId = sessionId; }
   }
   private final Map<CancellationToken, StoppedInputCohort> stoppedInputCohorts = new ConcurrentHashMap<>();
@@ -171,6 +173,7 @@ public final class AgentForegroundService extends Service {
     volatile Future<?> future;
     volatile NativeCentralBoundary yieldBoundary;
     volatile boolean handoffNudgeEligible = true;
+    volatile String nativeSourceUserId;
     ActiveRun(String sessionId, StopController controller, CancellationToken token) {
       this.sessionId = sessionId;
       this.controller = controller;
@@ -206,9 +209,10 @@ public final class AgentForegroundService extends Service {
     private CentralSubmissionStopBoundary(AgentForegroundService service,String sessionId,CancellationToken token) {
       this.service=service;this.sessionId=sessionId;this.stoppedToken=token;
     }
+    public String getSessionId(){return sessionId;}
     public void requireCurrent() {
       if(!service.submissionStopBoundaries.contains(this)
-          || (stoppedToken!=null && !stoppedToken.wasStoppedByUser()))
+          || (stoppedToken!=null && !stoppedToken.isCancellationRequested()))
         throw new IllegalStateException("Native submission STOP boundary is unavailable");
     }
   }
@@ -466,8 +470,10 @@ public final class AgentForegroundService extends Service {
           activeRuns.remove(sessionId, active);
           activeRunTokens.remove(sessionId, active.token);
           StoppedInputCohort stoppedInputs = stoppedInputCohorts.get(active.token);
-          if (stoppedInputs != null && !unresolvedStoppedInputCohorts.contains(stoppedInputs))
+          if (stoppedInputs != null && !unresolvedStoppedInputCohorts.contains(stoppedInputs)) {
             stoppedInputCohorts.remove(active.token, stoppedInputs);
+            if(stoppedInputs.submissionBoundary!=null)submissionStopBoundaries.remove(stoppedInputs.submissionBoundary);
+          }
           if (activeRunToken == active.token)
             activeRunToken = activeRunTokens.values().stream().findFirst().orElse(null);
           synchronized (lane) { if (lane.active == active) lane.active = null; }
@@ -572,6 +578,7 @@ public final class AgentForegroundService extends Service {
 
   private void stopSessionRun(String sessionId) {
     if (sessionId == null) return;
+    List<CentralTreeAdmission.SuspensionPermit> stoppedSuspensions=new ArrayList<>();
     synchronized (interruptAdmissionLock(sessionId)) {
       ActiveRun stopOwner = activeRuns.get(sessionId);
       CancellationToken stopToken = stopOwner == null ? activeRunTokens.get(sessionId) : stopOwner.token;
@@ -611,6 +618,12 @@ public final class AgentForegroundService extends Service {
           legacy.stopRunAsync();
         }
       }
+      if(CentralAvailabilityPolicy.admissionEnabled() && WorkspaceIdentity.isCentral(sessionId)) {
+        for(Map.Entry<String,CentralTreeAdmission.SuspensionPermit> entry:LIVE_SUSPENSIONS.entrySet())
+          if(LIVE_SUSPENSIONS.remove(entry.getKey(),entry.getValue())) {
+            entry.getValue().invalidate();stoppedSuspensions.add(entry.getValue());
+          }
+      }
       // Latch STOP before any potentially blocking Room snapshot. Fresh admission and old-owner
       // cleanup use this same lock, so the post-latch snapshot still captures exactly this boundary.
       StoppedInputCohort stopInputs = captureStoppedInputCohort(sessionId, stopToken);
@@ -634,6 +647,10 @@ public final class AgentForegroundService extends Service {
         }
       }
     }
+    // Root-only denial may block on Registry, never delay the active token's STOP latch or hold
+    // the Central admission lock against a fresh USER accepted after this captured boundary.
+    for(CentralTreeAdmission.SuspensionPermit permit:stoppedSuspensions)
+      try {permit.stopFromNativeBoundary();}catch(RuntimeException failure){reportStopPersistenceFailure(failure);}
     // STOP ends the current model run. Durable internal inputs remain eligible for a fresh run.
     enqueuePendingInternalConversationInputs(sessionId);
   }
@@ -882,6 +899,18 @@ public final class AgentForegroundService extends Service {
       CentralSubmissionAdmission.RecoveryAuthority authority,String session,String id,long revision) {
     if(!CentralAvailabilityPolicy.admissionEnabled())throw new IllegalStateException("NEW_TURN recovery is disabled");
     synchronized(interruptAdmissionLock(session)) {
+      authority.requireCurrent(session,id,revision);
+      CentralSubmissionAdmission.LivePermit existing=CentralSubmissionAdmission.find(session,id);
+      if(existing!=null) {
+        try {existing.requireCurrent();}
+        catch(IllegalStateException obsolete){CentralSubmissionAdmission.invalidate(existing);existing=null;}
+        if(existing!=null) {
+          // A stale UI recovery cannot revoke or renew an already claimed live owner.
+          existing.requirePrepared();
+          if(existing.getRevision()!=revision)throw new IllegalArgumentException("Native recovery selection is stale");
+          return existing;
+        }
+      }
       com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt receipt=
           new LocalRunStore(context).recoverCentralSubmission(session,id,revision,authority);
       return CentralSubmissionAdmission.registerRecovered(authority,receipt,revision);
@@ -894,12 +923,47 @@ public final class AgentForegroundService extends Service {
       permit.requirePrepared();
       Intent intent=new Intent(context,AgentForegroundService.class).setAction(ACTION_CENTRAL_SUBMISSION)
           .putExtra("central_submission_id",permit.getSubmissionId()).putExtra("chat_session_id",permit.getSessionId())
-          .putStringArrayListExtra("agent_skill_ids",skills==null?new ArrayList<>():new ArrayList<>(skills));
+          .putStringArrayListExtra("agent_skill_ids",new ArrayList<>(permit.getSelectedSkillIds()));
       try {if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.O)context.startForegroundService(intent);else context.startService(intent);}
       catch(RuntimeException failure){CentralSubmissionAdmission.invalidate(permit);throw failure;}
       AgentForegroundService service=currentInstance;
       if(service!=null)service.requestYieldForCommittedSubmission(permit);
     }
+  }
+
+  static CentralTreeAdmission.SuspensionPermit recoverCentralSuspension(Context context,
+      AttachmentDraftViewModel.NativeSuspensionRecoveryAction action) {
+    if(!CentralAvailabilityPolicy.admissionEnabled())throw new IllegalStateException("Central suspension recovery is disabled");
+    CentralTreeAdmission.SuspensionRecoveryDescriptor row=action.getDescriptor();
+    synchronized(interruptAdmissionLock(row.getSessionId())) {
+      action.requireCurrent(row.getSessionId(),row.getResumeId(),row.getRevision());
+      for(Map.Entry<String,CentralTreeAdmission.SuspensionPermit> entry:LIVE_SUSPENSIONS.entrySet()) {
+        CentralTreeAdmission.SuspensionPermit live=entry.getValue();
+        if(!live.getResumeId().equals(row.getResumeId()))continue;
+        try {live.requireCurrent();}
+        catch(RuntimeException obsolete){LIVE_SUSPENSIONS.remove(entry.getKey(),live);live.invalidate();continue;}
+        if(live.getRevision()!=row.getRevision() || !live.getSourceDigest().equals(row.getSourceDigest())
+            || !live.getRootCycle().equals(row.getRootCycle()))throw new IllegalArgumentException("Suspension recovery selection is stale");
+        nudgeCentralHandoff(context);return live;
+      }
+      CentralTreeAdmission.SuspensionPermit restored=CentralTreeAdmission.recoverSuspension(context,action);
+      registerCentralSuspension(context,restored);return restored;
+    }
+  }
+  static boolean hasLiveCentralSuspension(CentralTreeAdmission.SuspensionRecoveryDescriptor row) {
+    synchronized(interruptAdmissionLock(row.getSessionId())) {
+      for(CentralTreeAdmission.SuspensionPermit permit:LIVE_SUSPENSIONS.values())
+        if(permit.getResumeId().equals(row.getResumeId()) && permit.getRevision()==row.getRevision()
+            && permit.getSourceDigest().equals(row.getSourceDigest()) && permit.getRootCycle().equals(row.getRootCycle())) {
+          try {permit.requireCurrent();return true;}catch(RuntimeException obsolete){return false;}
+        }
+      return false;
+    }
+  }
+  static boolean isCentralSourceActive(String session,String userId) {
+    AgentForegroundService service=currentInstance;if(service==null)return false;
+    ActiveRun active=service.activeRuns.get(session);
+    return active!=null && userId.equals(active.nativeSourceUserId) && !active.token.isCancellationRequested();
   }
 
   private final class NativeCentralBoundary implements NativeCentralYieldBoundary {
@@ -963,10 +1027,12 @@ public final class AgentForegroundService extends Service {
     return permit.getResumeId()+":"+permit.getSourceDigest()+":"+permit.getRootCycle();
   }
   static void registerCentralSuspension(Context context,CentralTreeAdmission.SuspensionPermit permit) {
-    permit.requireCurrent();
-    String key=suspensionKey(permit);
-    CentralTreeAdmission.SuspensionPermit prior=LIVE_SUSPENSIONS.putIfAbsent(key,permit);
-    if(prior!=null && prior!=permit)throw new IllegalStateException("Suspension capability identity already registered");
+    synchronized(interruptAdmissionLock(WorkspaceIdentity.CENTRAL_SESSION)) {
+      permit.requireCurrent();
+      String key=suspensionKey(permit);
+      CentralTreeAdmission.SuspensionPermit prior=LIVE_SUSPENSIONS.putIfAbsent(key,permit);
+      if(prior!=null && prior!=permit)throw new IllegalStateException("Suspension capability identity already registered");
+    }
     nudgeCentralHandoff(context);
   }
   public static void nudgeCentralHandoff(Context context) {
@@ -987,7 +1053,8 @@ public final class AgentForegroundService extends Service {
     synchronized(interruptAdmissionLock(session)) {
       if(uncertainStopInputSessions.contains(session) || activeRuns.containsKey(session))return;
       // Positive USER admission has priority even in the commit→Intent-delivery gap.
-      if(!CentralSubmissionAdmission.prepared(session).isEmpty())return;
+      List<CentralSubmissionAdmission.LivePermit> fresh=CentralSubmissionAdmission.prepared(session);
+      if(!fresh.isEmpty()) {enqueueCentralSubmission(fresh.get(0),fresh.get(0).getSelectedSkillIds());return;}
       SessionLane lane=sessionLanes.get(session);
       if(lane!=null) synchronized(lane) {if(lane.active!=null || lane.preparing!=null || !lane.queued.isEmpty())return;}
       for(Map.Entry<String,CentralTreeAdmission.SuspensionPermit> entry:LIVE_SUSPENSIONS.entrySet()) {
@@ -1015,7 +1082,7 @@ public final class AgentForegroundService extends Service {
               LIVE_SUSPENSIONS.remove(key,permit);
             }
             // Reservation belongs to this actual dequeue owner. Runtime binds before inference.
-            requestRef.get().resumeReserved=true;
+            requestRef.get().resumeReserved=true;active.nativeSourceUserId=claim.getOriginalUserMessageId();
             runRealAgent(active.token,"",java.util.Collections.emptyList(),session,"",true,false,
                 claim.confirmedYield().ownerMessageId(),null,null,claim);
           } catch(RuntimeException failure) {
@@ -1039,10 +1106,18 @@ public final class AgentForegroundService extends Service {
     String session=permit.getSessionId(),id=permit.getSubmissionId();
     synchronized(interruptAdmissionLock(session)) {
       try {permit.requirePrepared();}catch(IllegalStateException unavailable){return;}
+      List<CentralSubmissionAdmission.LivePermit> eligible=CentralSubmissionAdmission.prepared(session);
+      if(!eligible.isEmpty() && eligible.get(0)!=permit)
+        enqueueCentralSubmission(eligible.get(0),eligible.get(0).getSelectedSkillIds());
       if(!queuedSubmissionIds.add(id))return;
       Runnable cleanup=()->queuedSubmissionIds.remove(id);
       SessionRequest request=new SessionRequest(candidate->{
-        try {permit.requirePrepared();return true;}catch(IllegalStateException unavailable){cleanup.run();return false;}
+        try {
+          permit.requirePrepared();
+          List<CentralSubmissionAdmission.LivePermit> ordered=CentralSubmissionAdmission.prepared(session);
+          if(ordered.isEmpty() || ordered.get(0)!=permit){cleanup.run();return false;}
+          return true;
+        }catch(IllegalStateException unavailable){cleanup.run();return false;}
       },failure->{cleanup.run();reportStopPersistenceFailure(failure);},active->{
         CentralSubmissionAdmission.ClaimAuthority claim=null;
         try {
@@ -1050,9 +1125,9 @@ public final class AgentForegroundService extends Service {
             permit.requirePrepared();
             claim=CentralSubmissionAdmission.claim(permit,new CentralSubmissionOwner(this,active));
             new LocalRunStore(this).claimCentralSubmission(permit,claim);
-            claim.requireCurrent(permit);
+            claim.requireCurrent(permit);active.nativeSourceUserId=permit.getUserMessageId();
           }
-          runRealAgent(active.token,"",skills,session,"",true,false,permit.getUserMessageId(),null,claim);
+          runRealAgent(active.token,"",permit.getSelectedSkillIds(),session,"",true,false,permit.getUserMessageId(),null,claim);
         } catch(RuntimeException unavailable) {
           CentralSubmissionAdmission.invalidate(permit);
           reportStopPersistenceFailure(unavailable);
@@ -1329,6 +1404,21 @@ public final class AgentForegroundService extends Service {
         String id = row.optString("requestId", "");
         if (sessionId.equals(row.optString("sessionId", sessionId)) && !id.isEmpty()) cohort.requestIds.add(id);
       }
+      if(CentralAvailabilityPolicy.admissionEnabled() && WorkspaceIdentity.isCentral(sessionId)) {
+        LocalRunStore store=new LocalRunStore(this);
+        if(store.centralSubmissionSchemaReady()) {
+          com.jarvys.agent.chatdb.CentralSubmissionCohortSnapshot captured=store.captureCentralSubmissionCohort(sessionId);
+          CentralSubmissionStopBoundary boundary=new CentralSubmissionStopBoundary(this,sessionId,owner);
+          submissionStopBoundaries.add(boundary);
+          CentralSubmissionAdmission.CancelAuthority authority=CentralSubmissionAdmission.cancel(boundary,captured);
+          if(cohort.submissionBoundary!=null)submissionStopBoundaries.remove(cohort.submissionBoundary);
+          cohort.submissionBoundary=boundary;cohort.submissionAuthority=authority;
+          for(com.jarvys.agent.chatdb.CentralSubmissionSnapshot row:captured.getRows()) {
+            CentralSubmissionAdmission.LivePermit permit=CentralSubmissionAdmission.find(sessionId,row.getSubmissionId());
+            if(permit!=null)CentralSubmissionAdmission.invalidate(permit);
+          }
+        }
+      }
       cohort.captureUncertain = false;
     } catch (RuntimeException failure) {
       cohort.captureUncertain = true;
@@ -1350,7 +1440,10 @@ public final class AgentForegroundService extends Service {
     try {
       // Exact-ID atomic adapter over the existing native stopped-submission writer.
       LocalRunStore store = new LocalRunStore(this);
-      store.persistStoppedInputCohort(cohort.sessionId, new ArrayList<>(cohort.requestIds),
+      if(cohort.submissionAuthority!=null)
+        store.persistCentralStopCohort(cohort.sessionId,new ArrayList<>(cohort.requestIds),
+            getString(R.string.agent_run_stopped),cohort.submissionAuthority);
+      else store.persistStoppedInputCohort(cohort.sessionId, new ArrayList<>(cohort.requestIds),
           getString(R.string.agent_run_stopped));
       AgentRunUiState.refreshPersistedSession(cohort.sessionId, store.readRecentConversationTimeline(cohort.sessionId));
       for (String id : cohort.requestIds) releaseFollowUpClaim(cohort.sessionId, id);
@@ -1358,6 +1451,8 @@ public final class AgentForegroundService extends Service {
         unresolvedStoppedInputCohorts.remove(cohort);
         stoppedInputCohorts.entrySet().removeIf(entry -> entry.getValue() == cohort
             && activeRunTokens.get(cohort.sessionId) != entry.getKey() && activeRunToken != entry.getKey());
+        if(!stoppedInputCohorts.containsValue(cohort) && cohort.submissionBoundary!=null)
+          submissionStopBoundaries.remove(cohort.submissionBoundary);
         boolean anotherUnresolved = false;
         for (StoppedInputCohort other : unresolvedStoppedInputCohorts)
           if (cohort.sessionId.equals(other.sessionId)) { anotherUnresolved = true; break; }
@@ -1646,8 +1741,7 @@ public final class AgentForegroundService extends Service {
       if(session!=null && id!=null) {
         CentralSubmissionAdmission.LivePermit permit=CentralSubmissionAdmission.find(session,id);
         if(permit!=null) {
-          ArrayList<String> skills=intent.getStringArrayListExtra("agent_skill_ids");
-          enqueueCentralSubmission(permit,skills==null?java.util.Collections.emptyList():skills);
+          enqueueCentralSubmission(permit,permit.getSelectedSkillIds());
         }
       }
       return START_NOT_STICKY;
@@ -2071,9 +2165,12 @@ public final class AgentForegroundService extends Service {
       token.throwIfCancelled();
       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
         try {
-          if (!WorkspaceContinuationDelivery.claim(this, storedInput, token)) {
-            ActiveRun empty=activeRuns.get(sessionId);if(empty!=null && empty.token==token)empty.handoffNudgeEligible=false;
-            return;
+          synchronized(interruptAdmissionLock(sessionId)) {
+            if(CentralAvailabilityPolicy.admissionEnabled() && !CentralSubmissionAdmission.prepared(sessionId).isEmpty()
+                || !WorkspaceContinuationDelivery.claim(this,storedInput,token)) {
+              ActiveRun empty=activeRuns.get(sessionId);if(empty!=null && empty.token==token)empty.handoffNudgeEligible=false;
+              return;
+            }
           }
         } catch (Exception blockedClaim) {
           ActiveRun empty=activeRuns.get(sessionId);if(empty!=null && empty.token==token)empty.handoffNudgeEligible=false;
@@ -2337,7 +2434,10 @@ public final class AgentForegroundService extends Service {
         if(treeAdmission==null)throw new IllegalStateException("Typed yield has no original root authority");
         CentralTreeAdmission.SuspensionPermit parked=treeAdmission.park(this,result.yieldReceipt());
         treeExitDisposed=true;
-        registerCentralSuspension(this,parked);
+        synchronized(interruptAdmissionLock(sessionId)) {
+          token.throwIfCancelled();
+          registerCentralSuspension(this,parked);
+        }
         AgentRunUiState.parkCentralGeneration(sessionId,token.generation());
         return;
       }
@@ -2349,7 +2449,8 @@ public final class AgentForegroundService extends Service {
       }
       boolean timedOut = token.isTimedOut() && !token.isStoppedByUser();
       String responseOutcome = timedOut ? "PARTIAL" : result.outcome;
-      if(treeAdmission!=null && !"COMPLETED".equals(responseOutcome) && !token.wasStoppedByUser()) {
+      if(treeAdmission!=null && submissionClaim==null && suspensionClaim==null
+          && !"COMPLETED".equals(responseOutcome) && !token.wasStoppedByUser()) {
         treeFailureReason=timedOut ? "EXPIRED" : isTerminalFailure(responseOutcome) ? responseOutcome : "FAILED";
         treeAdmission.failOwnedRoot(this,treeFailureReason);
         treeExitDisposed=true;
@@ -2371,13 +2472,17 @@ public final class AgentForegroundService extends Service {
               chatMessage,
               result.durationMs,
               result.runId,
-              assistantOwnerMessageId.get(),
+              isTerminalFailure(responseOutcome) && submissionClaim!=null ? submissionClaim.getPermit().getUserMessageId()
+                  : isTerminalFailure(responseOutcome) && suspensionClaim!=null ? suspensionClaim.getOriginalUserMessageId()
+                  : assistantOwnerMessageId.get(),
               timedOut ? "PARTIAL" : result.outcome,
               proactiveThreadKey);
       if(treeAdmission!=null && "COMPLETED".equals(responseOutcome)) {
         treeAdmission.finishSuccessful(this,assistantMessageId);
-        if(suspensionClaim!=null && suspensionClaim.getOriginalRunId()!=null)
+        if(suspensionClaim!=null && suspensionClaim.getOriginalRunId()!=null) {
           conversationStore.finishSuspendedCentralSubmission(suspensionClaim,token,assistantMessageId,"COMPLETED",treeAdmission.getTerminalEvidence());
+          CentralSubmissionAdmission.retireSource(sessionId,suspensionClaim.getOriginalUserMessageId(),suspensionClaim.getOriginDigest());
+        }
         if(submissionClaim!=null) {
           submissionClaim.bindTerminalEvidence(treeAdmission.getTerminalEvidence());
           conversationStore.finishCentralSubmission(submissionClaim,assistantMessageId,"COMPLETED");
@@ -2388,6 +2493,14 @@ public final class AgentForegroundService extends Service {
       if(submissionClaim!=null && isTerminalFailure(responseOutcome) && !token.wasStoppedByUser()) {
         conversationStore.finishCentralSubmission(submissionClaim,assistantMessageId,"FAILED");
         CentralSubmissionAdmission.invalidate(submissionClaim.getPermit());
+      }
+      if(suspensionClaim!=null && suspensionClaim.getOriginalRunId()!=null && isTerminalFailure(responseOutcome) && !token.wasStoppedByUser()) {
+        conversationStore.finishSuspendedCentralSubmission(suspensionClaim,token,assistantMessageId,"FAILED",null);
+        CentralSubmissionAdmission.retireSource(sessionId,suspensionClaim.getOriginalUserMessageId(),suspensionClaim.getOriginDigest());
+      }
+      if(treeAdmission!=null && !"COMPLETED".equals(responseOutcome) && !token.wasStoppedByUser() && !treeExitDisposed) {
+        treeFailureReason=timedOut?"EXPIRED":isTerminalFailure(responseOutcome)?responseOutcome:"FAILED";
+        treeAdmission.failOwnedRoot(this,treeFailureReason);treeExitDisposed=true;
       }
       if (isTerminalFailure(responseOutcome) && !assistantOwnerInternal.get()) {
         conversationStore.markConversationMessagesResolved(sessionId,
@@ -2421,7 +2534,7 @@ public final class AgentForegroundService extends Service {
       }
       boolean stopped = token.isStoppedByUser();
       boolean timedOut = token.isTimedOut() && !stopped;
-      if(treeAdmission!=null && !treeExitDisposed && !token.wasStoppedByUser()) {
+      if(treeAdmission!=null && submissionClaim==null && suspensionClaim==null && !treeExitDisposed && !token.wasStoppedByUser()) {
         if(timedOut)treeFailureReason="EXPIRED";
         try {treeAdmission.failOwnedRoot(this,treeFailureReason);treeExitDisposed=true;}
         catch(RuntimeException persistenceFailure){reportStopPersistenceFailure(persistenceFailure);}
@@ -2436,14 +2549,22 @@ public final class AgentForegroundService extends Service {
           if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
             assistantMessageId = WorkspaceContinuationDelivery.finish(this, storedInput, token, chatMessage,
                 stopped ? "STOPPED" : timedOut ? "PARTIAL" : "FAILED", 0L);
-          } else conversationStore.appendConversationMessage(
+          } else assistantMessageId=conversationStore.appendConversationMessage(
               sessionId,
               "assistant",
               chatMessage,
               null,
-              "",
-              assistantOwnerMessageId.get(),
+              submissionClaim!=null?submissionClaim.getRunId():suspensionClaim!=null?suspensionClaim.getRunId():"",
+              submissionClaim!=null?submissionClaim.getPermit().getUserMessageId():suspensionClaim!=null?suspensionClaim.getOriginalUserMessageId():assistantOwnerMessageId.get(),
               stopped ? "STOPPED" : timedOut ? "PARTIAL" : "FAILED");
+          if(!stopped && !timedOut && submissionClaim!=null) {
+            conversationStore.finishCentralSubmission(submissionClaim,assistantMessageId,"FAILED");
+            CentralSubmissionAdmission.invalidate(submissionClaim.getPermit());
+          }
+          if(!stopped && !timedOut && suspensionClaim!=null && suspensionClaim.getOriginalRunId()!=null) {
+            conversationStore.finishSuspendedCentralSubmission(suspensionClaim,token,assistantMessageId,"FAILED",null);
+            CentralSubmissionAdmission.retireSource(sessionId,suspensionClaim.getOriginalUserMessageId(),suspensionClaim.getOriginDigest());
+          }
           if (!assistantOwnerInternal.get()) {
             conversationStore.markConversationMessagesResolved(sessionId,
                 java.util.Collections.singletonList(assistantOwnerMessageId.get()));

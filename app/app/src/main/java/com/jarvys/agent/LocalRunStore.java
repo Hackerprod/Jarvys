@@ -721,7 +721,9 @@ public final class LocalRunStore {
             } catch (IOException failure) { throw new IllegalStateException("Could not verify submission attachment", failure); }
         }
         AppendMessageInput input = new AppendMessageInput(sessionId, "user",
-                Collections.singletonList(new MessagePartInput("text", authority.getText())),
+                java.util.Arrays.asList(new MessagePartInput("text", authority.getText()),
+                        new MessagePartInput(com.jarvys.agent.chatdb.CentralSubmissionRequest.PART_KIND,
+                                com.jarvys.agent.chatdb.CentralSubmissionRequest.encode(authority.getSelectedSkillIds()))),
                 null, null, null, null, null, null, null, null, null, false,
                 Collections.unmodifiableList(stored), Collections.emptyList(), null, "chat", authority.getSubmissionId());
         authority.bindInput(input);
@@ -732,9 +734,27 @@ public final class LocalRunStore {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return chatDatabaseBridge.readCentralSubmissionForSourceSync(source);
     }
+    public String latestCanonicalUserForControlFence(String sessionId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.latestCanonicalUserForControlFenceSync(sessionId);
+    }
+    public void validateCentralYieldSources(com.jarvys.agent.chatdb.CentralUserRootCheckpoint origin,
+            java.util.List<ConversationTurn> retained) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        chatDatabaseBridge.validateCentralYieldSourcesSync(origin, retained);
+    }
     public boolean centralSubmissionSchemaReady() {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return chatDatabaseBridge.centralSubmissionSchemaReadySync();
+    }
+    public com.jarvys.agent.chatdb.CentralSubmissionCohortSnapshot captureCentralSubmissionCohort(String sessionId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.captureCentralSubmissionCohortSync(sessionId);
+    }
+    public java.util.List<String> persistCentralStopCohort(String sessionId, java.util.List<String> interruptIds,
+            String stoppedText, CentralSubmissionAdmission.CancelAuthority authority) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.persistCentralStopCohortSync(sessionId, new ArrayList<>(interruptIds), stoppedText, authority);
     }
     public java.util.List<com.jarvys.agent.chatdb.CentralSubmissionSnapshot> readCentralSubmissions(String sessionId) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
@@ -2286,7 +2306,7 @@ public final class LocalRunStore {
                 translations.add(event.getDetail());
         }
         Long cursor = dbPage.getOlderCursorSeq();
-        return new ConversationTimelinePage(dbPage.getEvents(), cursor == null ? NO_TIMELINE_CURSOR : cursor,
+        return new ConversationTimelinePage(CentralAvailabilityUiProjection.project(appContext,sessionId,dbPage.getEvents()), cursor == null ? NO_TIMELINE_CURSOR : cursor,
                 cursor != null, Collections.emptySet(), Collections.emptySet(), translations,
                 invalidated, markers);
     }
@@ -2294,7 +2314,8 @@ public final class LocalRunStore {
     /** Recent persisted UI events for run-service refreshes; the model transcript reader is separate. */
     public List<AgentRunUiEvent> readRecentConversationTimeline(String sessionId) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
-        return chatDatabaseBridge.readRecentConversationTimelineSync(sessionId, INITIAL_TIMELINE_TURNS).getEvents();
+        return CentralAvailabilityUiProjection.project(appContext,sessionId,
+                chatDatabaseBridge.readRecentConversationTimelineSync(sessionId, INITIAL_TIMELINE_TURNS).getEvents());
     }
 
     public int conversationMessageCount(String sessionId) {

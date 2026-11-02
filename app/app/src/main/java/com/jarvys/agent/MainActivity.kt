@@ -1156,7 +1156,19 @@ ${event.text}
 
     private fun regenerateAssistantMessage(event: AgentRunUiEvent) {
         val sessionId = conversationSessionId
-        if (!eventBelongsToSession(sessionId, event, "assistant")) return
+        if(event.kind=="user" && CentralAvailabilityPolicy.admissionEnabled()) {
+            if(!eventBelongsToSession(sessionId,event,"user"))return
+            val selection=event.centralAvailability?.takeIf {it.canRetry} ?: return
+            val accepted=selection.suspension?.let {row ->
+                row.sessionId==sessionId && row.originalUserMessageId==event.messageId && attachmentDrafts.recoverPreparedSuspension(event)
+            } ?: selection.submission?.let {row ->
+                row.sessionId==sessionId && row.userMessageId==event.messageId && row.state=="PREPARED"
+                    && attachmentDrafts.recoverPreparedSubmission(event,arrayListOf())
+            } ?: false
+            if(!accepted)toast(getString(R.string.chat_footer_regenerate_error),Toast.LENGTH_LONG)
+            return
+        }
+        if (!eventBelongsToSession(sessionId, event, "assistant") || !event.canRegenerate) return
         val sessionState = AgentRunUiState.snapshotForSession(sessionId)
         if (sessionState.running || sessionState.compacting) return
         lifecycleScope.launch {

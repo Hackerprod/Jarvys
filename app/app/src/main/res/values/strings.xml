@@ -1996,4 +1996,10 @@ Confirmed retired sources:
     <string name="memory_orphan_preview">Preview pending relation categories</string>
     <string name="workspace_registry_preserved_title">Workspace storage unavailable</string>
     <string name="workspace_registry_preserved_body">The workspace registry could not be safely opened. Existing data was preserved; no repair, import, or deletion was attempted. Do not clear storage or reinstall. Preserve this installation and request support.</string>
+    <string name="central_request_queued">Queued — not started</string>
+    <string name="central_request_running">Running</string>
+    <string name="central_request_background">Waiting in background</string>
+    <string name="central_request_cancelled">Cancelled</string>
+    <string name="central_request_failed">Failed</string>
+    <string name="central_request_uncertain">Uncertain — not retried automatically</string>
 </resources>

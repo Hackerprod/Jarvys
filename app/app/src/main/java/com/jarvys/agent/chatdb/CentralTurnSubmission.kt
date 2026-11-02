@@ -54,4 +54,16 @@ data class CentralSubmissionSnapshot(
 /** Actual committed source plus its native destination lifetime; still not permission to execute. */
 class CentralSubmissionAppendReceipt internal constructor(
     val snapshot: CentralSubmissionSnapshot, val source: CentralUserRootCheckpoint,
-)
+    selectedSkillIds:List<String>,
+) {
+    val selectedSkillIds:List<String> = java.util.Collections.unmodifiableList(ArrayList(selectedSkillIds))
+}
+
+/** Actual read-only STOP capture. Native STOP authority is separately required to mutate it. */
+class CentralSubmissionCohortSnapshot internal constructor(
+    rows:List<CentralSubmissionSnapshot>,
+    val storageGeneration:String?,
+    val lifecycle:com.jarvys.agent.connectors.ConnectionStateCoordinator.DestinationEvidence?,
+) {
+    val rows:List<CentralSubmissionSnapshot> = java.util.Collections.unmodifiableList(ArrayList(rows))
+}

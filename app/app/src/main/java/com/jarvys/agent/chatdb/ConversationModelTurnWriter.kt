@@ -102,6 +102,23 @@ internal class ConversationModelTurnWriter(
         }
     }
 
+    /** One native writer commit: neither the old STEER nor new USER cohort may partially dispose. */
+    suspend fun persistCentralStopCohort(conversationId:String,requestIds:List<String>,assistantMessage:String,
+        authority:com.jarvys.agent.CentralSubmissionAdmission.CancelAuthority):List<String> = database.withChatWriteTransaction {
+        authority.requireCurrent()
+        check(authority.captured.all {it.sessionId==conversationId})
+        val changed=persistCentralStopCohortInTransaction(conversationId,requestIds,assistantMessage,authority.captured)
+        authority.requireCurrent();changed
+    }
+    /** Internal pre-write test seam, not a native authority factory. */
+    internal suspend fun persistCentralStopCohortInTransaction(conversationId:String,requestIds:List<String>,assistantMessage:String,
+        captured:List<CentralSubmissionSnapshot>):List<String> = database.withChatWriteTransaction {
+        check(com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(conversationId) && captured.all {it.sessionId==conversationId})
+        val changed=requireSuccess(persistStoppedInputCohort(conversationId,requestIds,assistantMessage,"chat"))
+        CentralTurnSubmissionRepository(database).cancelCapturedInTransaction(captured)
+        changed
+    }
+
     /** One exact native STOP cohort. No late discovery, partial terminal rows, or retry duplicates. */
     suspend fun persistStoppedInputCohort(conversationId:String,requestIds:List<String>,
         assistantMessage:String,conversationKind:String):ChatDbResult<List<String>> {

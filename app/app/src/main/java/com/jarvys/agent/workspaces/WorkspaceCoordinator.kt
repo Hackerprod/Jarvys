@@ -186,6 +186,28 @@ class WorkspaceCoordinator internal constructor(context: Context,
             requestId, originalUserRequest, token, admission, context, true)
     }
 
+    override fun delegateAutomatic(workspaceId:String,key:String,role:String,mission:String,tools:List<String>?,name:String?,
+        missionAccess:String,requestId:String,originalUserRequest:String,token:CancellationToken,admission:Runnable,
+        context:WorkspaceMutationContext?):JSONObject {
+        check(com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled()) { "Automatic awaited delegation disabled" }
+        require(!key.startsWith("continuation-v1:")) { "Reserved continuation key prefix" }
+        admission.run();token.throwIfCancelled()
+        val continuing="continuation-v1:"+UUID.nameUUIDFromBytes(key.toByteArray(Charsets.UTF_8))
+        val observed=registry().use { db ->
+            val detached=db.existingAssignment(workspaceId,key,requestId,originalUserRequest,role,mission,tools,name,CrewMissionAccess.parse(missionAccess))
+            val awaited=db.existingAssignment(workspaceId,continuing,requestId,originalUserRequest,role,mission,tools,name,CrewMissionAccess.parse(missionAccess))
+            check(detached==null || awaited==null) { "Ambiguous retained delegation policy" }
+            detached ?: awaited
+        }
+        if(observed!=null && observed.state!=WorkspaceAssignmentState.PREPARED) {
+            token.throwIfCancelled();admission.run()
+            context?.existing(EffectInvocation.EffectReferenceKind.ASSIGNMENT,workspaceId,observed.assignmentId)
+            return assignmentJson(observed,null,2000)
+        }
+        return delegateTreeCentral(workspaceId,key,role,mission,tools,name,missionAccess,requestId,originalUserRequest,
+            token,admission,context,null,key)
+    }
+
     private fun delegateInternal(workspaceId: String, userKey: String, role: String, mission: String, tools: List<String>?,
                           name: String?, missionAccess: String, requestId: String, originalUserRequest: String,
                           token: CancellationToken, admission: Runnable, context: WorkspaceMutationContext?, continueResult: Boolean = false): JSONObject {
@@ -503,7 +525,7 @@ class WorkspaceCoordinator internal constructor(context: Context,
 
     private fun delegateTreeCentral(workspaceId:String,key:String,role:String,mission:String,tools:List<String>?,name:String?,
         missionAccess:String,requestId:String,originalUserRequest:String,token:CancellationToken,admission:Runnable,
-        context:WorkspaceMutationContext?,continueResult:Boolean):JSONObject {
+        context:WorkspaceMutationContext?,continueResult:Boolean?,logicalKey:String?=null):JSONObject {
         val mutation=requireNotNull(context) { "Native Central invocation required for tree delegation" }
         mutation.requireTreeAdmission();admission.run()
         val capability=requireNotNull(mutation.treeAdmission)
@@ -512,9 +534,6 @@ class WorkspaceCoordinator internal constructor(context: Context,
         require(!role.equals("custom",ignoreCase=true)) {
             "Native workspace delegation requires a saved versioned profile ID; save a custom profile first"
         }
-        val request=TreeChildRequest(workspaceId,key,requestId,originalUserRequest,role,mission,tools,name,
-            if(CrewMissionAccess.parse(missionAccess)==CrewMissionAccess.READ_ONLY) TreeMode.CONSULT else TreeMode.WORK,
-            if(continueResult) TreeReply.AWAIT else TreeReply.NONE,WorkspaceTreeStore.centralReceipt(requireNotNull(mutation.rootSource)),mutation.rootSource)
         mutation.admitMutation()
         val prepared=mutation.withCurrentWorkspaceTransaction {
             capability.withCurrentWorkspaceTransaction(token) {
@@ -523,7 +542,20 @@ class WorkspaceCoordinator internal constructor(context: Context,
                         mutation.requireInsideCurrentLease();mutation.requireTreeAdmission();admission.run()
                         val tree=WorkspaceTreeStore(db);val parent=requireNotNull(tree.getNode(rootId,rootId))
                         check(parent.cycleId==capability.cycleId())
-                        val prior=db.existingAssignment(workspaceId,key,requestId,originalUserRequest,role,mission,tools,name,CrewMissionAccess.parse(missionAccess))
+                        var resolvedKey=key
+                        var resolvedContinue=continueResult ?: true
+                        if(logicalKey!=null) {
+                            val continuing="continuation-v1:"+UUID.nameUUIDFromBytes(logicalKey.toByteArray(Charsets.UTF_8))
+                            val detached=db.existingAssignment(workspaceId,logicalKey,requestId,originalUserRequest,role,mission,tools,name,CrewMissionAccess.parse(missionAccess))
+                            val awaited=db.existingAssignment(workspaceId,continuing,requestId,originalUserRequest,role,mission,tools,name,CrewMissionAccess.parse(missionAccess))
+                            check(detached==null || awaited==null) { "Ambiguous retained delegation policy" }
+                            resolvedContinue=detached==null
+                            resolvedKey=if(resolvedContinue)continuing else logicalKey
+                        }
+                        val request=TreeChildRequest(workspaceId,resolvedKey,requestId,originalUserRequest,role,mission,tools,name,
+                            if(CrewMissionAccess.parse(missionAccess)==CrewMissionAccess.READ_ONLY) TreeMode.CONSULT else TreeMode.WORK,
+                            if(resolvedContinue)TreeReply.AWAIT else TreeReply.NONE,WorkspaceTreeStore.centralReceipt(requireNotNull(mutation.rootSource)),mutation.rootSource)
+                        val prior=db.existingAssignment(workspaceId,resolvedKey,requestId,originalUserRequest,role,mission,tools,name,CrewMissionAccess.parse(missionAccess))
                         val child=if(prior==null)tree.admitChild(TreeNodeFence.of(parent),request) else {
                             val enrolled=requireNotNull(tree.findAssignment(workspaceId,prior.assignmentId)) { "Historical assignment is not tree authority" }
                             check(enrolled.rootId==rootId && enrolled.state==TreeNodeState.QUEUED && prior.state==WorkspaceAssignmentState.PREPARED) { "Existing execution cannot replay" }
@@ -551,7 +583,7 @@ class WorkspaceCoordinator internal constructor(context: Context,
                 }
             }
         }
-        val result=startReservedTreeAssignment(reservation,token,Runnable { mutation.requireTreeAdmission();admission.run() },continueResult)
+        val result=startReservedTreeAssignment(reservation,token,Runnable { mutation.requireTreeAdmission();admission.run() },prepared.reply==TreeReply.AWAIT)
         mutation.acceptedAssignment(workspaceId,reservation.assignmentId)
         return result
     }

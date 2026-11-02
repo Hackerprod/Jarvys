@@ -29,7 +29,7 @@ class CentralSubmissionPersistenceTest {
     @After fun close() {if(::db.isInitialized)JarvysChatDatabaseProvider.closeDatabaseFileForTests(db);worker.shutdownNow()}
     private fun <T> work(body:suspend ()->T):T=worker.submit<T>{runBlocking {body()}}.get(60,TimeUnit.SECONDS)
     private fun writer()=ConversationModelTurnWriter(db,ConversationRepository(db),ModelTranscriptRepository(db))
-    private fun input(id:String,text:String="Prompt $id",attachment:Boolean=false)=AppendMessageInput(session,"user",listOf(MessagePartInput("text",text)),
+    private fun input(id:String,text:String="Prompt $id",attachment:Boolean=false)=AppendMessageInput(session,"user",listOf(MessagePartInput("text",text),MessagePartInput(CentralSubmissionRequest.PART_KIND,CentralSubmissionRequest.encode(listOf("selected-skill")))),
         attachments=if(attachment)listOf(MessageAttachmentInput("file-$id","note.txt","text/plain",4,"document","$id/note.txt","a".repeat(64))) else emptyList(),stableId=id)
     private suspend fun prepared(id:String,process:String="process-A",attachment:Boolean=false)=writer().appendPreparedCentralSubmission(input(id,attachment=attachment),id,process)
     private suspend fun read(id:String)=db.withChatReadTransaction {CentralTurnSubmissionRepository(db).find(session,id)}
@@ -116,6 +116,43 @@ class CentralSubmissionPersistenceTest {
         assertNull(ConversationRepository(db).getMessage(session,active.userMessageId)!!.inputState)
         assertEquals("STARTED",read(active.submissionId)!!.state)
     }
+    @Test fun preparedRecoveryCasConservesOriginalSourceAndCannotResetStarted()=work {
+        val original=prepared("recover","old-process",attachment=true)
+        val recovered=db.withChatWriteTransaction {CentralTurnSubmissionRepository(db).recoverPreparedInTransaction(original,"process-A","fresh-native-action")}
+        assertEquals(original.userMessageId,recovered.userMessageId);assertEquals(original.sourceSha256,recovered.sourceSha256)
+        assertEquals(original.originalAdmissionProcess,recovered.originalAdmissionProcess);assertEquals("process-A",recovered.currentAdmissionProcess)
+        assertEquals(original.revision+1,recovered.revision);assertEquals("fresh-native-action",recovered.recoveryReceipt)
+        rejected {db.withChatWriteTransaction {CentralTurnSubmissionRepository(db).recoverPreparedInTransaction(original,"process-A","stale-action")}}
+        val started=claim(recovered)
+        rejected {db.withChatWriteTransaction {CentralTurnSubmissionRepository(db).recoverPreparedInTransaction(started,"process-A","must-not-replay")}}
+        assertEquals(started,read(original.submissionId))
+    }
+    @Test fun secondHalfStopFailureRollsBackExactSteerAndSubmissionTogether()=work {
+        val queued=prepared("stop-atomic")
+        val steering=(writer().appendAndDispatchInterruptRequest(session,"old steering",emptyList()) as ChatDbResult.Success).value
+        val id=steering.request.requestId
+        fun assistantCount()=db.testChatSql.query("SELECT COUNT(*) FROM messages WHERE role='assistant'").use {check(it.moveToFirst());it.getLong(0)}
+        val before=assistantCount()
+        db.testChatSql.execSQL("CREATE TRIGGER reject_stop BEFORE UPDATE ON central_turn_submissions BEGIN SELECT RAISE(ABORT,'stop_second_half_failed'); END")
+        try {rejected {writer().persistCentralStopCohortInTransaction(session,listOf(id),"Stopped",listOf(queued))}}
+        finally {db.testChatSql.execSQL("DROP TRIGGER reject_stop")}
+        assertEquals(queued,read(queued.submissionId));assertEquals(before,assistantCount())
+        assertNull(ConversationRepository(db).readInterruptRequest(session,id)!!.inputState)
+        assertEquals(listOf(id),writer().persistCentralStopCohortInTransaction(session,listOf(id),"Stopped",listOf(queued)))
+        assertEquals("CANCELLED",read(queued.submissionId)!!.state)
+        assertEquals("resolved",ConversationRepository(db).readInterruptRequest(session,id)!!.inputState)
+    }
+    @Test fun capturedStopDoesNotTouchLaterSendOrSteerAndDuplicateIsIdempotent()=work {
+        val captured=prepared("captured")
+        val old=(writer().appendAndDispatchInterruptRequest(session,"old steer",emptyList()) as ChatDbResult.Success).value.request.requestId
+        val later=prepared("later")
+        val newSteer=(writer().appendAndDispatchInterruptRequest(session,"later steer",emptyList()) as ChatDbResult.Success).value.request.requestId
+        writer().persistCentralStopCohortInTransaction(session,listOf(old),"Stopped",listOf(captured))
+        val cancelled=read(captured.submissionId)
+        assertEquals(later,read(later.submissionId));assertNull(ConversationRepository(db).readInterruptRequest(session,newSteer)!!.inputState)
+        assertTrue(writer().persistCentralStopCohortInTransaction(session,listOf(old),"Stopped",listOf(captured)).isEmpty())
+        assertEquals(cancelled,read(captured.submissionId));assertEquals(later,read(later.submissionId))
+    }
     @Test fun revisionAndStateChangesInvalidateProtectionFingerprintAndMalformedRowsFailClosed()=work {
         val row=prepared("fingerprint");val reader=ConversationReader(db)
         val before=reader.readInteractionProtection(session).fingerprint
@@ -123,5 +160,39 @@ class CentralSubmissionPersistenceTest {
         assertNotEquals(before,reader.readInteractionProtection(session).fingerprint)
         db.testChatSql.execSQL("UPDATE central_turn_submissions SET revision=1.25 WHERE submission_id='fingerprint'")
         rejected {reader.loadConversationContext(session)}
+    }
+    @Test fun reflectionExcludesQueuedAndUncertainSourcesButRetainsConfirmedAndOrdinaryHistory()=work {
+        val ordinary=(ConversationRepository(db).appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","ordinary reflection")))) as ChatDbResult.Success).value
+        val queued=prepared("reflection-queued");val uncertain=prepared("reflection-started");claim(uncertain)
+        val completed=claim(prepared("reflection-completed"))
+        val assistant=(ConversationRepository(db).appendMessage(AppendMessageInput(session,"assistant",listOf(MessagePartInput("text","confirmed reflection answer")),status="COMPLETED",ownerUserMessageId=completed.userMessageId,runId=completed.claimRunId)) as ChatDbResult.Success).value
+        // Persistence-reader fixture only: no native TerminalEvidence or execution permit is minted.
+        val receipt=org.json.JSONObject().put("version",1).put("kind","DIRECT").put("assistantId",assistant.messageId)
+            .put("runId",completed.claimRunId).put("originRunId",completed.claimRunId).put("sourceSha256",completed.sourceSha256)
+            .put("finalOwnerMessageId",completed.userMessageId).put("chainDigest","a".repeat(64)).toString()
+        db.testChatSql.execSQL("UPDATE central_turn_submissions SET state='COMPLETED',revision=revision+1,terminal_evidence=? WHERE conversation_id=? AND submission_id=?",arrayOf(receipt,session,completed.submissionId))
+        val payload=MemoryTimelineRepository(db).buildReflectionPayload(session).text
+        assertTrue(payload.contains("ordinary reflection"));assertTrue(payload.contains("confirmed reflection answer"))
+        assertTrue(payload.contains("Prompt reflection-completed"));assertFalse(payload.contains("Prompt reflection-queued"));assertFalse(payload.contains("Prompt reflection-started"))
+        assertTrue(CentralTurnSubmissionRepository(db).historyExcluded(session).containsAll(listOf(queued.userMessageId,uncertain.userMessageId)))
+        assertNotEquals(ordinary.messageId,ConversationReader(db).latestUserMessageId(session))
+    }
+    @Test fun selectedSkillRequestIsExactImmutableEvidenceAcrossRecoveryAndReopen()=work {
+        val original=prepared("skill-source","old-process")
+        assertEquals(listOf("selected-skill"),CentralSubmissionRequest.read(db,session,original.userMessageId))
+        JarvysChatDatabaseProvider.closeDatabaseFileForTests(db);open()
+        val recovered=db.withChatWriteTransaction {CentralTurnSubmissionRepository(db).recoverPreparedInTransaction(original,"process-A","explicit-recovery")}
+        assertEquals(original.sourceSha256,recovered.sourceSha256)
+        assertEquals(listOf("selected-skill"),CentralSubmissionRequest.read(db,session,original.userMessageId))
+        assertFalse(ConversationReader(db).readConversationMessages(session).joinToString {it.text}.contains(CentralSubmissionRequest.PART_KIND))
+        db.testChatSql.execSQL("UPDATE message_parts SET payload=? WHERE conversation_id=? AND message_id=? AND kind=?",arrayOf(CentralSubmissionRequest.encode(listOf("different-skill")),session,original.userMessageId,CentralSubmissionRequest.PART_KIND))
+        rejected {claim(recovered)};assertEquals(recovered,read(original.submissionId))
+    }
+    @Test fun requestCodecRejectsNullDuplicatesUnknownShapeAndVersion()=work {
+        for(payload in listOf("null","{}","{\"version\":1,\"selectedSkillIds\":null}","{\"version\":1,\"selectedSkillIds\":[null]}","{\"version\":1,\"selectedSkillIds\":[\"a\",\"a\"]}","{\"version\":2,\"selectedSkillIds\":[]}","{\"version\":1,\"selectedSkillIds\":[],\"grant\":true}")) {
+            rejected {CentralSubmissionRequest.decode(payload)}
+        }
+        assertEquals(emptyList<String>(),CentralSubmissionRequest.decode(CentralSubmissionRequest.encode(emptyList())))
+        assertEquals(listOf("actual-selection"),CentralSubmissionRequest.decode(CentralSubmissionRequest.encode(listOf("actual-selection"))))
     }
 }

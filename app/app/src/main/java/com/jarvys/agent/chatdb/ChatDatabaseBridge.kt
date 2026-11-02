@@ -2034,7 +2034,9 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
                 val snapshot=runBlocking { repos.modelTurnWriter.appendCentralSubmission(input,authority) }
                 val source=CentralUserRootCheckpoint(snapshot.storageGeneration,snapshot.sessionId,snapshot.userMessageId,
                     snapshot.sourceSha256,anchor.attest(repos.database,snapshot.storageGeneration))
-                CentralSubmissionAppendReceipt(snapshot,source)
+                CentralSubmissionAppendReceipt(snapshot,source,runBlocking {repos.database.withChatReadTransaction {
+                    CentralSubmissionRequest.read(repos.database,snapshot.sessionId,snapshot.userMessageId)
+                }})
             }
         }
     }
@@ -2054,6 +2056,31 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     }
     /** Strict read-only file inspection; no provider creation, migration or capability mint. */
     fun centralSubmissionSchemaReadySync():Boolean = JarvysChatDatabaseProvider.currentSubmissionSchemaReady(applicationContext)
+    fun captureCentralSubmissionCohortSync(sessionId:String):CentralSubmissionCohortSnapshot = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            val captured=runBlocking {repos.database.withChatReadTransaction {
+                val rows=CentralTurnSubmissionRepository(repos.database).list(sessionId).filter {it.state in setOf("PREPARED","STARTED")}
+                val generation=repos.database.chatSql.query("SELECT value FROM storage_meta WHERE key=?",arrayOf(ConnectionProjectionRepository.GENERATION_KEY)).use { c ->
+                    if(!c.moveToFirst())null else {check(c.getType(0)==android.database.Cursor.FIELD_TYPE_STRING);c.getString(0)}
+                }
+                check(rows.all {it.storageGeneration==generation})
+                rows to generation
+            }}
+            val rows=captured.first;val generation=captured.second
+            CentralSubmissionCohortSnapshot(rows,generation,generation?.let {anchor.attest(repos.database,it)})
+        }
+    }
+    fun persistCentralStopCohortSync(sessionId:String,requestIds:List<String>,assistantMessage:String,
+        authority:com.jarvys.agent.CentralSubmissionAdmission.CancelAuthority):List<String> = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            authority.requireCurrent()
+            authority.cohort.lifecycle?.let {check(anchor.accepts(it,repos.database)) {"Captured STOP destination changed"}}
+            val result=runBlocking {repos.modelTurnWriter.persistCentralStopCohort(sessionId,requestIds,assistantMessage,authority)}
+            authority.requireCurrent();result
+        }
+    }
     fun readCentralSubmissionsSync(sessionId:String):List<CentralSubmissionSnapshot> = execute { repos ->
         repos.database.withChatReadTransaction {CentralTurnSubmissionRepository(repos.database).list(sessionId)}
     }
@@ -2077,12 +2104,19 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
             anchor.fenced {
                 val snapshot=runBlocking {repos.database.withChatWriteTransaction {CentralTurnSubmissionRepository(repos.database).recover(sessionId,submissionId,expectedRevision,authority)}}
                 CentralSubmissionAppendReceipt(snapshot,CentralUserRootCheckpoint(snapshot.storageGeneration,snapshot.sessionId,
-                    snapshot.userMessageId,snapshot.sourceSha256,anchor.attest(repos.database,snapshot.storageGeneration)))
+                    snapshot.userMessageId,snapshot.sourceSha256,anchor.attest(repos.database,snapshot.storageGeneration)),
+                    runBlocking {repos.database.withChatReadTransaction {CentralSubmissionRequest.read(repos.database,snapshot.sessionId,snapshot.userMessageId)}})
             }
         }
     }
-    fun cancelCentralSubmissionCohortSync(authority:com.jarvys.agent.CentralSubmissionAdmission.CancelAuthority):List<CentralSubmissionSnapshot> = execute { repos ->
-        repos.database.withChatWriteTransaction {CentralTurnSubmissionRepository(repos.database).cancel(authority)}
+    fun cancelCentralSubmissionCohortSync(authority:com.jarvys.agent.CentralSubmissionAdmission.CancelAuthority):List<CentralSubmissionSnapshot> = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            authority.requireCurrent()
+            authority.cohort.lifecycle?.let {check(anchor.accepts(it,repos.database)) {"Captured STOP destination changed"}}
+            val result=runBlocking {repos.database.withChatWriteTransaction {CentralTurnSubmissionRepository(repos.database).cancel(authority)}}
+            authority.requireCurrent();result
+        }
     }
     fun finishCentralSubmissionSync(authority:com.jarvys.agent.CentralSubmissionAdmission.ClaimAuthority,
         assistantMessageId:String,terminalState:String):CentralSubmissionSnapshot = executeOnWorker { repos ->
@@ -2488,6 +2522,26 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     fun readConversationContextSync(conversationId: String): String =
         execute { it.reader.readConversationContext(conversationId) }
+
+    /** Chronological denial fence only: returns no payload and grants no queue/USER authority. */
+    fun latestCanonicalUserForControlFenceSync(sessionId:String):String? = execute { repos ->
+        repos.database.withChatReadTransaction {
+            check(com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId))
+            repos.database.chatSql.query("SELECT message_id FROM messages WHERE conversation_id=? AND role='user' AND hidden_kind IS NULL ORDER BY seq DESC LIMIT 1",arrayOf(sessionId)).use { c ->if(c.moveToFirst())c.getString(0) else null}
+        }
+    }
+    /** Retained source validation only. Does not expose a context or manufacture a recovery permit. */
+    fun validateCentralYieldSourcesSync(origin:CentralUserRootCheckpoint,retained:List<ConversationTurn>) = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            check(anchor.accepts(origin.lifecycle,repos.database))
+            val before=runBlocking {repos.reader.centralYieldEvidence(origin,retained)}
+            before.validate(applicationContext.filesDir)
+            val after=runBlocking {repos.reader.centralYieldEvidence(origin,retained)}
+            check(before.fingerprint==after.fingerprint) {"Yield sources changed during artifact validation"}
+            check(anchor.accepts(origin.lifecycle,repos.database))
+        }
+    }
 
     fun latestUserMessageIdSync(conversationId: String): String? = execute { it.reader.latestUserMessageId(conversationId) }
 

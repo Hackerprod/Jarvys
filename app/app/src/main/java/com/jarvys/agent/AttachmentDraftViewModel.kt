@@ -41,6 +41,7 @@ class AttachmentDraftViewModel internal constructor(
     private val protectedIdsBySession = mutableMapOf<String, Set<String>>()
     private val activeSubmissions = mutableMapOf<String, ActiveSubmission>()
     private val activeRecoveries = mutableMapOf<String, NativeRecoveryAction>()
+    private val activeSuspensionRecoveries = mutableMapOf<String, NativeSuspensionRecoveryAction>()
     var cameraFile: File? = null
         private set
     var cameraSession: String? = null
@@ -111,7 +112,7 @@ class AttachmentDraftViewModel internal constructor(
             val attempt = ActiveSubmission(session, SubmissionCancellation())
             if (CentralAvailabilityPolicy.admissionEnabled() && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(session))
                 attempt.nativeAction = NativeSendAction(this, session, UUID.randomUUID().toString(), text,
-                    java.util.Collections.unmodifiableList(pending.mapNotNull { it.attachment }))
+                    java.util.Collections.unmodifiableList(pending.mapNotNull { it.attachment }),java.util.Collections.unmodifiableList(ArrayList(skills)))
             activeSubmissions[session] = attempt
             updateSendingProjectionLocked()
             pending to attempt
@@ -246,6 +247,8 @@ class AttachmentDraftViewModel internal constructor(
             activeSubmissions.values.forEach { it.cancellation.cancelBeforePersistence() }
             activeRecoveries.values.forEach { it.cancelled.set(true) }
             activeRecoveries.clear()
+            activeSuspensionRecoveries.values.forEach {it.close()}
+            activeSuspensionRecoveries.clear()
             val session = sessionId
             val protectedIds = protectedIdsBySession[session].orEmpty()
             mutableDrafts.value.filterNot { it.id in protectedIds }.forEach { item -> item.attachment?.let {
@@ -265,7 +268,7 @@ class AttachmentDraftViewModel internal constructor(
 
     /** Construction alone grants nothing: the private active attempt must own this exact object. */
     class NativeSendAction internal constructor(private val owner:AttachmentDraftViewModel,
-        val sessionId:String,val submissionId:String,val text:String,val attachments:List<ChatAttachment>) {
+        val sessionId:String,val submissionId:String,val text:String,val attachments:List<ChatAttachment>,val selectedSkillIds:List<String>) {
         private val begun=AtomicBoolean(false)
         fun beginPersistence() {check(begun.compareAndSet(false,true));requireCurrent(sessionId,submissionId)}
         fun requireCurrent(session:String,id:String)=synchronized(owner.lock) {
@@ -276,7 +279,7 @@ class AttachmentDraftViewModel internal constructor(
         }
     }
     class NativeRecoveryAction internal constructor(private val owner:AttachmentDraftViewModel,
-        val sessionId:String,val submissionId:String,val revision:Long) {
+        val sessionId:String,val submissionId:String,val revision:Long,val selectedSkillIds:List<String>) {
         private val begun=AtomicBoolean(false)
         internal val cancelled=AtomicBoolean(false)
         fun beginPersistence() {check(begun.compareAndSet(false,true));requireCurrent(sessionId,submissionId,revision)}
@@ -286,12 +289,50 @@ class AttachmentDraftViewModel internal constructor(
         }
     }
 
+    class NativeSuspensionRecoveryAction private constructor(private val owner:AttachmentDraftViewModel,
+        val descriptor:CentralTreeAdmission.SuspensionRecoveryDescriptor):AutoCloseable {
+        val actionId:String=UUID.randomUUID().toString()
+        val sessionId:String get()=descriptor.sessionId
+        private val begun=AtomicBoolean(false)
+        private val closed=AtomicBoolean(false)
+        fun beginPersistence(){check(begun.compareAndSet(false,true));requireCurrent(sessionId,descriptor.resumeId,descriptor.revision)}
+        fun requireCurrent(session:String,id:String,revision:Long)=synchronized(owner.lock) {
+            check(!closed.get() && begun.get() && session==sessionId && id==descriptor.resumeId && revision==descriptor.revision
+                && owner.activeSuspensionRecoveries[id]===this) {"Native suspension recovery action expired or changed"}
+        }
+        override fun close(){closed.set(true)}
+        companion object {
+            internal fun create(owner:AttachmentDraftViewModel,descriptor:CentralTreeAdmission.SuspensionRecoveryDescriptor)=
+                NativeSuspensionRecoveryAction(owner,descriptor)
+        }
+    }
+    fun recoverPreparedSuspension(selected:AgentRunUiEvent):Boolean {
+        val row=selected.centralAvailability?.takeIf {it.canRetry}?.suspension ?: return false
+        val action=synchronized(lock) {
+            if(!CentralAvailabilityPolicy.admissionEnabled() || row.sessionId!=sessionId || selected.kind!="user"
+                || selected.messageId!=row.originalUserMessageId || !AgentRunUiState.containsExactRecoverySelection(sessionId,selected)
+                || activeSuspensionRecoveries.containsKey(row.resumeId))return false
+            NativeSuspensionRecoveryAction.create(this,row).also {activeSuspensionRecoveries[row.resumeId]=it}
+        }
+        try {submissionExecutor.execute {
+            try {action.use {it.beginPersistence();AgentForegroundService.recoverCentralSuspension(app,it)}}
+            catch(failure:Exception){AgentErrorReporter.reportChatDatabaseFailure(app,failure)}
+            finally {synchronized(lock) {if(activeSuspensionRecoveries[row.resumeId]===action)activeSuspensionRecoveries.remove(row.resumeId)}}
+        }} catch(failure:RuntimeException) {
+            action.close();synchronized(lock){activeSuspensionRecoveries.remove(row.resumeId,action)}
+            AgentErrorReporter.reportChatDatabaseFailure(app,failure);return false
+        }
+        return true
+    }
+
     /** Only an explicit existing-row UI action calls this; merely reading PREPARED rows is inert. */
-    fun recoverPreparedSubmission(row:com.jarvys.agent.chatdb.CentralSubmissionSnapshot,skills:ArrayList<String>):Boolean {
+    fun recoverPreparedSubmission(selected:AgentRunUiEvent,skills:ArrayList<String>):Boolean {
+        val row=selected.centralAvailability?.takeIf {it.canRetry}?.submission ?: return false
         val action=synchronized(lock) {
             if(!CentralAvailabilityPolicy.admissionEnabled() || row.sessionId!=sessionId || row.state!="PREPARED"
+                || selected.kind!="user" || selected.messageId!=row.userMessageId || !AgentRunUiState.containsExactRecoverySelection(sessionId,selected)
                 || activeRecoveries.containsKey(row.submissionId))return false
-            NativeRecoveryAction(this,row.sessionId,row.submissionId,row.revision).also {activeRecoveries[row.submissionId]=it}
+            NativeRecoveryAction(this,row.sessionId,row.submissionId,row.revision,java.util.Collections.unmodifiableList(ArrayList(skills))).also {activeRecoveries[row.submissionId]=it}
         }
         try { submissionExecutor.execute {
             try {
