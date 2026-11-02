@@ -2,6 +2,10 @@ package com.jarvys.agent;
 
 import static org.junit.Assert.*;
 import java.util.*;
+import com.jarvys.agent.crew.CrewCoordinationEvidence;
+import com.jarvys.agent.crew.CrewInputBinding;
+import com.jarvys.agent.crew.CrewInputIncorporation;
+import com.jarvys.agent.crew.CrewMessage;
 import org.json.*;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -174,6 +178,118 @@ public class CentralYieldCheckpointCodecTest {
             assertNotEquals(baseline,CrewCheckpointStore.digest(canonical.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
             assertEquals(canonical,CentralYieldCheckpointCodec.encodeCanonical(CentralYieldCheckpointCodec.decode(changed)));
         }
+    }
+
+    @Test public void nonemptyHistoricalIncorporationProofConservesExactBindingAndTransport() throws Exception {
+        String central = "jarvys-central";
+        String cycle = "00000000-0000-0000-0000-000000000101";
+        String firstCycle = "00000000-0000-0000-0000-000000000102";
+        String messageId = "retained-worker-question";
+        String text = "Which dates? Preserve this exact whitespace.  \n";
+        CrewCoordinationEvidence source = CrewCoordinationEvidence.create(
+            central, "retained-mission", "child-worker", cycle, messageId, "QUESTION",
+            text, Collections.emptyList(), 123456789L);
+        CrewInputBinding binding = CrewInputBinding.treeReport(
+            source.evidenceId, central, "retained-workspace", central, "retained-assignment",
+            "retained-mission", "central-parent", messageId, source.contentSha256, cycle,
+            "child-worker", CrewMessage.Type.QUESTION, text);
+        CrewInputIncorporation proof = new CrewInputIncorporation(binding, firstCycle,
+            CrewInputIncorporation.TransportKind.INBOX,
+            CrewInputIncorporation.transportSha256(text));
+        ConversationInput.Provenance provenance = new ConversationInput.Provenance(
+            central, "retained-workspace", "retained-assignment", "child-worker", messageId,
+            ConversationInput.Kind.QUESTION, ConversationInput.Provenance.PrincipalRole.SUBORDINATE);
+        ConversationTurn input = new ConversationTurn("assistant", text, 5,
+            ConversationTurn.IncomingMetadata.forInternalInput(provenance)).withDurableMessageId(messageId);
+        input.bindSource(new ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE,
+            central, messageId, ""));
+        CoreAgentLoop.Checkpoint original = new CoreAgentLoop.Checkpoint(
+            Collections.singletonList(input), Collections.singleton(messageId), Collections.emptyMap(), -1,
+            Collections.singletonMap(messageId, proof), Collections.emptyMap());
+        String encoded = CentralYieldCheckpointCodec.encodeCanonical(original);
+        CoreAgentLoop.Checkpoint restored = CentralYieldCheckpointCodec.decode(new JSONObject(encoded));
+        assertEquals(1, restored.incorporations.size());
+        CrewInputIncorporation actual = restored.incorporations.get(messageId);
+        assertNotNull(actual);
+        assertTrue(proof.samePayload(actual));
+        assertTrue(binding.samePayload(actual.binding));
+        assertEquals(firstCycle, actual.firstIncorporationCycleId);
+        assertEquals(CrewInputIncorporation.TransportKind.INBOX, actual.transportKind);
+        assertEquals(CrewInputIncorporation.transportSha256(text), actual.transportSha256);
+        assertEquals(Collections.singleton(messageId), restored.appliedIncomingIds);
+        assertEquals(ConversationInput.Origin.AGENT, restored.transcript.get(0).incomingMetadata.origin);
+        assertEquals(ConversationInput.Provenance.PrincipalRole.SUBORDINATE,
+            restored.transcript.get(0).incomingMetadata.provenance.principalRole);
+        assertEquals(encoded, CentralYieldCheckpointCodec.encodeCanonical(restored));
+        assertEquals(CrewCheckpointStore.digest(encoded.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+            CrewCheckpointStore.digest(CentralYieldCheckpointCodec.encodeCanonical(restored)
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
+    @Test public void opaqueCodexItemsAndProviderIdentityAreExactlyRetainedOnAssistantAndCalls() throws Exception {
+        String opaque = new JSONObject().put("type", "reasoning")
+            .put("id", "rs_native_history")
+            .put("encrypted_content", "opaque-not-executable:" + (char) 0 + (char) 0xd800)
+            .put("summary", new JSONArray().put(new JSONObject()
+                .put("type", "summary_text").put("text", "Retained summary 日本語"))).toString();
+        List<ModelReply.ProviderOutputItem> assistantItems = Arrays.asList(
+            ModelReply.ProviderOutputItem.reasoning(opaque, "codex", "responses", "retained-model"),
+            ModelReply.ProviderOutputItem.message("Exact assistant item \ud83d\ude00"));
+        ConversationTurn assistant = ConversationTurn.assistantReply("retained assistant", 3, assistantItems)
+            .withDurableMessageId("retained-assistant");
+        assistant.bindSource(new ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE,
+            "jarvys-central", "retained-assistant", ""));
+        ConversationTurn calls = ConversationTurn.toolCalls("retained proposal",
+            Collections.singletonList(new ModelReply.Call("retained-call", "read_conversation_artifact",
+                Collections.singletonMap("artifact_id", "retained-artifact"))), Arrays.asList(
+                    ModelReply.ProviderOutputItem.reasoning(opaque, "codex", "responses", "retained-model"),
+                    ModelReply.ProviderOutputItem.toolCall("retained-call")));
+        calls.bindSource(new ConversationTurn.Source(ConversationTurn.Source.Kind.BATCH,
+            "jarvys-central", "retained-batch", ""));
+        ConversationTurn result = ConversationTurn.toolResult("retained-call", "read_conversation_artifact", "retained output");
+        result.bindSource(new ConversationTurn.Source(ConversationTurn.Source.Kind.BATCH_RESULT,
+            "jarvys-central", "retained-batch", "retained-call"));
+        CoreAgentLoop.Checkpoint original = new CoreAgentLoop.Checkpoint(Arrays.asList(assistant, calls, result),
+            Collections.emptySet(), Collections.singletonMap("retained-call", "RESULT"), -1);
+        String encoded = CentralYieldCheckpointCodec.encodeCanonical(original);
+        CoreAgentLoop.Checkpoint restored = CentralYieldCheckpointCodec.decode(new JSONObject(encoded));
+        for (int index : Arrays.asList(0, 1)) {
+            ModelReply.ProviderOutputItem reasoning = restored.transcript.get(index).providerOutputItems.get(0);
+            assertEquals(ModelReply.ProviderOutputItem.Kind.REASONING, reasoning.kind);
+            assertArrayEquals(opaque.toCharArray(), reasoning.value.toCharArray());
+            assertTrue(reasoning.belongsTo("codex", "responses", "retained-model"));
+        }
+        assertEquals(ModelReply.ProviderOutputItem.Kind.MESSAGE,
+            restored.transcript.get(0).providerOutputItems.get(1).kind);
+        assertEquals("Exact assistant item \ud83d\ude00", restored.transcript.get(0).providerOutputItems.get(1).value);
+        assertEquals(ModelReply.ProviderOutputItem.Kind.TOOL_CALL,
+            restored.transcript.get(1).providerOutputItems.get(1).kind);
+        assertEquals("retained-call", restored.transcript.get(1).providerOutputItems.get(1).value);
+        assertEquals(encoded, CentralYieldCheckpointCodec.encodeCanonical(restored));
+    }
+
+    @Test public void sourcedCompactionRetainsExactWrappedSummaryCountAndProtectedGenuineUser() throws Exception {
+        ConversationTurn summary = ConversationTurn.compactionSummary("Decision: retain trip dates and accessibility needs.", 17);
+        summary.bindSource(new ConversationTurn.Source(ConversationTurn.Source.Kind.COMPACTION,
+            "jarvys-central", "retained-compaction", ""));
+        ConversationTurn user = new ConversationTurn("user", "Continue the original request", 18)
+            .withDurableMessageId("original-user");
+        user.bindSource(new ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE,
+            "jarvys-central", "original-user", ""));
+        CoreAgentLoop.Checkpoint original = new CoreAgentLoop.Checkpoint(Arrays.asList(summary, user),
+            Collections.singleton("original-user"), Collections.emptyMap(), 1);
+        String encoded = CentralYieldCheckpointCodec.encodeCanonical(original);
+        CoreAgentLoop.Checkpoint restored = CentralYieldCheckpointCodec.decode(new JSONObject(encoded));
+        ConversationTurn actual = restored.transcript.get(0);
+        assertEquals(ConversationTurn.Kind.COMPACTION_SUMMARY, actual.kind);
+        assertEquals(summary.content, actual.content);
+        assertEquals(summary.modelContent, actual.modelContent);
+        assertEquals(17, actual.summarizedMessageCount);
+        assertEquals(summary.source(), actual.source());
+        assertEquals(ConversationTurn.Source.Kind.COMPACTION, actual.source().kind);
+        assertEquals(1, restored.genuineUserIndex);
+        assertEquals("original-user", restored.transcript.get(restored.genuineUserIndex).durableMessageId);
+        assertEquals(encoded, CentralYieldCheckpointCodec.encodeCanonical(restored));
     }
 
 }

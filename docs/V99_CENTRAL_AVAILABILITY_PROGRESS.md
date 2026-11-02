@@ -37,3 +37,9 @@ The real native service vertical fixture is authored with an enabled preconditio
 The pending corrections now persist and reuse receipt-owned skill selections, retain actual committed/uncertain attachment bytes after a post-append registration failure, and require the exact displayed recovery fence in both Canvas checks. A newer row cannot silently replace the selected recovery target. These changes and their native fixtures are not yet compiled or run.
 
 Pre-write reconciliation identified remaining explicit proofs: mixed Room/Registry readiness, genuine populated native v2-to-v3 provider opening and Doctor/export, and checkpoint precommit/readback failure conservation. They are being added before activation; the earlier70-test diagnostic is not a complete compatibility gate. Native USER mutation paths were inspected: assistant-only editing rejects USER, stable-ID append refuses conflicting content, and pending-source regeneration is denied. No additional production editor change was needed.
+
+## Pre-write proof additions — authored, not yet run
+
+The compatibility fixtures now cover composed populated native v2-to-v3 provider opening, actual upgraded Doctor/export readers and both partial-upgrade capability vectors. OFF-policy rejection is explicitly not claimed as proof of live admission; native mixed-schema rejection will also be exercised after the pre-write gate. The Room writer checks companion availability before appending a USER.
+
+Checkpoint fixtures now retain nonempty incorporation/provider-output/compaction fields and inject pre-write, file-sync, rename and readback failures. A package-private CENTRAL-only fault seam defaults to no-op; ordinary Crew writes are unchanged. Explicit suspension recovery additionally supplies the current canonical storage generation to the native snapshot reader. Same-files lifetime reset and blob-commit/park-failure behavior remain required native integration acceptance. No gate has been enabled.

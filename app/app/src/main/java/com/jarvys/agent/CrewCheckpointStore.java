@@ -43,6 +43,13 @@ public final class CrewCheckpointStore {
     private final File filesDirectory;
     private final DirectorySyncFaultInjector directorySyncFaultInjector;
     private final Consumer<Throwable> databaseFailureReporter;
+    private final CentralYieldWriteFaultInjector centralYieldWriteFaultInjector;
+
+    /** CENTRAL_YIELD test-only fault boundaries; ordinary Crew checkpoint writes never invoke this. */
+    enum CentralYieldWriteStage { BEFORE_WRITE, BEFORE_FILE_SYNC, BEFORE_RENAME }
+    interface CentralYieldWriteFaultInjector {
+        void beforeStage(CentralYieldWriteStage stage, File pending, File target) throws IOException;
+    }
 
     /** Package-private failure seam; production always performs the real directory fsync. */
     interface DirectorySyncFaultInjector {
@@ -89,11 +96,15 @@ public final class CrewCheckpointStore {
                 File pending=File.createTempFile("central-yield-pending-",".json",directory);
                 verify(pending);
                 try(FileOutputStream output=new FileOutputStream(pending)){
-                    output.write(envelope);output.flush();output.getFD().sync();
+                    centralYieldWriteFaultInjector.beforeStage(CentralYieldWriteStage.BEFORE_WRITE,pending,target);
+                    output.write(envelope);output.flush();
+                    centralYieldWriteFaultInjector.beforeStage(CentralYieldWriteStage.BEFORE_FILE_SYNC,pending,target);
+                    output.getFD().sync();
                 }
                 requireActive(session);verify(directory);verify(target);verify(pending);
                 // Session lock serializes native writers. A different existing immutable target is never replaced.
                 if(target.exists())throw new IOException("Immutable yield checkpoint appeared during write");
+                centralYieldWriteFaultInjector.beforeStage(CentralYieldWriteStage.BEFORE_RENAME,pending,target);
                 atomicReplace(pending,target);
                 syncDirectoryChain(directory);
                 return readCentralYieldConfirmedLocked(session,reference,hash);
@@ -327,6 +338,13 @@ public final class CrewCheckpointStore {
 
     CrewCheckpointStore(File filesDirectory, DirectorySyncFaultInjector directorySyncFaultInjector,
             Consumer<Throwable> databaseFailureReporter) {
+        this(filesDirectory,directorySyncFaultInjector,databaseFailureReporter,(stage,pending,target)->{});
+    }
+
+    CrewCheckpointStore(File filesDirectory, DirectorySyncFaultInjector directorySyncFaultInjector,
+            Consumer<Throwable> databaseFailureReporter, CentralYieldWriteFaultInjector centralYieldWriteFaultInjector) {
+        if(centralYieldWriteFaultInjector==null)throw new IllegalArgumentException("Native yield write hook is required");
+        this.centralYieldWriteFaultInjector=centralYieldWriteFaultInjector;
         if (directorySyncFaultInjector == null) throw new IllegalArgumentException("Directory sync hook is required");
         try {
             this.filesDirectory = filesDirectory.getCanonicalFile();

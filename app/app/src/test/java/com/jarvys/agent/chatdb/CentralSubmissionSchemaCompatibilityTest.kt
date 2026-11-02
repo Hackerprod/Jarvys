@@ -156,4 +156,111 @@ class CentralSubmissionSchemaCompatibilityTest {
             assertArrayEquals(before,file.readBytes())
         }
     }
+    @Test fun cachedNativeWalReaderRetainsItsV2SnapshotThenObservesExactV3WithoutLostRows() {
+        val file=file("submission-cached-wal");create(file,2)
+        open(file).use { writer ->
+            writer.execSQL("PRAGMA journal_mode=WAL")
+            val before=rows(writer,2)
+            open(file).use { reader ->
+                reader.execSQL("BEGIN")
+                assertEquals(2L,scalar(reader,"PRAGMA user_version"))
+                reader.prepare("SELECT COUNT(*) FROM messages").use { cached ->
+                    assertTrue(cached.step());val count=cached.getLong(0);cached.reset()
+                    RoomCentralSubmissionUpgrade.upgrade(writer,v3Identity)
+                    assertEquals(2L,scalar(reader,"PRAGMA user_version"));assertEquals(before,rows(reader,2))
+                    assertTrue(cached.step());assertEquals(count,cached.getLong(0));cached.reset()
+                    reader.execSQL("COMMIT")
+                    assertTrue(cached.step());assertEquals(count,cached.getLong(0))
+                    assertEquals(3,RoomTreeProvenanceSchema.validate(reader,v3Identity,false));assertEquals(before,rows(reader,2))
+                }
+            }
+        }
+    }
+    private fun isolatedContext(name:String):android.content.Context {
+        val files=File(chat.newFilesDirectory(name),"files");check(files.mkdirs());chat.localRunStore(files)
+        return object:android.content.ContextWrapper(context) {
+            override fun getApplicationContext():android.content.Context=this
+            override fun getFilesDir():File=files
+            override fun getApplicationInfo():android.content.pm.ApplicationInfo=android.content.pm.ApplicationInfo(super.getApplicationInfo()).also {it.dataDir=files.parentFile!!.absolutePath}
+        }
+    }
+    private fun seedValidNativeV2(ownerContext:android.content.Context):Pair<File,String> {
+        val file=File(com.jarvys.agent.StorageGeneration(ownerContext).chatRoot(),"agent.db")
+        check(file.parentFile!!.isDirectory || file.parentFile!!.mkdirs());create(file,2,false)
+        val room=JarvysChatDatabaseProvider.openDatabaseFileForTests(ownerContext,file,true,false)
+        val message=try {
+            kotlinx.coroutines.runBlocking {
+                val result=ConversationRepository(room).appendMessage(AppendMessageInput(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION,"user",listOf(MessagePartInput("text","Valid native retained USER \u0000 Ω"))))
+                (result as ChatDbResult.Success).value
+            }
+        } finally {JarvysChatDatabaseProvider.closeDatabaseFileForTests(room)}
+        return file to message.messageId
+    }
+    @Test fun populatedNativeV2ProviderWithAllAuxiliaryObjectsUpgradesAndReopensExactV3() {
+        val owner=isolatedContext("native-v2-to-v3");val (file,user)=seedValidNativeV2(owner)
+        val before=open(file).use { db ->
+            assertFalse(DriverChatSqlDatabase(db).query("PRAGMA foreign_key_check").use {it.moveToFirst()})
+            rows(db,2)
+        }
+        fun objects()=open(file).use {db ->DriverChatSqlDatabase(db).query("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").use {c ->buildList {while(c.moveToNext())add((0 until c.columnCount).map {if(c.isNull(it))null else c.getString(it)})}}}
+        val oldObjects=objects();assertTrue(oldObjects.any {it[1]=="idx_memory_entries_topic_active"})
+        val upgraded=JarvysChatDatabaseProvider.openDatabaseFileForTests(owner,file,true,true)
+        try {
+            assertTrue(upgraded is JarvysChatDatabaseV3)
+            assertEquals("user",kotlinx.coroutines.runBlocking {upgraded.messageDao().getById(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION,user)}!!.role)
+        } finally {JarvysChatDatabaseProvider.closeDatabaseFileForTests(upgraded)}
+        assertEquals(oldObjects,objects().filterNot {it[2]=="central_turn_submissions"})
+        open(file).use {db ->assertEquals(before,rows(db,2));assertFalse(DriverChatSqlDatabase(db).query("PRAGMA foreign_key_check").use {it.moveToFirst()});assertEquals(0L,scalar(db,"SELECT COUNT(*) FROM central_turn_submissions"))}
+        val reopened=JarvysChatDatabaseProvider.getInstance(owner)
+        try {assertTrue(reopened is JarvysChatDatabaseV3)} finally {JarvysChatDatabaseProvider.closeDatabaseFileForTests(reopened)}
+    }
+    @Test fun actualDoctorObservationAndMemoryExportReadUpgradedV3WithoutQueueOrMemoryWrites() {
+        val owner=isolatedContext("v3-doctor-export");val (file,user)=seedValidNativeV2(owner)
+        val upgraded=JarvysChatDatabaseProvider.openDatabaseFileForTests(owner,file,true,true)
+        JarvysChatDatabaseProvider.closeDatabaseFileForTests(upgraded)
+        val db=JarvysChatDatabaseProvider.getInstance(owner)
+        try {
+            val before=open(file).use {rows(it,2)}
+            val count=JarvysChatDatabaseProvider.observeOpenForDoctor(owner,com.jarvys.agent.CancellationToken.cancellable()) { sql,requireCurrent ->
+                val n=sql.query("SELECT COUNT(*) FROM messages WHERE message_id=?",arrayOf(user)).use {check(it.moveToFirst());it.getLong(0)}
+                assertEquals(0L,sql.query("SELECT COUNT(*) FROM central_turn_submissions").use {check(it.moveToFirst());it.getLong(0)})
+                requireCurrent();n
+            }
+            assertEquals(1L,count)
+            com.jarvys.agent.workspaces.WorkspaceRegistry(owner).use {it.createWorkspace("export-owner","Export owner")}
+            val namespace=MemoryNamespace.resolve(owner,MemoryNamespace.CENTRAL,null,null,true,true)
+            val output=java.io.ByteArrayOutputStream()
+            val exported=kotlinx.coroutines.runBlocking {MemoryExportRepository(db,owner).render(namespace,com.jarvys.agent.MemoryExportOptions(),"2026-11-02T00:00:00.000Z",com.jarvys.agent.CancellationToken.cancellable()){output}}
+            assertTrue(output.size()>0);assertEquals(output.size().toLong(),exported.sizeBytes)
+            assertFalse(output.toString("UTF-8").contains("central_turn_submissions"))
+            open(file).use {assertEquals(before,rows(it,2));assertEquals(0L,scalar(it,"SELECT COUNT(*) FROM central_turn_submissions"));assertEquals(3,RoomTreeProvenanceSchema.validate(it,v3Identity,false))}
+        } finally {JarvysChatDatabaseProvider.closeDatabaseFileForTests(db)}
+    }
+    @Test fun independentlyUpgradedMixedCapabilitiesRemainReadOnlyAndAdmissionOff() {
+        for(roomReady in listOf(false,true)) {
+            context.deleteDatabase(com.jarvys.agent.workspaces.WorkspaceRegistry.DATABASE_NAME)
+            val owner=isolatedContext("mixed-capability-$roomReady");val (file,_)=seedValidNativeV2(owner)
+            if(roomReady) {val db=JarvysChatDatabaseProvider.openDatabaseFileForTests(owner,file,true,true);JarvysChatDatabaseProvider.closeDatabaseFileForTests(db)}
+            com.jarvys.agent.workspaces.WorkspaceRegistry(owner).use {registry ->
+                registry.upgradeTreeSchema();if(!roomReady)registry.upgradeCentralResumeSchema()
+                val registryBefore=registry.schemaVersion()
+                val roomBefore=open(file).use {rows(it,2)}
+                assertEquals(roomReady,JarvysChatDatabaseProvider.currentSubmissionSchemaReady(owner))
+                assertEquals(!roomReady,registry.schemaVersion()==3)
+                if(!com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled() || roomReady)
+                    assertThrows(IllegalStateException::class.java) {com.jarvys.agent.CentralAvailabilityPolicy.requireRegistrySchemaReady(owner)}
+                if(!roomReady) {
+                    val room=JarvysChatDatabaseProvider.openDatabaseFileForTests(owner,file,true,false)
+                    try {
+                        val writer=ConversationModelTurnWriter(room,ConversationRepository(room),ModelTranscriptRepository(room))
+                        val input=AppendMessageInput(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION,"user",listOf(MessagePartInput("text","must not append"),MessagePartInput(CentralSubmissionRequest.PART_KIND,CentralSubmissionRequest.encode(emptyList()))),stableId="missing-room-capability")
+                        assertThrows(IllegalStateException::class.java) {kotlinx.coroutines.runBlocking {writer.appendPreparedCentralSubmission(input,"missing-room-capability","process")}}
+                    } finally {JarvysChatDatabaseProvider.closeDatabaseFileForTests(room)}
+                }
+                assertEquals(registryBefore,registry.schemaVersion())
+                open(file).use {assertEquals(if(roomReady)3L else 2L,scalar(it,"PRAGMA user_version"));assertEquals(roomBefore,rows(it,2))}
+            }
+            context.deleteDatabase(com.jarvys.agent.workspaces.WorkspaceRegistry.DATABASE_NAME)
+        }
+    }
 }

@@ -146,4 +146,78 @@ public class CentralYieldCheckpointStoreTest {
         assertTrue(target(root,saved.referenceId()).isFile());
     }
 
+    @Test public void corruptReadbackAfterRenameNeverReturnsConfirmedEvidence() throws Exception {
+        File root=root();AtomicBoolean corruptOnce=new AtomicBoolean(true);
+        CrewCheckpointStore store=new CrewCheckpointStore(root,directory->{
+            if(directory.getName().equals("central-yields") && corruptOnce.compareAndSet(true,false)) {
+                File[] committed=directory.listFiles((parent,name)->name.matches("[0-9a-f]{64}\\.json"));
+                assertNotNull(committed);assertEquals(1,committed.length);
+                Files.write(committed[0].toPath(),"corrupt-before-readback".getBytes(StandardCharsets.UTF_8));
+            }
+        });
+        assertThrows(IllegalStateException.class,()->store.saveCentralYieldConfirmed(SESSION,identity(),loop()));
+        assertFalse(corruptOnce.get());
+        assertFalse(store.listIssues(SESSION).isEmpty());
+        File directory=new File(new StorageGeneration(root).directory("crew-context"),
+            CrewCheckpointStore.digest(SESSION.getBytes(StandardCharsets.UTF_8))+"/central-yields");
+        File[] committed=directory.listFiles((parent,name)->name.matches("[0-9a-f]{64}\\.json"));
+        assertNotNull(committed);assertEquals(1,committed.length);
+        assertEquals("corrupt-before-readback",new String(Files.readAllBytes(committed[0].toPath()),StandardCharsets.UTF_8));
+    }
+
+    @Test public void emptyPartialAndFullyWrittenPendingCrashResiduesNeverBecomeConfirmedEvidence() throws Exception {
+        // Simulate on-disk crash states, not an injected JVM failure inside write/fsync/rename.
+        // No authority is inferred from even a complete valid envelope without the committed path.
+        for(int residue=0;residue<3;residue++) {
+            File root=root();CrewCheckpointStore store=new CrewCheckpointStore(root);
+            CrewCheckpointStore.ConfirmedCentralYieldSnapshot saved=store.saveCentralYieldConfirmed(SESSION,identity(),loop());
+            File committed=target(root,saved.referenceId());byte[] bytes=Files.readAllBytes(committed.toPath());
+            assertTrue(committed.delete());
+            File pending=new File(committed.getParentFile(),"central-yield-pending-simulated.json");
+            Files.write(pending.toPath(),residue==0?new byte[0]:residue==1?Arrays.copyOf(bytes,bytes.length/2):bytes);
+            byte[] original=Files.readAllBytes(pending.toPath());
+            CrewCheckpointStore reopened=new CrewCheckpointStore(root);
+            assertThrows(IllegalStateException.class,()->reopened.readCentralYieldConfirmed(SESSION,saved.referenceId(),saved.payloadSha256()));
+            assertFalse(reopened.listIssues(SESSION).isEmpty());
+            assertArrayEquals(original,Files.readAllBytes(pending.toPath()));
+            assertFalse(committed.exists());
+        }
+    }
+
+    @Test public void invalidNamespaceFailsBeforeAnyCheckpointFileWrite() throws Exception {
+        File root=root();CrewCheckpointStore store=new CrewCheckpointStore(root);
+        File directory=new File(new StorageGeneration(root).directory("crew-context"),
+            CrewCheckpointStore.digest(SESSION.getBytes(StandardCharsets.UTF_8))+"/central-yields");
+        assertTrue(directory.getParentFile().mkdirs());
+        Files.write(directory.toPath(),"not-a-directory".getBytes(StandardCharsets.UTF_8));
+        assertThrows(IllegalStateException.class,()->store.saveCentralYieldConfirmed(SESSION,identity(),loop()));
+        assertEquals("not-a-directory",new String(Files.readAllBytes(directory.toPath()),StandardCharsets.UTF_8));
+    }
+
+    @Test public void injectedWriteSyncAndRenameBoundariesLeaveOnlyUnconfirmedOrphans() throws Exception {
+        for(CrewCheckpointStore.CentralYieldWriteStage failing:CrewCheckpointStore.CentralYieldWriteStage.values()) {
+            File root=root();java.util.concurrent.atomic.AtomicReference<File> retained=new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicReference<File> targetPath=new java.util.concurrent.atomic.AtomicReference<>();
+            CrewCheckpointStore store=new CrewCheckpointStore(root,directory->{},null,(stage,pending,target)->{
+                if(stage==failing) {
+                    assertTrue(Thread.holdsLock(ConversationMetadataAccess.lockForSession(SESSION)));
+                    assertTrue(pending.isFile());assertFalse(target.exists());
+                    if(stage==CrewCheckpointStore.CentralYieldWriteStage.BEFORE_WRITE)assertEquals(0L,pending.length());
+                    else assertTrue(pending.length()>0L);
+                    retained.set(pending);targetPath.set(target);
+                    throw new IOException("injected native checkpoint stage "+stage);
+                }
+            });
+            assertThrows(IllegalStateException.class,()->store.saveCentralYieldConfirmed(SESSION,identity(),loop()));
+            assertNotNull(retained.get());assertNotNull(targetPath.get());
+            byte[] original=Files.readAllBytes(retained.get().toPath());
+            String hash=targetPath.get().getName().replace(".json","");
+            CrewCheckpointStore reopened=new CrewCheckpointStore(root);
+            assertThrows(IllegalStateException.class,()->reopened.readCentralYieldConfirmed(SESSION,"central-yield-v1:"+hash,hash));
+            assertFalse(reopened.listIssues(SESSION).isEmpty());
+            assertArrayEquals(original,Files.readAllBytes(retained.get().toPath()));
+            assertFalse(targetPath.get().exists());
+        }
+    }
+
 }

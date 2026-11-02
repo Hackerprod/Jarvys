@@ -195,4 +195,19 @@ class CentralSubmissionPersistenceTest {
         assertEquals(emptyList<String>(),CentralSubmissionRequest.decode(CentralSubmissionRequest.encode(emptyList())))
         assertEquals(listOf("actual-selection"),CentralSubmissionRequest.decode(CentralSubmissionRequest.encode(listOf("actual-selection"))))
     }
+    @Test fun nativeSubmissionForeignKeyRejectsOrphanAndCascadesInsideRollbackWithoutDeletingHistory()=work {
+        val row=prepared("foreign-key",attachment=true)
+        rejected {db.withChatWriteTransaction {db.chatSql.execSQL("UPDATE central_turn_submissions SET user_message_id='missing' WHERE conversation_id=? AND submission_id=?",arrayOf(session,row.submissionId))}}
+        assertEquals(row,read(row.submissionId))
+        var inspected=false
+        try {db.withChatWriteTransaction {
+            db.chatSql.execSQL("DELETE FROM messages WHERE conversation_id=? AND message_id=?",arrayOf(session,row.userMessageId))
+            assertNull(CentralTurnSubmissionRepository(db).find(session,row.submissionId))
+            assertNull(ConversationRepository(db).getMessage(session,row.userMessageId))
+            inspected=true
+            error("rollback inspected cascade")
+        }} catch(expected:IllegalStateException) {assertEquals("rollback inspected cascade",expected.message)}
+        assertTrue("Real native cascade must be observed before rollback",inspected)
+        assertEquals(row,read(row.submissionId));assertEquals(1,ConversationRepository(db).getMessage(session,row.userMessageId)!!.attachments.size)
+    }
 }

@@ -275,7 +275,7 @@ public final class CentralTreeAdmission implements AutoCloseable {
         try {
             org.json.JSONObject certificate=new org.json.JSONObject(selected.row.getCertificate());
             CrewCheckpointStore.ConfirmedCentralYieldSnapshot snapshot=new CrewCheckpointStore(context.getFilesDir()).readCentralYieldConfirmed(
-                selected.getSessionId(),certificate.getString("checkpointReferenceId"),certificate.getString("checkpointDigest"));
+                selected.getSessionId(),certificate.getString("checkpointReferenceId"),certificate.getString("checkpointDigest"),source.getStorageGeneration());
             restored=MainChatTranscriptStore.recoveredYield(Objects.requireNonNull(snapshot),selected.row.getCertificate());
         }catch(org.json.JSONException failure){throw new IllegalStateException("Recovery certificate malformed",failure);}
         if(!restored.rootId().equals(selected.row.getRootId()) || !restored.oldCycleId().equals(selected.getRootCycle()))
