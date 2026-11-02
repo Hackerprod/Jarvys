@@ -77,10 +77,12 @@ class WorkspaceTreeP1PreclaimTest {
                 assertThrows(WorkspaceContinuationDelivery.AdmissionIneligible::class.java) { WorkspaceContinuationDelivery.claim(f.context,input,CancellationToken.crewChild()) }
                 assertEquals(before,e.record().toString())
                 e.park();assertTrue(WorkspaceContinuationDelivery.isPendingDispatchEligible(f.context,input))
+                assertEquals("Eligibility read must not upgrade retained v99 Registry",2,e.registry.schemaVersion())
                 val token=CancellationToken.crewChild();assertTrue(WorkspaceContinuationDelivery.claim(f.context,input,token))
+                if(CentralAvailabilityPolicy.admissionEnabled())assertEquals(3,e.registry.schemaVersion())
                 val claim=WorkspaceContinuationDelivery.claimedRunId(f.context,input,token)
                 val parent=e.core.getNode(e.root.rootId,e.root.nodeId)!!
-                WorkspaceTreeCentralStore(e.core).attach(TreeNodeFence.of(parent),"claimed-process:18","claimed-source",claim,true,e.child.nodeId)
+                WorkspaceTreeCentralStore(e.core).attach(TreeNodeFence.of(parent),CrewProcessIdentity.ID+":"+token.generation(),"claimed-source",claim,true,e.child.nodeId)
                 // Postclaim runtime identity is valid after root transitions to RUNNING, not only WAITING.
                 assertEquals(claim,WorkspaceContinuationDelivery.claimedRunId(f.context,input,token))
                 assertFalse(WorkspaceContinuationDelivery.claim(f.context,input,CancellationToken.crewChild()))
@@ -111,6 +113,19 @@ class WorkspaceTreeP1PreclaimTest {
                 assertEquals("STARTED",e.record().getString("dispatchState"))
                 assertFalse(WorkspaceContinuationDelivery.claim(f.context,input,CancellationToken.crewChild()))
             } finally { e.registry.close() }
+        }
+    }
+    @Test fun retainedV99RegistryCannotUpgradeOrConsumeP1WithoutExactLiveAuthority() {
+        WorkspaceMemoryFixture(storage).use {f ->
+            val e=Episode(f)
+            try {
+                e.publish();e.park()
+                val before=e.record().toString();val input=e.input()
+                assertThrows(IllegalStateException::class.java) {WorkspaceContinuationDelivery.claim(f.context,input,CancellationToken.crewChild())}
+                assertEquals(2,e.registry.schemaVersion());assertEquals(before,e.record().toString())
+                assertEquals("PREPARED",e.record().getString("dispatchState"))
+                e.registry.treeRead {db ->db.rawQuery("SELECT COUNT(*) FROM sqlite_master WHERE name='bot_tree_central_resume'",null).use {assertTrue(it.moveToFirst());assertEquals(0,it.getInt(0))}}
+            }finally{e.registry.close()}
         }
     }
     @Test fun historicalV98AssignmentIsNotEnrolledOrUpgradedByPreclaimRead() {

@@ -68,6 +68,7 @@ class CentralWorkspaceToolTest {
     private class Backend : CentralWorkspaceTool.Backend {
         val calls = mutableListOf<Call>()
         var entries = 0
+        var automaticDelegateEntries = 0
         var beforeAdmission: () -> Unit = {}
         var afterAdmission: () -> Unit = {}
         var result: () -> JSONObject = { JSONObject().put("status", "recorded") }
@@ -93,6 +94,14 @@ class CentralWorkspaceToolTest {
             invoke("delegate", mapOf("workspaceId" to workspaceId, "key" to key, "role" to role,
                 "mission" to mission, "tools" to tools, "name" to name, "missionAccess" to missionAccess,
                 "requestId" to requestId, "originalUserRequest" to originalUserRequest), admission, token)
+        override fun delegateAutomatic(workspaceId:String,key:String,role:String,mission:String,
+            tools:List<String>?,name:String?,missionAccess:String,requestId:String,originalUserRequest:String,
+            token:CancellationToken,admission:Runnable,context:WorkspaceMutationContext?):JSONObject {
+            automaticDelegateEntries++
+            // This mock verifies parser/admission/error/disclosure behavior, not persistence or permission.
+            // Both native delegation choices share the same faithful mock admission boundary and payload capture.
+            return delegate(workspaceId,key,role,mission,tools,name,missionAccess,requestId,originalUserRequest,token,admission)
+        }
         override fun inspect(workspaceId: String, path: String, token: CancellationToken, admission: Runnable) =
             invoke("inspect_file", mapOf("workspaceId" to workspaceId, "path" to path), admission, token)
         override fun deliver(workspaceId: String, path: String, expectedSha256: String, filename: String?,
@@ -192,6 +201,7 @@ class CentralWorkspaceToolTest {
         assertEquals(20, backend.calls[1].values["limit"])
         assertEquals(20, backend.calls[3].values["limit"])
         assertEquals("standard", backend.calls[2].values["missionAccess"])
+        assertEquals(if(com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled()) 1 else 0,backend.automaticDelegateEntries)
         assertNull(backend.calls[2].values["tools"])
         assertSame(token, backend.calls[2].token)
         assertSame(token, backend.calls[4].token)

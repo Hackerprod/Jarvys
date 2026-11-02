@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Real serial service/runtime with a provider that cannot physically unwind until released. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk=[34],application=TreeNativeTestApplication::class,shadows=[ArtifactOsShadow::class])
+@Config(sdk=[34],application=TreeNativeTestApplication::class,shadows=[ArtifactOsShadow::class,CentralStopFreshUserTest.StopFailureObservation::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class CentralStopFreshUserTest {
     private val storage=ChatTestStore(runTestOnWorker=false,registerApplicationFilesDirectory=true)
@@ -39,7 +39,27 @@ class CentralStopFreshUserTest {
     private val heldToken=java.util.concurrent.atomic.AtomicReference<CancellationToken>()
     private val runtimeFailure=java.util.concurrent.atomic.AtomicReference<Throwable>()
     private var startId=0
+    @org.robolectric.annotation.Implements(AgentErrorReporter::class)
+    class StopFailureObservation {
+        companion object {
+            val failures=java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+            @JvmStatic @org.robolectric.annotation.Implementation
+            fun reportChatDatabaseFailure(context:Context?,failure:Throwable?) {
+                if(context==null || failure==null)return
+                failures.add(failure)
+                // Observe the real failure without replacing the production diagnostic behavior.
+                LocalDiagnostics.recoverable(context,LocalDiagnostics.Origin.ACTIVITY,failure)
+            }
+        }
+    }
+    private fun assertActualStopInsertFault() {
+        assertTrue("Actual STOP INSERT fault must fire, not schema validation or an earlier failure",
+            StopFailureObservation.failures.any {failure ->
+                generateSequence(failure as Throwable?) {it.cause}.any {it.message.orEmpty().contains("fixture_stop_failure")}
+            })
+    }
     @Before fun setup() {
+        StopFailureObservation.failures.clear()
         storage.localRunStore(context.filesDir)
         storage.onDatabaseWorker {
             FreshStorageBootstrap.ensure(context)
@@ -166,8 +186,9 @@ class CentralStopFreshUserTest {
     @Test fun directStoredUserWaitsInOriginalLaneUntilExactStopCommitCanRecover() {
         startHeld()
         val captured=submit("Captured before failed direct STOP")
-        sql("CREATE TRIGGER fixture_stop_abort BEFORE INSERT ON messages WHEN NEW.role='assistant' AND NEW.owner_user_message_id='$captured' BEGIN SELECT RAISE(ABORT,'fixture_stop_failure'); END")
+        sql("CREATE TEMP TRIGGER fixture_stop_abort BEFORE INSERT ON main.messages WHEN NEW.role='assistant' AND NEW.owner_user_message_id='$captured' BEGIN SELECT RAISE(ABORT,'fixture_stop_failure'); END")
         stop()
+        assertActualStopInsertFault()
         val fresh=storage.onDatabaseWorker {LocalRunStore(context).appendConversationMessage(session,"user","Fresh direct stored USER")}
         service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context,session,fresh),0,++startId)
         release.countDown()
@@ -175,7 +196,7 @@ class CentralStopFreshUserTest {
         assertEquals(1,calls.get())
         assertNull(storage.onDatabaseWorker {LocalRunStore(context).readConversationInputState(session,fresh)})
         assertFalse(rows().any {it.optString("role")=="assistant" && it.optString("userMessageId")==fresh})
-        sql("DROP TRIGGER fixture_stop_abort")
+        sql("DROP TRIGGER temp.fixture_stop_abort")
         storage.onDatabaseWorker {service.runPendingInputRecoverySafely(session)}
         await("Original queued stored USER completes"){rows().any {it.optString("role")=="assistant" && it.optString("userMessageId")==fresh && it.optString("status")=="COMPLETED"}}
         await("Serial lane idle"){!AgentForegroundService.hasActiveRun(session)}
@@ -186,8 +207,9 @@ class CentralStopFreshUserTest {
     @Test fun failedStopPersistenceDoesNotCancelFreshInputOrReplayCapturedInput() {
         startHeld()
         val captured=submit("Captured before failing STOP")
-        sql("CREATE TRIGGER fixture_stop_abort BEFORE INSERT ON messages WHEN NEW.role='assistant' AND NEW.owner_user_message_id='$captured' BEGIN SELECT RAISE(ABORT,'fixture_stop_failure'); END")
+        sql("CREATE TEMP TRIGGER fixture_stop_abort BEFORE INSERT ON main.messages WHEN NEW.role='assistant' AND NEW.owner_user_message_id='$captured' BEGIN SELECT RAISE(ABORT,'fixture_stop_failure'); END")
         stop()
+        assertActualStopInsertFault()
         val fresh=submit("Fresh after failed STOP")
         assertNull(storage.onDatabaseWorker {LocalRunStore(context).readConversationInputState(session,fresh)})
         assertNull(storage.onDatabaseWorker {LocalRunStore(context).readConversationInputState(session,captured)})
@@ -198,7 +220,7 @@ class CentralStopFreshUserTest {
         assertEquals("Unresolved captured STOP must not infer a replay",1,calls.get())
         assertFalse(rows().any {it.optString("role")=="assistant" && it.optString("userMessageId")==fresh})
         assertNull(storage.onDatabaseWorker {LocalRunStore(context).readConversationInputState(session,fresh)})
-        sql("DROP TRIGGER fixture_stop_abort")
+        sql("DROP TRIGGER temp.fixture_stop_abort")
         storage.onDatabaseWorker {service.runPendingInputRecoverySafely(session)}
         await("Fresh completion after exact captured cancellation retry"){rows().any {it.optString("role")=="assistant" && it.optString("userMessageId")==fresh && it.optString("status")=="COMPLETED"}}
         await("Serial lane idle"){!AgentForegroundService.hasActiveRun(session)}

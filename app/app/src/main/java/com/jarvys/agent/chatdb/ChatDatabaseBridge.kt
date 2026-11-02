@@ -1844,7 +1844,12 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         executeOwnedOnWorker(operation?.let { it::fail }, operation?.let { it::close }, interruptedObserver, block)
 
     private fun <T> executeOwnedOnWorker(onFailure: ((Throwable) -> Unit)?, onFinished: (() -> Unit)?,
-        interruptedObserver: (() -> Unit)?, block: (Repositories) -> T): T {
+        interruptedObserver: (() -> Unit)?, block: (Repositories) -> T): T =
+        executeOwnedCallable(onFailure,onFinished,interruptedObserver) { block(repositories()) }
+
+    /** Same native executor and guards, but read-only inspection need not create/open a provider. */
+    private fun <T> executeOwnedCallable(onFailure: ((Throwable) -> Unit)?, onFinished: (() -> Unit)?,
+        interruptedObserver: (() -> Unit)?, block: () -> T): T {
         val ownership = java.util.concurrent.atomic.AtomicInteger(0)
         val pending = try {
             ChatSqlBeforeWriteGuard.checkRepositoryAccess()
@@ -1859,7 +1864,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
                 check(!closingForTests) { "ChatDatabaseBridge test instance is closed" }
                 executor.submit(Callable {
                     check(ownership.compareAndSet(0, 1)) { "Bridge operation was rejected before worker claim" }
-                    try { block(repositories()) }
+                    try { block() }
                     catch (failure: Throwable) { onFailure?.invoke(failure); throw failure }
                     finally { onFinished?.invoke() } // Block has released all Room leases/anchor fences.
                 })
@@ -2056,7 +2061,24 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         }
     }
     /** Strict read-only file inspection; no provider creation, migration or capability mint. */
-    fun centralSubmissionSchemaReadySync():Boolean = JarvysChatDatabaseProvider.currentSubmissionSchemaReady(applicationContext)
+    fun centralSubmissionSchemaReadySync():Boolean = executeOwnedCallable(null,null,null) {
+        JarvysChatDatabaseProvider.currentSubmissionSchemaReady(applicationContext)
+    }
+    /** UI evidence only. Room lease ends before Registry inspection; no live admission locks in the worker. */
+    fun readCentralAvailabilityUiEvidenceSync(sessionId:String,assistantIds:List<String>):com.jarvys.agent.CentralAvailabilityUiEvidence? = executeOwnedCallable(null,null,null) {
+        if(!com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled() ||
+            !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId) ||
+            !JarvysChatDatabaseProvider.currentSubmissionSchemaReady(applicationContext)) return@executeOwnedCallable null
+        val repos=repositories()
+        val room=runBlocking {repos.database.withChatReadTransaction {
+            val rows=CentralTurnSubmissionRepository(repos.database).list(sessionId)
+            val owners=linkedMapOf<String,String>()
+            for(id in assistantIds.distinct()) owners[id]=repos.reader.assistantOwnerUserMessageId(sessionId,id)
+            rows to owners
+        }}
+        val resumes=com.jarvys.agent.CentralTreeAdmission.listRecoverableSuspensions(applicationContext,sessionId)
+        com.jarvys.agent.CentralAvailabilityUiEvidence(room.first,resumes,room.second)
+    }
     fun captureCentralSubmissionCohortSync(sessionId:String):CentralSubmissionCohortSnapshot = executeOnWorker { repos ->
         val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
         anchor.fenced {

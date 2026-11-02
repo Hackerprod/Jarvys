@@ -23,6 +23,19 @@ internal object WorkspaceTreeP1Preclaim {
         val eligible=requireEligible(context,value) ?: return null
         if(!com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled())return eligible
         return WorkspaceRegistry(context).use{registry->
+            // Only the actual P1 claim reaches this path, after its exact live permit and payload
+            // were validated. Read-only eligibility inspection above never upgrades or enrolls.
+            check(LocalRunStore(context).centralSubmissionSchemaReady()) {"Central submission companion schema not ready"}
+            if(registry.schemaVersion()!=3) {
+                check(com.jarvys.agent.CentralAvailabilityPolicy.registryMigrationEnabled()) {"Central resume migration disabled"}
+                eligible.requireNotStopped();token.throwIfCancelled()
+                registry.upgradeCentralResumeSchema()
+                token.throwIfCancelled()
+                val rechecked=requireNotNull(requireEligible(context,value))
+                check(rechecked.storage==eligible.storage && rechecked.rootId==eligible.rootId && rechecked.rootCycle==eligible.rootCycle) {
+                    "P1 original root changed during compatible schema upgrade"
+                }
+            }
             check(registry.schemaVersion()==3){"Central resume schema not ready"}
             val core=WorkspaceTreeStore(registry)
             val parent=requireNotNull(core.getNode(eligible.rootId,eligible.rootId))

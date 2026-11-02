@@ -339,7 +339,8 @@ class CentralWorkspaceCoordinationToolTest {
         assertEquals(0, backend.entries)
         val old = listOf(mapOf<String, Any>("action" to "create", "key" to "old-key", "title" to "Old workspace"),
             mapOf("action" to "list"),
-            mapOf("action" to "delegate", "workspace_id" to workspace, "key" to "old-delegate", "role" to "reviewer", "mission" to "Review"),
+            // This deliberately old-backend compatibility case explicitly selects its original noncontinuing contract.
+            mapOf("action" to "delegate", "workspace_id" to workspace, "key" to "old-delegate", "role" to "reviewer", "mission" to "Review", "continue_result" to false),
             mapOf("action" to "read", "workspace_id" to workspace),
             mapOf("action" to "inspect_file", "workspace_id" to workspace, "path" to "report.txt"),
             mapOf("action" to "deliver", "workspace_id" to workspace, "path" to "report.txt", "expected_sha256" to sha),

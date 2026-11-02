@@ -408,10 +408,42 @@ public final class CentralTreeAdmission implements AutoCloseable {
         private volatile boolean bound;
         private volatile boolean invalid;
         private String successorCertificate;
+        private final Runnable unregisterReservationStop;
+        private final AtomicBoolean reservationStopReleased=new AtomicBoolean();
         private MainChatTranscriptStore checkpointSourceWitness;
         private volatile CentralResumeRecord boundRecord;
         private SuspensionClaim(SuspensionPermit permit,CentralResumeRecord reservation,CancellationToken token,String originalRun){
             this.permit=permit;this.reservation=reservation;this.token=token;this.originalRun=originalRun;
+            // Denial only: no Room/Registry work, no callbacks into service admission locks.
+            unregisterReservationStop=token.registerCancelAction(()->{
+                if(token.wasStoppedByUser())latchReservedStop();
+            });
+        }
+        private void latchReservedStop() {
+            WorkspaceTreeStops.latchRoot(permit.context,rootId(),reservation.getParentCycle());
+            WorkspaceTreeStops.latchRoot(permit.context,rootId(),cycleId());
+        }
+        void latchStoppedOwner(CancellationToken expected) {
+            if(expected!=token || !token.wasStoppedByUser() || !permit.process.equals(CrewProcessIdentity.ID)
+                || !permit.process.equals(reservation.getOwnerProcess())
+                || !Long.toString(token.generation()).equals(reservation.getOwnerToken())
+                || !cycleId().equals(permit.process+":"+token.generation()))
+                throw new IllegalStateException("Stopped suspension owner changed");
+            latchReservedStop();
+        }
+        void stopReservedOwner(CancellationToken expected) {
+            latchStoppedOwner(expected);
+            // Exact predecessor source/cycle/stop-epoch checked by existing native stop method.
+            // If bind already moved the node, predecessor stop is a no-op and current owner closes it.
+            RuntimeException failure=null;
+            try {permit.stopFromNativeBoundary();}catch(RuntimeException predecessorFailure){failure=predecessorFailure;}
+            CentralTreeAdmission current=successor;
+            if(current!=null)try {current.stopOwnedRoot(permit.context);}
+            catch(RuntimeException successorFailure){if(failure==null)failure=successorFailure;else if(failure!=successorFailure)failure.addSuppressed(successorFailure);}
+            if(failure!=null)throw failure;
+        }
+        void releasePhysicalOwner() {
+            if(reservationStopReleased.compareAndSet(false,true))unregisterReservationStop.run();
         }
         public String resumeId(){return reservation.getResumeId();}
         public String rootId(){return reservation.getRootId();}

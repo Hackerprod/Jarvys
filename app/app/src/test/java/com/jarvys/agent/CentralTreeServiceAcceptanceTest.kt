@@ -33,6 +33,11 @@ class CentralTreeServiceAcceptanceTest {
     private val central=WorkspaceIdentity.CENTRAL_SESSION
     private var controller:org.robolectric.android.controller.ServiceController<AgentForegroundService>?=null
     private lateinit var service:AgentForegroundService
+    private lateinit var drafts:AttachmentDraftViewModel
+    private val viewModels=androidx.lifecycle.ViewModelStore()
+    private val nativeWakes=linkedMapOf<String,android.content.Intent>()
+    private val retainedWakes=mutableListOf<android.content.Intent>()
+    private var startId=100
     private val actualRuntime=AtomicReference<CoreAgentRuntime>()
     private val failure=AtomicReference<Throwable>()
     private val calls=AtomicInteger()
@@ -57,6 +62,8 @@ class CentralTreeServiceAcceptanceTest {
         }
         AgentRunUiState.resetSession(central)
         controller=Robolectric.buildService(AgentForegroundService::class.java).create();service=controller!!.get()
+        drafts=AttachmentDraftViewModel(context as android.app.Application).apply {switchSession(central)}
+        viewModels.put("native-tree-drafts",drafts)
         val scripted=provider {history -> calls.incrementAndGet();reply(history)}
         service.runtimeFactory=AgentForegroundService.RuntimeFactory {c,id,skills ->
             CoreAgentRuntime(c,id,skills,CorePromptBudget.standard(),scripted).also {actualRuntime.set(it)}
@@ -70,10 +77,41 @@ class CentralTreeServiceAcceptanceTest {
     @After fun cleanup() {
         releaseChild.countDown();StopController.stopAllRuns();StopController.getInstance().stopRun()
         controller?.let {runCatching {it.destroy()}};manager?.let {runCatching {it.close()}}
+        viewModels.clear()
         context.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
     }
-    private fun user(text:String)=storage.onDatabaseWorker {LocalRunStore(context).appendConversationMessage(central,"user",text)}
+    private fun historicalUser(text:String)=storage.onDatabaseWorker {LocalRunStore(context).appendConversationMessage(central,"user",text)}
+    /** Genuine UI admission. Capture its actual wake without running the scripted model before the test configures it. */
+    private fun user(text:String):String {
+        val prior=storage.onDatabaseWorker {LocalRunStore(context).readCentralSubmissions(central).map {it.submissionId}.toSet()}
+        assertTrue(drafts.submit(central,text,arrayListOf()))
+        var selected:CentralSubmissionSnapshot?=null
+        var wake:android.content.Intent?=null
+        waitUntil("Actual native USER/submission and exact queued service wake") {
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            selected=storage.onDatabaseWorker {LocalRunStore(context).readCentralSubmissions(central).singleOrNull {it.submissionId !in prior}}
+            val shadow=org.robolectric.Shadows.shadowOf(context as android.app.Application)
+            var item=shadow.nextStartedService
+            while(item!=null) {retainedWakes.add(item);item=shadow.nextStartedService}
+            val row=selected
+            val index=if(row==null)-1 else retainedWakes.indexOfFirst {it.action=="com.jarvys.agent.CENTRAL_SUBMISSION" && it.getStringExtra("central_submission_id")==row.submissionId}
+            if(index>=0)wake=retainedWakes.removeAt(index)
+            wake!=null && !drafts.isSending(central)
+        }
+        val row=requireNotNull(selected)
+        assertEquals("PREPARED",row.state)
+        assertEquals(text,storage.onDatabaseWorker {LocalRunStore(context).readConversationMessage(central,row.userMessageId)})
+        nativeWakes[row.userMessageId]=android.content.Intent(requireNotNull(wake))
+        return row.userMessageId
+    }
     private fun runStored(id:String,goal:String="") {
+        nativeWakes[id]?.let {wake ->
+            // Duplicate delivery reuses the native ID-only Intent, never creates another grant/root.
+            service.onStartCommand(android.content.Intent(wake),0,++startId)
+            service.awaitSessionIdleForTesting(central).get(20,TimeUnit.SECONDS)
+            return
+        }
+        // Retained AGENT/P1 denial probes and the legacy latest-USER fallback stay plain/native.
         val method=AgentForegroundService::class.java.getDeclaredMethod("runRealAgent",CancellationToken::class.java,
             String::class.java,List::class.java,String::class.java,String::class.java,Boolean::class.javaPrimitiveType,
             Boolean::class.javaPrimitiveType,String::class.java).apply {isAccessible=true}
@@ -101,10 +139,9 @@ class CentralTreeServiceAcceptanceTest {
         var found:android.content.Intent?=null
         waitUntil("Exact native service request") {
             var item=shadow.nextStartedService
-            while(item!=null) {
-                if(item.action==AgentForegroundService.ACTION_REAL_AGENT && item.getStringExtra("chat_user_message_id")==id && found==null)found=item
-                item=shadow.nextStartedService
-            }
+            while(item!=null) {retainedWakes.add(item);item=shadow.nextStartedService}
+            val index=retainedWakes.indexOfFirst {it.action==AgentForegroundService.ACTION_REAL_AGENT && it.getStringExtra("chat_user_message_id")==id}
+            if(index>=0)found=retainedWakes.removeAt(index)
             found!=null
         }
         return requireNotNull(found)
@@ -176,7 +213,7 @@ class CentralTreeServiceAcceptanceTest {
         assertEquals(invoked,calls.get());assertEquals(before,root(original))
     }
     @Test fun ordinaryAgentAndLatestUserFallbackCannotCreateTree() {
-        user("Unrelated latest USER")
+        historicalUser("Unrelated latest USER")
         val workspace=storage.onDatabaseWorker {WorkspaceRegistry(context).use {it.createWorkspace(UUID.randomUUID().toString(),"No inferred root")}}
         val input=storage.onDatabaseWorker {
             val id=UUID.randomUUID().toString()

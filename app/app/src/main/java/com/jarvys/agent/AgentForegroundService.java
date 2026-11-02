@@ -174,6 +174,7 @@ public final class AgentForegroundService extends Service {
     volatile NativeCentralBoundary yieldBoundary;
     volatile boolean handoffNudgeEligible = true;
     volatile String nativeSourceUserId;
+    volatile CentralTreeAdmission.SuspensionClaim nativeSuspensionClaim;
     ActiveRun(String sessionId, StopController controller, CancellationToken token) {
       this.sessionId = sessionId;
       this.controller = controller;
@@ -458,7 +459,12 @@ public final class AgentForegroundService extends Service {
       } finally {
         // FutureTask.cancel(true) can mark the Future done before a non-interruptible tool returns.
         // The lane is released here, after the physical call to FutureTask.run() has unwound.
+        try {
         boolean stoppedByUser = active.token.wasStoppedByUser();
+        if(stoppedByUser && active.nativeSuspensionClaim!=null) {
+          try {active.nativeSuspensionClaim.stopReservedOwner(active.token);}
+          catch(RuntimeException stopFailure){reportStopPersistenceFailure(stopFailure);}
+        }
         if (stoppedByUser) {
           try { resolveStoppedInputCohort(sessionId, active.token); }
           catch (RuntimeException failure) { reportStopPersistenceFailure(failure); }
@@ -496,6 +502,10 @@ public final class AgentForegroundService extends Service {
           nudgeCentralHandoff(this);
         refreshForegroundNotification();
         stopServiceIfIdle();
+        } finally {
+          // Actual FutureTask.run has unwound, even if subsequent bookkeeping failed.
+          if(active.nativeSuspensionClaim!=null)active.nativeSuspensionClaim.releasePhysicalOwner();
+        }
       }
     }
     stopServiceIfIdle();
@@ -607,6 +617,7 @@ public final class AgentForegroundService extends Service {
       if (active != null) {
         AgentRunUiState.stopPendingGeneration(sessionId, active.generation);
         active.controller.stopRunAsync();
+        if(active.nativeSuspensionClaim!=null)active.nativeSuspensionClaim.latchStoppedOwner(active.token);
       } else {
         // Retain the legacy single-run seam for older in-process callers and test harnesses.
         CancellationToken legacy = activeRunTokens.get(sessionId);
@@ -1081,6 +1092,7 @@ public final class AgentForegroundService extends Service {
               if(!CentralSubmissionAdmission.prepared(session).isEmpty())return;
               claim=permit.reserve(active.token,active.runId);
               if(claim==null)return;
+              active.nativeSuspensionClaim=claim;
               LIVE_SUSPENSIONS.remove(key,permit);
             }
             // Reservation belongs to this actual dequeue owner. Runtime binds before inference.
@@ -1089,6 +1101,8 @@ public final class AgentForegroundService extends Service {
                 claim.confirmedYield().ownerMessageId(),null,null,claim);
           } catch(RuntimeException failure) {
             LIVE_SUSPENSIONS.remove(key,permit);permit.invalidate();
+            if(claim!=null && active.token.wasStoppedByUser())try {claim.stopReservedOwner(active.token);}
+            catch(RuntimeException stopFailure){if(stopFailure!=failure)failure.addSuppressed(stopFailure);}
             if(claim!=null && !claim.isBound())try {claim.markUncertain(this,"service_resume_failure");}
             catch(RuntimeException cleanupFailure){if(cleanupFailure!=failure)failure.addSuppressed(cleanupFailure);}
             reportStopPersistenceFailure(failure);
@@ -2526,6 +2540,8 @@ public final class AgentForegroundService extends Service {
       if ("STOPPED".equals(result.outcome)) lastRunReport = chatMessage;
     } catch (RuntimeException failure) {
       if(suspensionClaim!=null && !suspensionClaim.isBound()) {
+        if(token.wasStoppedByUser())try {suspensionClaim.stopReservedOwner(token);}
+        catch(RuntimeException stopFailure){if(stopFailure!=failure)failure.addSuppressed(stopFailure);}
         try {suspensionClaim.markUncertain(this,"successor_not_confirmed");}
         catch(RuntimeException cleanupFailure){if(cleanupFailure!=failure)failure.addSuppressed(cleanupFailure);}
         treeExitDisposed=true;
@@ -2601,7 +2617,10 @@ public final class AgentForegroundService extends Service {
     } finally {
       if(treeAdmission!=null) {
         try {
-          if(token.wasStoppedByUser())treeAdmission.stopOwnedRoot(this);
+          if(token.wasStoppedByUser()) {
+            if(suspensionClaim!=null)suspensionClaim.stopReservedOwner(token);
+            else treeAdmission.stopOwnedRoot(this);
+          }
           else if(!treeExitDisposed)treeAdmission.failOwnedRoot(this,token.isTimedOut()?"EXPIRED":treeFailureReason);
         } catch(RuntimeException failure){reportStopPersistenceFailure(failure);}
         finally {treeAdmission.close();}
@@ -2800,7 +2819,11 @@ public final class AgentForegroundService extends Service {
   @Override
   public void onDestroy() {
     if (currentInstance == this) currentInstance = null;
+    List<ActiveRun> destroyedOwners=new ArrayList<>(activeRuns.values());
     StopController.stopAllRuns();
+    // Close exact captured native suspension gates before executor teardown; no Room or Registry IO.
+    for(ActiveRun owner:destroyedOwners)if(owner.nativeSuspensionClaim!=null && owner.token.wasStoppedByUser())
+      owner.nativeSuspensionClaim.latchStoppedOwner(owner.token);
     if (pendingStopTasks.get() > 0) worker.shutdown();
     else worker.shutdownNow();
     super.onDestroy();

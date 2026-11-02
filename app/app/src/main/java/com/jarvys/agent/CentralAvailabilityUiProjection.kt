@@ -31,19 +31,30 @@ data class CentralAvailabilityDisplay(
     })
 }
 
+/** Immutable cross-store display evidence, never an admission/claim or a replacement for tap-time CAS. */
+class CentralAvailabilityUiEvidence internal constructor(
+    submissions:List<CentralSubmissionSnapshot>,
+    suspensions:List<CentralTreeAdmission.SuspensionRecoveryDescriptor>,
+    assistantOwners:Map<String,String>,
+) {
+    val submissions:List<CentralSubmissionSnapshot> = java.util.Collections.unmodifiableList(ArrayList(submissions))
+    val suspensions:List<CentralTreeAdmission.SuspensionRecoveryDescriptor> = java.util.Collections.unmodifiableList(ArrayList(suspensions))
+    val assistantOwners:Map<String,String> = java.util.Collections.unmodifiableMap(LinkedHashMap(assistantOwners))
+}
+
 /** Applied only after native Room UI materialization. No migration, dispatch, or permit creation. */
 object CentralAvailabilityUiProjection {
     @JvmStatic fun project(context:Context?,session:String,events:List<AgentRunUiEvent>):List<AgentRunUiEvent> {
         if(context==null || !CentralAvailabilityPolicy.admissionEnabled() || !WorkspaceIdentity.isCentral(session))return events
-        val store=LocalRunStore(context)
-        if(!store.centralSubmissionSchemaReady())return events
-        val rows=store.readCentralSubmissions(session)
+        val evidence=com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
+            .readCentralAvailabilityUiEvidenceSync(session,events.filter {it.kind=="assistant"}.map {it.messageId}) ?: return events
+        val rows=evidence.submissions
         val byUser=rows.associateBy {it.userMessageId}
-        val resumes=CentralTreeAdmission.listRecoverableSuspensions(context,session).groupBy {it.originalUserMessageId}
+        val resumes=evidence.suspensions.groupBy {it.originalUserMessageId}
         val terminalIds=rows.mapNotNull {row -> row.terminalEvidence?.let {runCatching {org.json.JSONObject(it).optString("assistantId")}.getOrNull()}}.toSet()
         return events.map {event ->
             if(event.kind=="assistant" && (event.messageId in terminalIds
-                || store.assistantOwnerUserMessageId(session,event.messageId) in byUser))
+                || evidence.assistantOwners[event.messageId] in byUser))
                 return@map event.copy(canRegenerate=false)
             if(event.kind!="user" || event.messageId.isBlank())return@map event
             val row=byUser[event.messageId]
