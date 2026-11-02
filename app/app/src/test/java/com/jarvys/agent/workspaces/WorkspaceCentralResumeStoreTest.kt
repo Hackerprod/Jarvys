@@ -17,7 +17,7 @@ class WorkspaceCentralResumeStoreTest {
     private lateinit var trees:WorkspaceTreeStore
     private lateinit var root:String
     @Before fun setup(){
-        val context=RuntimeEnvironment.getApplication<Application>();context.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
+        val context=RuntimeEnvironment.getApplication();context.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
         registry=WorkspaceRegistry(context);registry.upgradeCentralResumeSchema();trees=WorkspaceTreeStore(registry)
         root=trees.beginRoot(TreeOrigin("generation",WorkspaceIdentity.CENTRAL_SESSION,"user","a".repeat(64)),"source","cycle0").rootId
     }
