@@ -1,0 +1,414 @@
+{
+  "status": "declared-OFF-compatibility-paired-pass-not-enabled-acceptance-or-independent-review",
+  "sourceCommit": "2f70677d13434e93e7e84b79f82e3b6e8ae1f0cc",
+  "sourceBindingSha256": "9811726414c50f0bb1cb52c41878992f6d15aff90e2076e645840d7c133f2d2f",
+  "boundFiles": 2045,
+  "admissionEnabled": false,
+  "sameFullPlayTestNames": true,
+  "selectorSha256": "e965e561c6efaf952b33c851722981118e5a73cead7fa7e227ff69b146587b23",
+  "runs": {
+    "full": {
+      "terminal": {
+        "exit": 0,
+        "sourceUnchanged": true,
+        "artifactsUnchanged": true,
+        "xmlFiles": 18,
+        "counts": {
+          "tests": 163,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      },
+      "terminalSha256": "d42da4ce1d2e98c0fc317be0cd186f606840532b1bf378604f8105bc60c54f7b",
+      "classes": [
+        {
+          "className": "com.jarvys.agent.CentralYieldArtifactSourceTest",
+          "counts": {
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "de289055422836eb9142e63ef19b35b1c84ee38b5709ec7e351ed27e5f9fc14f"
+        },
+        {
+          "className": "com.jarvys.agent.CentralYieldCheckpointCodecTest",
+          "counts": {
+            "tests": 14,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "f5cf208ed8df6fb22e9f5410bad26878155ac90ea6f27e82aaff4ab693002d6e"
+        },
+        {
+          "className": "com.jarvys.agent.CentralYieldCheckpointStoreTest",
+          "counts": {
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "98d5a57b56b151227f77a9e913324c8d9b0f7978bfdf27786e77becbd251c7c4"
+        },
+        {
+          "className": "com.jarvys.agent.CentralYieldCheckpointTest",
+          "counts": {
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "cdef3b478ec5cc8bebe56db65e4927f16ba42f6624ecab319f283d967b056ee1"
+        },
+        {
+          "className": "com.jarvys.agent.CentralYieldSourceEvidenceTest",
+          "counts": {
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "5a83ee00c8972dc647156fcf1338c5c916dfd0596122d88665ff23eee7ac7001"
+        },
+        {
+          "className": "com.jarvys.agent.CoreAgentLoopOrdinaryInterruptionResultTest",
+          "counts": {
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "f361f76585d620abcdebbbaa32101dfbbc0b355f5e685ef12f4bf844dbef3b9b"
+        },
+        {
+          "className": "com.jarvys.agent.NativeAssistantYieldCheckpointTest",
+          "counts": {
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "4a6b510c42816045d0b690d30d6b85787c1eecaf9e4074e7e3c2339e84065314"
+        },
+        {
+          "className": "com.jarvys.agent.ProviderRetryLeaseTest",
+          "counts": {
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "2f17b31ffd9ae0e040ec579f939b5b526cf79fc562685dcd8b4456cff105d887"
+        },
+        {
+          "className": "com.jarvys.agent.SealedInferenceTransportTest",
+          "counts": {
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "e9814a6f69bf37b685fce7c687fbbfc417ad3f158ac1e7e3bbd6d1396974b40e"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.CentralSubmissionPersistenceTest",
+          "counts": {
+            "tests": 21,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "7f0bbda0ab493c75e1e744a726fdad52375b2deab43e014798da571ebd2a9904"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.CentralSubmissionSchemaCompatibilityTest",
+          "counts": {
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "d1718f0b490fa665162cd1e337185b5ef02f8ed199ee5b3df10d8e96fb1f3737"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.NativeRegenerationReceiptTest",
+          "counts": {
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "f9caca71e7d720af77ad887453437244da38d264e9be5a1afd350c81c0dcc42d"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.NativeRegenerationSourceCompatibilityTest",
+          "counts": {
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "e66032ef9aea36770b4c8b951daa9bd73bcc6961cf36c5b5f1f3faaf4271ef8b"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.OrdinaryInterruptionWriterCompatibilityTest",
+          "counts": {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "10b5e27051770c0606522489935ffd3f6efdf3b6996f77c2bc3f2bacb73ba750"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.RegeneratedOrphanProtectionTest",
+          "counts": {
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "beb61c3cc576285489d5a372b87cb243eabf760ea22357096ed0fbc10b971985"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.RoomTreeProvenanceCompatibilityTest",
+          "counts": {
+            "tests": 21,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "e1198b189b04fa7272be406b15aef9e9e947218034070439a0d7a916db1d7218"
+        },
+        {
+          "className": "com.jarvys.agent.workspaces.WorkspaceCentralResumeSchemaTest",
+          "counts": {
+            "tests": 8,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "afb97bf79b1130ca5990bc728df0e110b99439b4c5f319fa7e083c9351c987a9"
+        },
+        {
+          "className": "com.jarvys.agent.workspaces.WorkspaceCentralResumeStoreTest",
+          "counts": {
+            "tests": 14,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "dd0093734172fa4c005cd5d2963c37e98808b81d56a3f4df75b0af473a471c43"
+        }
+      ],
+      "artifactManifestSha256": "f6f2958cc05ec465d5aa8cf9642407a4f9340112aff31888eea6e3039c12e58b"
+    },
+    "play": {
+      "terminal": {
+        "exit": 0,
+        "sourceUnchanged": true,
+        "artifactsUnchanged": true,
+        "xmlFiles": 18,
+        "counts": {
+          "tests": 163,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      },
+      "terminalSha256": "d42da4ce1d2e98c0fc317be0cd186f606840532b1bf378604f8105bc60c54f7b",
+      "classes": [
+        {
+          "className": "com.jarvys.agent.CentralYieldArtifactSourceTest",
+          "counts": {
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "f1a4897182bd6cfcf8d1bd3c36f90b7519a5a2896e903003be9f4a0694d5686a"
+        },
+        {
+          "className": "com.jarvys.agent.CentralYieldCheckpointCodecTest",
+          "counts": {
+            "tests": 14,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "7404bf9398028d39005d6b5f7a52bb3beedd003a7fdae85e9c92a65746940a48"
+        },
+        {
+          "className": "com.jarvys.agent.CentralYieldCheckpointStoreTest",
+          "counts": {
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "a2d3a0c8a1809c0a0c4eb0fe659d355c0a16c296844265bf71304d86ddac5c10"
+        },
+        {
+          "className": "com.jarvys.agent.CentralYieldCheckpointTest",
+          "counts": {
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "308b2a094224d69a2337fd72f91ef873e12298004b860ea8756aa43782971421"
+        },
+        {
+          "className": "com.jarvys.agent.CentralYieldSourceEvidenceTest",
+          "counts": {
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "32bf3eb3b68d284f53f80989cd94dd7595ce3142b8fc6b758048607941f0528c"
+        },
+        {
+          "className": "com.jarvys.agent.CoreAgentLoopOrdinaryInterruptionResultTest",
+          "counts": {
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "8de9a3141e419c0f3ba553ac5005d9946b46d1ecf87faddd5962aa4d42092ba3"
+        },
+        {
+          "className": "com.jarvys.agent.NativeAssistantYieldCheckpointTest",
+          "counts": {
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "a78ee8736c27d7db42ad028f7c543f54a55764df43d1fc1d0fc73084686a2818"
+        },
+        {
+          "className": "com.jarvys.agent.ProviderRetryLeaseTest",
+          "counts": {
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "f8a23153135cf5448b0e9c133a3f3599e08305939ce2cee33933056752a8e8fe"
+        },
+        {
+          "className": "com.jarvys.agent.SealedInferenceTransportTest",
+          "counts": {
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "aa1332ff8f8b6ccf70e38f94727bc791d2e204e4ed697dbcb2f59a6d66e806a6"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.CentralSubmissionPersistenceTest",
+          "counts": {
+            "tests": 21,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "4037972ca00ce56a98216ce93305ee64a57b1024431a06aea00bb69257149722"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.CentralSubmissionSchemaCompatibilityTest",
+          "counts": {
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "092c63e36ac4b23637b5a5b98f816969c781adf3482cc92aa4ae77d36052fd50"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.NativeRegenerationReceiptTest",
+          "counts": {
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "fe733abe580cd831d2c56167951c20bc564780182bb995f346af6d70b7737ef8"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.NativeRegenerationSourceCompatibilityTest",
+          "counts": {
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "904e46bbf4fc807200f136f394db604f548591780499391b91b2b72eb30bb168"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.OrdinaryInterruptionWriterCompatibilityTest",
+          "counts": {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "c6baa6ffd98ea8253d7b3a0c13894c0acf2306457c71678d66ba3ff2e8c05fb0"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.RegeneratedOrphanProtectionTest",
+          "counts": {
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "9b81cfe39a187d15465774b0f0de55cea95fc59fadd4f5853ce84f87b5764b77"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.RoomTreeProvenanceCompatibilityTest",
+          "counts": {
+            "tests": 21,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "2bc5dded07d3ff1b4e6a827863a01118e50c2f92b83b3aa3925254f6ff890a46"
+        },
+        {
+          "className": "com.jarvys.agent.workspaces.WorkspaceCentralResumeSchemaTest",
+          "counts": {
+            "tests": 8,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "e4d9ab30af312d6211f4afcd0b91ca1d32f1d3eaf265e234816201b9ad8c8e0d"
+        },
+        {
+          "className": "com.jarvys.agent.workspaces.WorkspaceCentralResumeStoreTest",
+          "counts": {
+            "tests": 14,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "xmlSha256": "87949e07af3ff0cef019229d115dacedca19cca4481d9eec24f94b929c586e06"
+        }
+      ],
+      "artifactManifestSha256": "8f9e70193e295dbd62f3d2fb234d3f4d2684a5dda6abe58b11be38c3baffc937"
+    }
+  },
+  "retainedFailureManifestSha256": "31a5afb8ef20744ea2aa4a7a0820b171ad8a56b2a0c2139607764ff4c49b86d4",
+  "limitations": [
+    "Only declared18-class/163-test OFF compatibility cohort; native enabled STOP and broader acceptance remain required.",
+    "Previous native131/8FAIL remains retained, not superseded by compatibility PASS.",
+    "No physical device/live-provider validation; no signing/install/deliverable APK.",
+    "Independent phase review remains required."
+  ]
+}
