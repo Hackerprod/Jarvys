@@ -1,0 +1,64 @@
+{
+  "status": "FAIL-retained-not-acceptance",
+  "sourceCommit": "7fc8c66e9314d209e59595ff3c59775157f602d7",
+  "terminal": {
+    "exit": 1,
+    "sourceUnchanged": true,
+    "artifactsUnchanged": true,
+    "xmlFiles": 3,
+    "counts": {
+      "tests": 20,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "terminalSha256": "27257767a918be560749b45e817bb5bc46d47aa5f6bccced62797655c53d9fb9",
+  "sourceBindingSha256": "47431da698a81df7482d49abde43ef12a7ccd836a6243efefdea78b987eec6f0",
+  "artifactManifestSha256": "08b5bbbe059d721e8efd2aa407acde2cd152e35ed2ed7a7d4e0d1ca088b50cef",
+  "classes": [
+    {
+      "className": "com.jarvys.agent.InternalContinuationSuspensionAuthorityTest",
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "suspendedActualInternalContinuationKeepsOperationContextButCannotDelegate"
+      ],
+      "xmlSha256": "f54b4d596f0e18d9c2abaf07f0e2f1992ff7f5f8fa6a8e26f43702e58b31a314"
+    },
+    {
+      "className": "com.jarvys.agent.OrdinaryRegenerationAvailabilityTest",
+      "counts": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "2635290fbdfb08fe963aba87c8a71f5ee6c820cbbb093a9b8aa879bee8d459e3"
+    },
+    {
+      "className": "com.jarvys.agent.chatdb.LegacyRegenerationGenerationTest",
+      "counts": {
+        "tests": 12,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "missingPositiveGenerationNeverBecomesRetainedBootstrap"
+      ],
+      "xmlSha256": "20321e430a7c473bc29b31c66117698b82ac4f34cc3d6044055e5b5274e2a9ef"
+    }
+  ],
+  "diagnosticSummary": [
+    "OrdinaryRegenerationAvailabilityTest seven cases PASS, including exact STOP cleanup previously RED.",
+    "Missing positive generation case unexpectedly returned Success with a native regeneration receipt; denial invariant remains failing.",
+    "Internal continuation completes but retained window epoch assertion expected one and observed two."
+  ],
+  "followOnUnionAndPlay": "not run after failure"
+}

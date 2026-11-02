@@ -75,4 +75,23 @@ class NativeRegenerationReceiptTest {
         NativeRegenerationReceipt.invalidate(receipt)
     }
 
+    private fun rejectChangedDestination(replacement:String?) {
+        val receipt=issue("exact-destination")
+        val db=JarvysChatDatabaseProvider.getInstance(context);val bridge=ChatDatabaseBridge.getInstance(context)
+        val source=bridge.readMessageSync(session,receipt.userMessageId)
+        val target=bridge.readMessageSync(session,receipt.assistantMessageId)
+        val beforeSeq=db.testChatSql.query("SELECT next_seq FROM conversations WHERE id=?",arrayOf(session)).use {it.moveToFirst();it.getLong(0)}
+        if(replacement==null)db.testChatSql.execSQL("DELETE FROM storage_meta WHERE key=?",arrayOf(ConnectionProjectionRepository.GENERATION_KEY))
+        else db.testChatSql.execSQL("UPDATE storage_meta SET value=? WHERE key=?",arrayOf(replacement,ConnectionProjectionRepository.GENERATION_KEY))
+        assertThrows(IllegalStateException::class.java) {bridge.validateNativeRegenerationReceiptSync(receipt)}
+        assertEquals("POSITIVE",receipt.sourceKind)
+        assertEquals(source,bridge.readMessageSync(session,receipt.userMessageId))
+        assertEquals(target,bridge.readMessageSync(session,receipt.assistantMessageId))
+        assertEquals(beforeSeq,db.testChatSql.query("SELECT next_seq FROM conversations WHERE id=?",arrayOf(session)).use {it.moveToFirst();it.getLong(0)})
+        assertEquals(replacement,db.testChatSql.query("SELECT value FROM storage_meta WHERE key=?",arrayOf(ConnectionProjectionRepository.GENERATION_KEY)).use {if(it.moveToFirst())it.getString(0)else null})
+        NativeRegenerationReceipt.invalidate(receipt)
+    }
+    @Test fun removedGenerationCannotValidateAlreadyIssuedPositiveReceipt()=rejectChangedDestination(null)
+    @Test fun replacedGenerationCannotValidateAlreadyIssuedPositiveReceipt()=rejectChangedDestination("different-storage-destination")
+
 }

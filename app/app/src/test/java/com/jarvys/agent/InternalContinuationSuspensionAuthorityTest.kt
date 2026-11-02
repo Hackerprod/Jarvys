@@ -121,6 +121,11 @@ class InternalContinuationSuspensionAuthorityTest {
         until("Actual P1 result claims Central and enters held sealed inference") {get<CountDownLatch>("thirdEntered").count==0L}
         selected.set(record().getJSONObject("selectedResult"))
         assertEquals(1,initialP1.get())
+        // Actual child settlement is native progress and resets the window before P1 starts.
+        // Suspension must conserve this post-settlement window, not the earlier live-child epoch.
+        val beforeSuspension=root(original)
+        assertEquals(before.windowEpoch+1,beforeSuspension.windowEpoch)
+        assertEquals(1L,beforeSuspension.executions)
         val fresh=send("Fresh request displaces only the internal inference")
         until("Fresh USER and resumed internal owner finish") {resumedP1.get()==1 && !AgentForegroundService.hasActiveRun(session)}
         assertEquals("Old sealed socket is still physically blocked",1L,get<CountDownLatch>("releaseThird").count)
@@ -136,7 +141,8 @@ class InternalContinuationSuspensionAuthorityTest {
         assertEquals(before.rootId,root(original).rootId)
         assertEquals(before.origin,root(original).origin)
         assertEquals(before.executions+2,root(original).executions)
-        assertEquals(before.windowEpoch,root(original).windowEpoch)
+        assertEquals(beforeSuspension.windowEpoch,root(original).windowEpoch)
+        assertEquals(beforeSuspension.executions+1,root(original).executions)
         assertNotEquals(root(original).rootId,root(fresh).rootId)
         val transcript=storage.onDatabaseWorker {LocalRunStore(context).readModelTranscriptRows(session)}
         assertTrue("Actual delegate proposal received a retained tool result",transcript.any {it.toString().contains("must-deny-internal-delegate") && it.toString().contains("Workspace request could not complete")})

@@ -83,4 +83,33 @@ class NativeRegenerationSourceCompatibilityTest {
         assertNull(generation(db));assertNull(ChatDatabaseBridge.getInstance(context).readMessageSync(session,answer.messageId)!!.hiddenKind)
         assertEquals(0L,db.testChatSql.query("SELECT COUNT(*) FROM conversation_items WHERE conversation_id=? AND item_kind='assistant_regenerated'",arrayOf(session)).use {it.moveToFirst();it.getLong(0)})
     }
+    private fun positiveGenerationDenial(replacement:String?) {
+        val db=JarvysChatDatabaseProvider.getInstance(context)
+        val pair=runBlocking {val repo=ConversationRepository(db)
+            val prepared=ConversationModelTurnWriter(db,repo,ModelTranscriptRepository(db)).appendPreparedCentralSubmission(
+                AppendMessageInput(session,"user",listOf(MessagePartInput("text","Exact positive source"),MessagePartInput(CentralSubmissionRequest.PART_KIND,CentralSubmissionRequest.encode(emptyList()))),stableId="positive-generation"),"positive-generation","fixture-process")
+            val row=db.withChatWriteTransaction {CentralTurnSubmissionRepository(db).claimPreparedInTransaction(prepared,"fixture-process","positive-run",1,setOf("positive-generation"))}
+            val answer=(repo.appendMessage(AppendMessageInput(session,"assistant",listOf(MessagePartInput("text","Canonical terminal")),status="COMPLETED",ownerUserMessageId=row.userMessageId,runId=row.claimRunId)) as ChatDbResult.Success).value
+            val terminal=org.json.JSONObject().put("version",1).put("kind","DIRECT").put("assistantId",answer.messageId).put("runId",row.claimRunId).put("originRunId",row.claimRunId).put("sourceSha256",row.sourceSha256).put("finalOwnerMessageId",row.userMessageId).put("chainDigest","a".repeat(64)).toString()
+            db.testChatSql.execSQL("UPDATE central_turn_submissions SET state='COMPLETED',terminal_evidence=? WHERE conversation_id=? AND submission_id=?",arrayOf(terminal,session,row.submissionId))
+            check(CentralTurnSubmissionRepository(db).confirmedCompleted(CentralTurnSubmissionRepository(db).find(session,row.submissionId)!!))
+            row to answer
+        }
+        val row=pair.first;val answer=pair.second
+        val source=ChatDatabaseBridge.getInstance(context).readMessageSync(session,row.userMessageId)
+        val beforeSeq=db.testChatSql.query("SELECT next_seq FROM conversations WHERE id=?",arrayOf(session)).use {it.moveToFirst();it.getLong(0)}
+        if(replacement==null)db.testChatSql.execSQL("DELETE FROM storage_meta WHERE key=?",arrayOf(ConnectionProjectionRepository.GENERATION_KEY))
+        else db.testChatSql.execSQL("UPDATE storage_meta SET value=? WHERE key=?",arrayOf(replacement,ConnectionProjectionRepository.GENERATION_KEY))
+        assertFalse(CentralTurnSubmissionRepository(db).confirmedCompleted(CentralTurnSubmissionRepository(db).find(session,row.submissionId)!!))
+        val result=runBlocking {ConversationRepository(db).regenerateAvailabilitySource(session,answer.messageId)}
+        assertEquals(ChatDbResult.Invalid("Queued or uncertain Central submission cannot be regenerated"),result)
+        assertEquals(replacement,generation(db))
+        assertEquals(beforeSeq,db.testChatSql.query("SELECT next_seq FROM conversations WHERE id=?",arrayOf(session)).use {it.moveToFirst();it.getLong(0)})
+        assertEquals(answer,ChatDatabaseBridge.getInstance(context).readMessageSync(session,answer.messageId))
+        assertEquals(source,ChatDatabaseBridge.getInstance(context).readMessageSync(session,row.userMessageId))
+        assertEquals(0L,db.testChatSql.query("SELECT COUNT(*) FROM conversation_items WHERE conversation_id=? AND item_kind='assistant_regenerated'",arrayOf(session)).use {it.moveToFirst();it.getLong(0)})
+    }
+    @Test fun missingPositiveGenerationCannotBootstrapOrHideInNativeWriterPrimitive()=positiveGenerationDenial(null)
+    @Test fun replacedPositiveGenerationCannotBorrowHistoricalReceiptInNativeWriterPrimitive()=positiveGenerationDenial("another-destination-generation")
+
 }

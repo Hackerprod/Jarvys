@@ -39,6 +39,11 @@ internal class CentralTurnSubmissionRepository(private val database: JarvysChatD
     }
     fun confirmedCompleted(row:CentralSubmissionSnapshot):Boolean {
         if(row.state!="COMPLETED" || row.terminalEvidence==null || row.claimRunId==null)return false
+        // A retained terminal receipt is evidence only in its original physical destination.
+        // Never bootstrap a missing generation or attest the row's historical generation here.
+        if(!sql.query("SELECT value FROM storage_meta WHERE key=?",arrayOf(ConnectionProjectionRepository.GENERATION_KEY)).use { c ->
+            c.moveToFirst() && c.getType(0)==Cursor.FIELD_TYPE_STRING && c.getString(0)==row.storageGeneration && !c.moveToNext()
+        })return false
         val receipt=checkNotNull(terminal(row))
         if(captureCentralUserRootDigestInTransaction(database,row.sessionId,row.userMessageId)!=row.sourceSha256)return false
         return sql.query("SELECT role,status,owner_user_message_id,run_id,hidden_kind,hidden_seq,seq FROM messages WHERE conversation_id=? AND message_id=?",arrayOf(row.sessionId,receipt.getString("assistantId"))).use { c ->
