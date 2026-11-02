@@ -70,6 +70,9 @@ internal class ConversationModelTurnWriter(
         database.withChatWriteTransaction {
             check(com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled()) {"Central submission admission disabled"}
             authority.requireInput(input)
+            val requestParts=input.parts.filter {it.kind==CentralSubmissionRequest.PART_KIND}
+            check(requestParts.size==1 && CentralSubmissionRequest.decode(requestParts.single().payload)==authority.selectedSkillIds) {"Native selected skill request changed"}
+            check(input.parts.filter {it.kind==MessagePartKinds.TEXT}.joinToString(""){it.payload}==authority.text) {"Native Send text changed"}
             check(input.role=="user" && input.interruptRequestId==null && input.proactiveThreadKey==null && input.stableId==authority.submissionId)
             val result=appendPreparedCentralSubmission(input,authority.submissionId,authority.processId)
             authority.requireInput(input)

@@ -84,6 +84,7 @@ internal object ChatCanvasEventSerializer {
             event.messageId.isNotBlank() && event.messageId == latestAssistant)
         value.put("canCopy", event.kind == "user" || event.kind == "assistant" || event.kind == "assistant_stream")
             .put("canOpen", canOpen).put("canTransfer", canTransfer).put("canRetry", canRetry)
+            .put("recoveryFence", if(nativeRetry) event.centralAvailability!!.recoveryFence() else "")
         val options = JSONArray()
         event.decisionOptions.forEach { option ->
             options.put(JSONObject().put("id", option.id).put("label", option.label).put("description", option.description))
@@ -142,6 +143,7 @@ internal object ChatCanvasActionPolicy {
             "copy" -> event.kind == "user" || event.kind == "assistant" || event.kind == "assistant_stream"
             "retry" -> allowRetry && (event.kind=="user" && event.centralAvailability?.canRetry==true
                 && com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled()
+                && value.isNotEmpty() && value==event.centralAvailability.recoveryFence()
                 || !running && event.kind == "assistant" && event.canRegenerate && event.messageId.isNotBlank() &&
                 (event.stage == "FAILED" || event.messageId == latestAssistantMessageId))
             "open_viewer" -> event.previewId?.isNotBlank() == true || event.presentationArtifact != null ||

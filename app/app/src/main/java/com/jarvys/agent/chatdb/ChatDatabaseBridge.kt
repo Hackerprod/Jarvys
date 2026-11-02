@@ -2035,6 +2035,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
                 val source=CentralUserRootCheckpoint(snapshot.storageGeneration,snapshot.sessionId,snapshot.userMessageId,
                     snapshot.sourceSha256,anchor.attest(repos.database,snapshot.storageGeneration))
                 CentralSubmissionAppendReceipt(snapshot,source,runBlocking {repos.database.withChatReadTransaction {
+                    check(captureCentralUserRootDigestInTransaction(repos.database,snapshot.sessionId,snapshot.userMessageId)==snapshot.sourceSha256) {"Committed submission source changed before receipt"}
                     CentralSubmissionRequest.read(repos.database,snapshot.sessionId,snapshot.userMessageId)
                 }})
             }
@@ -2105,7 +2106,8 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
                 val snapshot=runBlocking {repos.database.withChatWriteTransaction {CentralTurnSubmissionRepository(repos.database).recover(sessionId,submissionId,expectedRevision,authority)}}
                 CentralSubmissionAppendReceipt(snapshot,CentralUserRootCheckpoint(snapshot.storageGeneration,snapshot.sessionId,
                     snapshot.userMessageId,snapshot.sourceSha256,anchor.attest(repos.database,snapshot.storageGeneration)),
-                    runBlocking {repos.database.withChatReadTransaction {CentralSubmissionRequest.read(repos.database,snapshot.sessionId,snapshot.userMessageId)}})
+                    runBlocking {repos.database.withChatReadTransaction {check(captureCentralUserRootDigestInTransaction(repos.database,snapshot.sessionId,snapshot.userMessageId)==snapshot.sourceSha256) {"Committed submission source changed before receipt"}
+                    CentralSubmissionRequest.read(repos.database,snapshot.sessionId,snapshot.userMessageId)}})
             }
         }
     }

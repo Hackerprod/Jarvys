@@ -203,7 +203,7 @@
     }
     var actions = document.createElement("div"); actions.className = "actions";
     if (event.canCopy) addAction(actions, "Copiar", "copy", event.seq);
-    if (event.canRetry) addAction(actions, "Reintentar", "retry", event.seq);
+    if (event.canRetry) addAction(actions, "Reintentar", "retry", event.seq, event.recoveryFence || "");
     if (event.canOpen) addAction(actions, "Abrir visor", "open_viewer", event.seq);
     if (event.canTransfer) {
       addAction(actions, "Descargar", "download", event.seq);

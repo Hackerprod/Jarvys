@@ -64,6 +64,8 @@ public final class CentralSubmissionAdmission {
             requireCurrent(value.getConversationId(),submissionId);
             if (input != value) throw new IllegalStateException("Native Send payload changed");
         }
+        void markWriteAttempted() { action.markWriteAttempted(); }
+        void recordCommitted(CentralSubmissionAppendReceipt receipt) { action.recordCommitted(receipt); }
         @Override public void close() { open=false; }
     }
     static AppendAuthority beginSend(AttachmentDraftViewModel.NativeSendAction action) {
@@ -114,7 +116,7 @@ public final class CentralSubmissionAdmission {
     }
     static LivePermit register(AppendAuthority action, CentralSubmissionAppendReceipt receipt) {
         action.requireCurrent(receipt.getSnapshot().getSessionId(),receipt.getSnapshot().getSubmissionId());
-        return registerReceipt(receipt,action.getSelectedSkillIds());
+        return registerReceipt(receipt,receipt.getSelectedSkillIds());
     }
     private static LivePermit registerReceipt(CentralSubmissionAppendReceipt receipt,List<String> skills) {
         LivePermit fresh=new LivePermit(receipt,skills);
@@ -199,7 +201,6 @@ public final class CentralSubmissionAdmission {
         private RecoveryAuthority(AttachmentDraftViewModel.NativeRecoveryAction action) {this.action=action;}
         public String getProcessId() {return PROCESS_ID;}
         public String getReceiptId() {return receiptId;}
-        public List<String> getSelectedSkillIds(){return action.getSelectedSkillIds();}
         public void requireCurrent(String session,String id,long revision) {
             if(!open)throw new IllegalStateException("Native recovery action expired");
             action.requireCurrent(session,id,revision);
@@ -211,7 +212,7 @@ public final class CentralSubmissionAdmission {
     }
     static LivePermit registerRecovered(RecoveryAuthority action,CentralSubmissionAppendReceipt receipt,long expectedRevision) {
         action.requireCurrent(receipt.getSnapshot().getSessionId(),receipt.getSnapshot().getSubmissionId(),expectedRevision);
-        return registerReceipt(receipt,action.getSelectedSkillIds());
+        return registerReceipt(receipt,receipt.getSelectedSkillIds());
     }
 
     public static final class CancelAuthority {

@@ -1163,7 +1163,7 @@ ${event.text}
                 row.sessionId==sessionId && row.originalUserMessageId==event.messageId && attachmentDrafts.recoverPreparedSuspension(event)
             } ?: selection.submission?.let {row ->
                 row.sessionId==sessionId && row.userMessageId==event.messageId && row.state=="PREPARED"
-                    && attachmentDrafts.recoverPreparedSubmission(event,arrayListOf())
+                    && attachmentDrafts.recoverPreparedSubmission(event)
             } ?: false
             if(!accepted)toast(getString(R.string.chat_footer_regenerate_error),Toast.LENGTH_LONG)
             return

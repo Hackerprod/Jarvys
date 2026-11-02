@@ -145,16 +145,22 @@ class AttachmentDraftViewModel internal constructor(
                     if(admitted==null) messageSubmitter.startAgent(getApplication(), session, messageId, skills)
                     else AgentForegroundService.startCentralSubmission(getApplication(),admitted,skills)
                 } catch (failure: Exception) {
+                    attempt.nativeAction?.committedReceipt?.let { receipt ->
+                        persisted=true
+                        attempt.cancellation.markPersisted()
+                        AgentRunUiState.bindCurrentUserMessage(session,receipt.snapshot.userMessageId,optimisticEventId)
+                    }
                     error = message(if (failure is CancellationException && !persisted) R.string.chat_attachment_send_cancelled
                         else R.string.chat_attachment_send_failed)
                     if (persisted) AgentRunUiState.failChatTurn(session, error)
                     else AgentRunUiState.failOptimisticUserMessage(session, optimisticEventId, error)
                 } finally {
                     synchronized(lock) {
-                        if (persisted && session == sessionId) {
+                        val retainNativeFiles=attempt.nativeAction?.writeAttempted==true
+                        if ((persisted || retainNativeFiles) && session == sessionId) {
                             val protectedIds = protectedIdsBySession[session].orEmpty()
                             mutableDrafts.value = mutableDrafts.value.filterNot { it.id in protectedIds }
-                        } else if (!persisted && (session != sessionId
+                        } else if (!persisted && !retainNativeFiles && (session != sessionId
                             || mutableDrafts.value.none { draft -> draft.id in protectedIdsBySession[session].orEmpty() })) {
                             attachmentsToSend.forEach { item -> item.attachment?.let {
                                 runCatching { store.deleteAttachment(session, it) }
@@ -270,6 +276,16 @@ class AttachmentDraftViewModel internal constructor(
     class NativeSendAction internal constructor(private val owner:AttachmentDraftViewModel,
         val sessionId:String,val submissionId:String,val text:String,val attachments:List<ChatAttachment>,val selectedSkillIds:List<String>) {
         private val begun=AtomicBoolean(false)
+        @Volatile var writeAttempted:Boolean=false
+            private set
+        @Volatile var committedReceipt:com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt?=null
+            private set
+        fun markWriteAttempted() {requireCurrent(sessionId,submissionId);writeAttempted=true}
+        fun recordCommitted(receipt:com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt) {
+            check(writeAttempted && receipt.snapshot.sessionId==sessionId && receipt.snapshot.submissionId==submissionId)
+            check(committedReceipt==null || committedReceipt===receipt)
+            committedReceipt=receipt // No permission: even a cancelled action must conserve an actual committed row.
+        }
         fun beginPersistence() {check(begun.compareAndSet(false,true));requireCurrent(sessionId,submissionId)}
         fun requireCurrent(session:String,id:String)=synchronized(owner.lock) {
             check(session==sessionId && id==submissionId && begun.get()) {"Native Send target changed"}
@@ -279,7 +295,7 @@ class AttachmentDraftViewModel internal constructor(
         }
     }
     class NativeRecoveryAction internal constructor(private val owner:AttachmentDraftViewModel,
-        val sessionId:String,val submissionId:String,val revision:Long,val selectedSkillIds:List<String>) {
+        val sessionId:String,val submissionId:String,val revision:Long) {
         private val begun=AtomicBoolean(false)
         internal val cancelled=AtomicBoolean(false)
         fun beginPersistence() {check(begun.compareAndSet(false,true));requireCurrent(sessionId,submissionId,revision)}
@@ -326,19 +342,19 @@ class AttachmentDraftViewModel internal constructor(
     }
 
     /** Only an explicit existing-row UI action calls this; merely reading PREPARED rows is inert. */
-    fun recoverPreparedSubmission(selected:AgentRunUiEvent,skills:ArrayList<String>):Boolean {
+    fun recoverPreparedSubmission(selected:AgentRunUiEvent):Boolean {
         val row=selected.centralAvailability?.takeIf {it.canRetry}?.submission ?: return false
         val action=synchronized(lock) {
             if(!CentralAvailabilityPolicy.admissionEnabled() || row.sessionId!=sessionId || row.state!="PREPARED"
                 || selected.kind!="user" || selected.messageId!=row.userMessageId || !AgentRunUiState.containsExactRecoverySelection(sessionId,selected)
                 || activeRecoveries.containsKey(row.submissionId))return false
-            NativeRecoveryAction(this,row.sessionId,row.submissionId,row.revision,java.util.Collections.unmodifiableList(ArrayList(skills))).also {activeRecoveries[row.submissionId]=it}
+            NativeRecoveryAction(this,row.sessionId,row.submissionId,row.revision).also {activeRecoveries[row.submissionId]=it}
         }
         try { submissionExecutor.execute {
             try {
                 CentralSubmissionAdmission.beginRecovery(action).use {authority ->
                     val permit=AgentForegroundService.recoverCentralSubmission(app,authority,row.sessionId,row.submissionId,row.revision)
-                    AgentForegroundService.startCentralSubmission(app,permit,skills)
+                    AgentForegroundService.startCentralSubmission(app,permit,ArrayList(permit.selectedSkillIds))
                 }
             } catch(failure:Exception) {AgentErrorReporter.reportChatDatabaseFailure(app,failure)}
             finally {synchronized(lock) {if(activeRecoveries[row.submissionId]===action)activeRecoveries.remove(row.submissionId)}}

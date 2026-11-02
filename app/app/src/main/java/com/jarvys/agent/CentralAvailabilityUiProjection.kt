@@ -11,6 +11,16 @@ data class CentralAvailabilityDisplay(
     val state:String,
     val canRetry:Boolean,
 ) {
+    /** Exact displayed request fence, never authority. Canonical field order supports stale-tap rejection. */
+    fun recoveryFence():String {
+        val fields=org.json.JSONArray().put("central_recovery_v1")
+        val parked=suspension
+        if(parked!=null) fields.put("SUSPENSION").put(parked.sessionId).put(parked.originalUserMessageId)
+            .put(parked.resumeId).put(parked.revision).put(parked.sourceDigest).put(parked.rootCycle).put(parked.stopEpoch)
+        else submission?.let {fields.put("NEW_TURN").put(it.sessionId).put(it.userMessageId).put(it.submissionId)
+            .put(it.revision).put(it.sourceSha256).put(it.storageGeneration).put(it.state)} ?: return ""
+        return fields.toString()
+    }
     fun label(context:Context):String=context.getString(when(state) {
         "PREPARED"->R.string.central_request_queued
         "RUNNING"->R.string.central_request_running

@@ -890,7 +890,9 @@ public final class AgentForegroundService extends Service {
         try(com.jarvys.agent.workspaces.WorkspaceRegistry registry=new com.jarvys.agent.workspaces.WorkspaceRegistry(context)) {
           registry.upgradeCentralResumeSchema();
         }
+      authority.markWriteAttempted();
       com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt receipt=new LocalRunStore(context).appendCentralSubmission(authority);
+      authority.recordCommitted(receipt); // Evidence only: registration can still fail without losing the stored USER/files.
       return CentralSubmissionAdmission.register(authority,receipt);
     }
   }

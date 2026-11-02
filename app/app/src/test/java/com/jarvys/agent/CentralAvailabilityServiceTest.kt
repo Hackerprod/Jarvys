@@ -123,6 +123,85 @@ class CentralAvailabilityServiceTest {
         await("Native Send atomically persisted its exact row"){rows().any {it.optString("role")=="user" && it.optString("content")==text}}
         return rows().single {it.optString("role")=="user" && it.optString("content")==text}.getString("messageId")
     }
+    private fun attachmentWriteFailure(committedReceiptKnown:Boolean) {
+        val completed=CountDownLatch(1)
+        val actual=AtomicReference<com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt>()
+        val executor=java.util.concurrent.Executors.newSingleThreadExecutor()
+        val custom=object:AttachmentMessageSubmitter {
+            override fun persistMessage(application:Application,session:String,text:String,attachments:List<ChatAttachment>):String = error("No legacy fallback")
+            override fun startAgent(application:Application,session:String,messageId:String,skills:ArrayList<String>) = error("No generic dispatch")
+            override fun persistNativeMessage(application:Application,action:AttachmentDraftViewModel.NativeSendAction):CentralSubmissionAdmission.LivePermit {
+                try {
+                    CentralSubmissionAdmission.beginSend(action).use {authority ->
+                        WorkspaceRegistry(context).use {it.upgradeCentralResumeSchema()}
+                        authority.markWriteAttempted()
+                        val receipt=LocalRunStore(context).appendCentralSubmission(authority)
+                        actual.set(receipt)
+                        if(committedReceiptKnown) {
+                            authority.recordCommitted(receipt)
+                            drafts.cancelSubmission(session)
+                            return CentralSubmissionAdmission.register(authority,receipt) // Must fail exact cancelled action.
+                        }
+                        throw IllegalStateException("Synthetic lost commit acknowledgement")
+                    }
+                } finally {completed.countDown()}
+            }
+        }
+        drafts=AttachmentDraftViewModel(context as Application,custom,executor).apply {switchSession(session)}
+        val owner=androidx.lifecycle.ViewModelStore().apply {put("drafts",drafts)}
+        try {
+            val input=java.io.File(context.cacheDir,"availability-attachment.txt").apply {writeText("Immutable attachment")}
+            drafts.addUris(session,listOf(android.net.Uri.fromFile(input)))
+            await("Attachment copied before native Send") {drafts.drafts.value.singleOrNull()?.attachment!=null}
+            val attachment=requireNotNull(drafts.drafts.value.single().attachment)
+            val storedFile=AttachmentStore(context).resolve(session,attachment)
+            assertTrue(drafts.submit(session,"Retain committed bytes",arrayListOf()))
+            assertTrue(completed.await(10,TimeUnit.SECONDS))
+            await("Native failed handoff settled without granting a permit") {!drafts.isSending(session)}
+            drafts.switchSession("different-session");owner.clear()
+            val receipt=requireNotNull(actual.get())
+            assertNull(CentralSubmissionAdmission.find(session,receipt.snapshot.submissionId))
+            assertEquals("PREPARED",submissions().single().state)
+            assertTrue("Actual referenced bytes survive failed/uncertain handoff",storedFile.isFile)
+            assertEquals("Immutable attachment",storedFile.readText())
+            val references=storage.onDatabaseWorker {LocalRunStore(context).readConversationAttachments(session,receipt.snapshot.userMessageId)}
+            assertEquals(listOf(attachment.id),references.map {it.id})
+            assertTrue(rows().any {it.optString("messageId")==receipt.snapshot.userMessageId})
+            assertEquals(0,calls.get())
+            if(committedReceiptKnown) assertEquals(receipt.snapshot.userMessageId,
+                AgentRunUiState.snapshotForSession(session).events.single {it.kind=="user"}.messageId)
+        } finally {owner.clear();executor.shutdownNow()}
+    }
+    @Test fun committedAppendThenRegistrationFailureRetainsExactUserAndAttachment() = attachmentWriteFailure(true)
+    @Test fun uncertainAppendAcknowledgementNeverDeletesReferencedAttachmentOrMintsPermit() = attachmentWriteFailure(false)
+
+    @Test fun canvasRecoveryRejectsStaleDisplayedFenceBeforeAndAfterMainQueue() {
+        attachmentWriteFailure(false)
+        val row=submissions().single()
+        val event=AgentRunUiEvent.messageEvent(701,"user","Retain committed bytes",1).copy(messageId=row.userMessageId,
+            centralAvailability=CentralAvailabilityDisplay(row,null,"PREPARED",true))
+        val fence=requireNotNull(event.centralAvailability).recoveryFence()
+        fun allowed(value:String)=com.jarvys.agent.canvas.ChatCanvasActionPolicy.check("retry",event,value,false,null,false).allowed
+        assertTrue(allowed(fence));assertFalse(allowed(""))
+        for(index in listOf(1,2,3,4,5,6,7)) {
+            val changed=org.json.JSONArray(fence).put(index,if(index==5) row.revision+1 else "different-fence")
+            assertFalse("Changed kind/session/source/id/revision/hash/lifetime is denied",allowed(changed.toString()))
+        }
+        var current=listOf(event);var dispatched=0
+        val bridge=com.jarvys.agent.canvas.ChatCanvasNativeBridge(session,{current},{false},{true},
+            hasOlder={false},loadingOlder={false},benchmarkStartedAtNanos=null,
+            callbacks=com.jarvys.agent.canvas.ChatCanvasCallbacks(action={_,_,_->dispatched++}))
+        bridge.dispatch("retry",event.id,fence)
+        current=listOf(event.copy(centralAvailability=CentralAvailabilityDisplay(row.copy(revision=row.revision+1),null,"PREPARED",true)))
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        assertEquals("Queued tap cannot silently borrow new current descriptor",0,dispatched)
+        bridge.dispatch("retry",event.id,fence)
+        org.robolectric.shadows.ShadowLooper.idleMainLooper();assertEquals(0,dispatched)
+        current=listOf(event)
+        bridge.dispatch("retry",event.id,fence)
+        org.robolectric.shadows.ShadowLooper.idleMainLooper();assertEquals(1,dispatched)
+    }
+
     @Test fun freshSendSupersedesOnlyInferenceAndOriginalResumesWithoutFutureChildCallbacks() {
         val old=send("Original independent request")
         await("Original sealed inference entered"){firstEntered.count==0L}
