@@ -51,7 +51,7 @@ public class OrdinaryRegenerationAvailabilityTest {
   service.runtimeFactory=(c,id,skills)->new CoreAgentRuntime(c,id,skills,CorePromptBudget.standard(),provider);
   service.mainChatRunner=(runtime,goal,history,attachments,token,progress)->{
    boolean regeneration=calls.get()==(retainedMode?0:1);if(regeneration)regenerationToken.set(token);
-   var result=runtime.runMainChat(goal,history,attachments,token,progress);
+   CoreAgentLoop.Result result=runtime.runMainChat(goal,history,attachments,token,progress);
    if(regeneration){regenerationResult.set(result);if(commitWins){entered.countDown();try{assertTrue(release.await(20,TimeUnit.SECONDS));}catch(InterruptedException failure){throw new AssertionError(failure);}}}
    return result;
   };
@@ -61,12 +61,12 @@ public class OrdinaryRegenerationAvailabilityTest {
   String original=send("Original completed request");
   until(()->storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().anyMatch(r->r.getUserMessageId().equals(original)&&r.getState().equals("COMPLETED")));
   service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);pump();
-  var originalRow=storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().filter(r->r.getUserMessageId().equals(original)).findFirst().get();
-  var originalRoot=(com.jarvys.agent.workspaces.TreeRoot)invoke("root",new Class[]{String.class},original);
-  var event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
+  com.jarvys.agent.chatdb.CentralSubmissionSnapshot originalRow=storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().filter(r->r.getUserMessageId().equals(original)).findFirst().get();
+  com.jarvys.agent.workspaces.TreeRoot originalRoot=(com.jarvys.agent.workspaces.TreeRoot)invoke("root",new Class[]{String.class},original);
+  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
   AgentForegroundService.startRegenerateAssistant(context,event.getText(),new ArrayList<>(),session,event.getUserMessageId(),event.getResumeReceipt(),event.getNativeRegenerationReceipt());
   until(()->entered.getCount()==0);
-  var heldMemory=storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).personalAgentMemorySessions()).stream().filter(r->original.equals(r.getOwnerMessageId())).collect(java.util.stream.Collectors.toList());
+  List<com.jarvys.agent.chatdb.PersonalMemorySessionView> heldMemory=storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).personalAgentMemorySessions()).stream().filter(r->original.equals(r.getOwnerMessageId())).collect(java.util.stream.Collectors.toList());
   String fresh=send("Fresh request while ordinary regeneration is held");
   until(()->storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().anyMatch(r->r.getUserMessageId().equals(fresh)&&r.getState().equals("COMPLETED")));
   service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);
@@ -76,10 +76,10 @@ public class OrdinaryRegenerationAvailabilityTest {
   assertFalse(regenerationToken.get().wasStoppedByUser());
   assertEquals("Ordinary interruption cannot falsely finalize or capture passive memory",heldMemory,
     storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).personalAgentMemorySessions()).stream().filter(r->original.equals(r.getOwnerMessageId())).collect(java.util.stream.Collectors.toList()));
-  var rows=storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).readConversationMessagesSync(session));
+  List<com.jarvys.agent.chatdb.StoredMessage> rows=storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).readConversationMessagesSync(session));
   assertEquals(1L,rows.stream().filter(r->original.equals(r.getOwnerUserMessageId())&&"PARTIAL".equals(r.getStatus())).count());
   assertEquals(originalRow,storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().filter(r->r.getUserMessageId().equals(original)).findFirst().get());
-  assertEquals(originalRoot,storage.onDatabaseWorker(()->{try(var db=new com.jarvys.agent.workspaces.WorkspaceRegistry(context)){return new com.jarvys.agent.workspaces.WorkspaceTreeStore(db).getRoot(originalRoot.getRootId());}}));
+  assertEquals(originalRoot,storage.onDatabaseWorker(()->{try(com.jarvys.agent.workspaces.WorkspaceRegistry db=new com.jarvys.agent.workspaces.WorkspaceRegistry(context)){return new com.jarvys.agent.workspaces.WorkspaceTreeStore(db).getRoot(originalRoot.getRootId());}}));
   assertNull(com.jarvys.agent.chatdb.NativeRegenerationReceipt.lookupLive(event.getNativeRegenerationReceipt().getOpaqueId()));
   release.countDown();until(()->socketReturned.get());pump();
   assertEquals(3,calls.get());
@@ -90,7 +90,7 @@ public class OrdinaryRegenerationAvailabilityTest {
   String original=send("Original completed request");
   until(()->storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().anyMatch(r->r.getUserMessageId().equals(original)&&r.getState().equals("COMPLETED")));
   service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);pump();
-  var event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
+  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
   AgentForegroundService.startRegenerateAssistant(context,event.getText(),new ArrayList<>(),session,event.getUserMessageId(),event.getResumeReceipt(),event.getNativeRegenerationReceipt());
   until(()->entered.getCount()==0);return original;
  }
@@ -102,7 +102,7 @@ public class OrdinaryRegenerationAvailabilityTest {
   finally {release.countDown();}
   until(()->storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().anyMatch(r->r.getUserMessageId().equals(fresh)&&r.getState().equals("COMPLETED")));
   service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);
-  var rows=storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).readConversationMessagesSync(session));
+  List<com.jarvys.agent.chatdb.StoredMessage> rows=storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).readConversationMessagesSync(session));
   assertEquals(0L,rows.stream().filter(r->original.equals(r.getOwnerUserMessageId())&&"PARTIAL".equals(r.getStatus())).count());
   assertTrue(rows.stream().anyMatch(r->original.equals(r.getOwnerUserMessageId())&&"COMPLETED".equals(r.getStatus())&&r.getText().contains("answer 2")));
   assertEquals(3,calls.get());
@@ -126,8 +126,8 @@ public class OrdinaryRegenerationAvailabilityTest {
   String original=send("Original successful operation");
   until(()->storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().anyMatch(r->r.getUserMessageId().equals(original)&&r.getState().equals("COMPLETED")));
   service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);pump();
-  var originalRow=storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().filter(r->r.getUserMessageId().equals(original)).findFirst().get();
-  var event=storage.onDatabaseWorker(()->{var store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
+  com.jarvys.agent.chatdb.CentralSubmissionSnapshot originalRow=storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().filter(r->r.getUserMessageId().equals(original)).findFirst().get();
+  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
   AgentForegroundService.startRegenerateAssistant(context,event.getText(),new ArrayList<>(),session,event.getUserMessageId(),event.getResumeReceipt(),event.getNativeRegenerationReceipt());
   until(()->steerEntered.getCount()==0);
   String steer;
@@ -140,7 +140,7 @@ public class OrdinaryRegenerationAvailabilityTest {
   until(()->storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().anyMatch(r->r.getUserMessageId().equals(fresh)&&r.getState().equals("COMPLETED")));
   service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);
   assertEquals(1L,release.getCount());assertEquals(4,calls.get());
-  var rows=storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).readConversationMessagesSync(session));
+  List<com.jarvys.agent.chatdb.StoredMessage> rows=storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).readConversationMessagesSync(session));
   assertEquals(1L,rows.stream().filter(r->steer.equals(r.getOwnerUserMessageId())&&"PARTIAL".equals(r.getStatus())).count());
   assertEquals(0L,rows.stream().filter(r->original.equals(r.getOwnerUserMessageId())&&"PARTIAL".equals(r.getStatus())).count());
   assertEquals(originalRow,storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().filter(r->r.getUserMessageId().equals(original)).findFirst().get());
@@ -149,9 +149,9 @@ public class OrdinaryRegenerationAvailabilityTest {
 
  @Test public void retainedV99CompletedHistoryRegenerationHasSameInterruptionBoundaryWithoutEnrollment()throws Exception {
   retainedMode=true;
-  String original=storage.onDatabaseWorker(()->{var store=new LocalRunStore(context);String user=store.appendConversationMessage(session,"user","Retained v99 USER request");store.appendConversationMessage(session,"assistant","Retained successful answer",0L,"retained-v99-run",user,"COMPLETED",null);return user;});
+  String original=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String user=store.appendConversationMessage(session,"user","Retained v99 USER request");store.appendConversationMessage(session,"assistant","Retained successful answer",0L,"retained-v99-run",user,"COMPLETED",null);return user;});
   assertTrue(storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).isEmpty());
-  var event=storage.onDatabaseWorker(()->{var store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
+  com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get().getString("messageId");return store.regenerateAssistantIfLatest(session,assistant);});
   assertNotNull(event.getNativeRegenerationReceipt());assertEquals("RETAINED",event.getNativeRegenerationReceipt().getSourceKind());
   AgentForegroundService.startRegenerateAssistant(context,event.getText(),new ArrayList<>(),session,event.getUserMessageId(),event.getResumeReceipt(),event.getNativeRegenerationReceipt());
   until(()->entered.getCount()==0);
@@ -159,8 +159,8 @@ public class OrdinaryRegenerationAvailabilityTest {
   until(()->storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).stream().anyMatch(r->r.getUserMessageId().equals(fresh)&&r.getState().equals("COMPLETED")));
   service.awaitSessionIdleForTesting(session).get(10,TimeUnit.SECONDS);
   assertEquals(1L,release.getCount());assertEquals(2,calls.get());assertTrue(regenerationResult.get().isOrdinaryInterrupted());
-  var submissions=storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session));assertEquals(1,submissions.size());assertEquals(fresh,submissions.get(0).getUserMessageId());
-  var rows=storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).readConversationMessagesSync(session));
+  List<com.jarvys.agent.chatdb.CentralSubmissionSnapshot> submissions=storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session));assertEquals(1,submissions.size());assertEquals(fresh,submissions.get(0).getUserMessageId());
+  List<com.jarvys.agent.chatdb.StoredMessage> rows=storage.onDatabaseWorker(()->com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).readConversationMessagesSync(session));
   assertEquals(1L,rows.stream().filter(r->original.equals(r.getOwnerUserMessageId())&&"PARTIAL".equals(r.getStatus())).count());
   release.countDown();until(()->socketReturned.get());
   assertFalse(storage.onDatabaseWorker(()->new LocalRunStore(context).readModelTranscriptRows(session)).stream().anyMatch(r->r.toString().contains("late-regeneration-effect")));
