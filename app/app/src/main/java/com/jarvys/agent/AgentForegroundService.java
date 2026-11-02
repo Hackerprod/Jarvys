@@ -139,6 +139,17 @@ public final class AgentForegroundService extends Service {
     SessionRequest preparing;
     ActiveRun active;
   }
+  /** Exact STOP boundary, guarded by interruptAdmissionLock(sessionId); never a late pending scan. */
+  private static final class StoppedInputCohort {
+    final String sessionId;
+    final Set<String> requestIds = new java.util.LinkedHashSet<>();
+    boolean captureUncertain;
+    StoppedInputCohort(String sessionId) { this.sessionId = sessionId; }
+  }
+  private final Map<CancellationToken, StoppedInputCohort> stoppedInputCohorts = new ConcurrentHashMap<>();
+  private final Set<StoppedInputCohort> unresolvedStoppedInputCohorts = ConcurrentHashMap.newKeySet();
+  private final Set<String> uncertainStopInputSessions = ConcurrentHashMap.newKeySet();
+
   private static final class ActiveRun {
     final String sessionId;
     final StopController controller;
@@ -260,6 +271,13 @@ public final class AgentForegroundService extends Service {
       synchronized (interruptAdmissionLock(sessionId)) {
         synchronized (sessionLaneLock) {
           synchronized (lane) {
+            if (uncertainStopInputSessions.contains(sessionId) && !lane.queued.isEmpty()) {
+              // Retain the original native request and its exact source; never turn it into steering.
+              // A known-cohort metadata retry restarts this same lane, without allocating a token.
+              lane.draining = false;
+              lane.preparing = null;
+              return;
+            }
             request = lane.queued.pollFirst();
             if (request == null) {
               lane.active = null;
@@ -382,7 +400,7 @@ public final class AgentForegroundService extends Service {
         // The lane is released here, after the physical call to FutureTask.run() has unwound.
         boolean stoppedByUser = active.token.wasStoppedByUser();
         if (stoppedByUser) {
-          try { failPendingInputRecovery(sessionId); }
+          try { resolveStoppedInputCohort(sessionId, active.token); }
           catch (RuntimeException failure) { reportStopPersistenceFailure(failure); }
           finally { releaseFollowUpClaim(sessionId, request.followUpClaimId); }
         }
@@ -391,10 +409,13 @@ public final class AgentForegroundService extends Service {
           active.token.completeRun();
           activeRuns.remove(sessionId, active);
           activeRunTokens.remove(sessionId, active.token);
+          StoppedInputCohort stoppedInputs = stoppedInputCohorts.get(active.token);
+          if (stoppedInputs != null && !unresolvedStoppedInputCohorts.contains(stoppedInputs))
+            stoppedInputCohorts.remove(active.token, stoppedInputs);
           if (activeRunToken == active.token)
             activeRunToken = activeRunTokens.values().stream().findFirst().orElse(null);
           synchronized (lane) { if (lane.active == active) lane.active = null; }
-          if (request.interactive && !stoppedByUser) {
+          if (request.interactive) {
             releaseFollowUpClaim(sessionId, request.followUpClaimId);
             enqueuePendingInputRecovery(null);
           }
@@ -475,11 +496,6 @@ public final class AgentForegroundService extends Service {
             releaseFollowUpClaim(sessionId, request.followUpClaimId);
           }
         }
-        try {
-          failPendingInputRecovery(sessionId);
-        } catch (RuntimeException failure) {
-          reportStopPersistenceFailure(failure);
-        }
       } finally {
         pendingRejectedSessionResolution.remove(sessionId);
       }
@@ -499,6 +515,10 @@ public final class AgentForegroundService extends Service {
   private void stopSessionRun(String sessionId) {
     if (sessionId == null) return;
     synchronized (interruptAdmissionLock(sessionId)) {
+      ActiveRun stopOwner = activeRuns.get(sessionId);
+      CancellationToken stopToken = stopOwner == null ? activeRunTokens.get(sessionId) : stopOwner.token;
+      if (stopToken == null && sessionId.equals(AgentRunUiState.INSTANCE.snapshotForSession(sessionId).getInteractiveOwnerSessionId()))
+        stopToken = activeRunToken;
       List<SessionRequest> stoppedRequests = java.util.Collections.emptyList();
       SessionLane lane = sessionLanes.get(sessionId);
       if (lane != null) {
@@ -533,10 +553,16 @@ public final class AgentForegroundService extends Service {
           legacy.stopRunAsync();
         }
       }
+      // Latch STOP before any potentially blocking Room snapshot. Fresh admission and old-owner
+      // cleanup use this same lock, so the post-latch snapshot still captures exactly this boundary.
+      StoppedInputCohort stopInputs = captureStoppedInputCohort(sessionId, stopToken);
+      resolveStoppedInputCohort(stopInputs);
       for (SessionRequest request : stoppedRequests) {
         request.stopped.set(true);
         try {
-          if (request.onStopped != null) {
+          if (!request.followUpClaimId.isEmpty() && stopInputs.requestIds.contains(request.followUpClaimId)) {
+            // The exact atomic cohort owns this receipt, including a failed/uncertain commit.
+          } else if (request.onStopped != null) {
             request.onStopped.run();
           } else if (!request.followUpClaimId.isEmpty()) {
             stopPendingInput(sessionId, request.followUpClaimId);
@@ -803,6 +829,9 @@ public final class AgentForegroundService extends Service {
       if (state.getRunning() && (!sessionId.equals(state.getInteractiveOwnerSessionId())
           || service == null || ownerToken == null)) return false;
 
+      if (service != null && ownerToken != null && ownerToken.wasStoppedByUser()
+          && !service.stoppedInputCohorts.containsKey(ownerToken))
+        service.resolveStoppedInputCohort(service.captureStoppedInputCohort(sessionId, ownerToken));
       LocalRunStore store = new LocalRunStore(context);
       final String requestId;
       try {
@@ -831,7 +860,8 @@ public final class AgentForegroundService extends Service {
         return true;
       }
       if (ownerToken != null && ownerToken.wasStoppedByUser()) {
-        service.failPendingInputRecovery(sessionId);
+        // Durable fresh USER belongs to a future run. Old physical finally owns the recovery wake.
+        service.resolveStoppedInputCohort(sessionId, ownerToken);
         AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
         return true;
       }
@@ -895,10 +925,8 @@ public final class AgentForegroundService extends Service {
       CancellationToken ownerToken = activeRunTokens.get(sessionId);
       try {
         worker.execute(() -> {
-          if (ownerToken != null && ownerToken.wasStoppedByUser()) {
-            failPendingInputRecovery(sessionId);
-            return;
-          }
+          if (ownerToken != null && ownerToken.wasStoppedByUser())
+            resolveStoppedInputCohort(sessionId, ownerToken);
           runPendingInputRecoverySafely(sessionId);
         });
         return true;
@@ -1032,28 +1060,82 @@ public final class AgentForegroundService extends Service {
     EARLY_FAILED_AGENT_INPUT_STARTS.add(sessionId.length() + ":" + sessionId + messageId);
   }
 
-  private void failPendingInputRecovery(String onlySessionId) {
-    if (onlySessionId != null && !WorkspaceIdentity.isCentral(onlySessionId)) return;
+  /** Called only at an explicit STOP boundary (or before first fresh admission observing legacy STOP). */
+  private StoppedInputCohort captureStoppedInputCohort(String sessionId, CancellationToken owner) {
+    StoppedInputCohort cohort = owner == null ? new StoppedInputCohort(sessionId)
+        : stoppedInputCohorts.computeIfAbsent(owner, ignored -> new StoppedInputCohort(sessionId));
+    unresolvedStoppedInputCohorts.add(cohort);
     try {
-      LocalRunStore store = new LocalRunStore(this);
-      if (onlySessionId == null) {
-        failPendingInputRecovery(WorkspaceIdentity.CENTRAL_SESSION);
-        return;
+      for (org.json.JSONObject row : new LocalRunStore(this).readPendingInterruptRequests(sessionId)) {
+        String id = row.optString("requestId", "");
+        if (sessionId.equals(row.optString("sessionId", sessionId)) && !id.isEmpty()) cohort.requestIds.add(id);
       }
-      synchronized (interruptAdmissionLock(onlySessionId)) {
-        List<org.json.JSONObject> pending = store.readPendingInterruptRequests(onlySessionId);
-        for (org.json.JSONObject request : pending) {
-          String sessionId = request.optString("sessionId", onlySessionId);
-          String requestId = request.optString("requestId", "");
-          if (!onlySessionId.equals(sessionId) || requestId.isEmpty()) continue;
-          failPendingInput(sessionId, requestId);
-        }
-      }
-    } catch (CancellationException cancelled) {
-      // A service teardown is not a user STOP. Leave any unprocessed request available to retry.
+      cohort.captureUncertain = false;
     } catch (RuntimeException failure) {
+      cohort.captureUncertain = true;
+      uncertainStopInputSessions.add(sessionId);
       reportStopPersistenceFailure(failure);
     }
+    return cohort;
+  }
+
+  private void resolveStoppedInputCohort(String sessionId, CancellationToken owner) {
+    synchronized (interruptAdmissionLock(sessionId)) {
+      StoppedInputCohort cohort = stoppedInputCohorts.get(owner);
+      if (cohort != null && sessionId.equals(cohort.sessionId)) resolveStoppedInputCohort(cohort);
+    }
+  }
+
+  private void resolveStoppedInputCohort(StoppedInputCohort cohort) {
+    // No discovery here: uncertain captures never expand to requests admitted after STOP.
+    try {
+      // Exact-ID atomic adapter over the existing native stopped-submission writer.
+      LocalRunStore store = new LocalRunStore(this);
+      store.persistStoppedInputCohort(cohort.sessionId, new ArrayList<>(cohort.requestIds),
+          getString(R.string.chat_interrupt_start_failed));
+      AgentRunUiState.refreshPersistedSession(cohort.sessionId, store.readRecentConversationTimeline(cohort.sessionId));
+      for (String id : cohort.requestIds) releaseFollowUpClaim(cohort.sessionId, id);
+      if (!cohort.captureUncertain) {
+        unresolvedStoppedInputCohorts.remove(cohort);
+        boolean anotherUnresolved = false;
+        for (StoppedInputCohort other : unresolvedStoppedInputCohorts)
+          if (cohort.sessionId.equals(other.sessionId)) { anotherUnresolved = true; break; }
+        if (!anotherUnresolved) {
+          uncertainStopInputSessions.remove(cohort.sessionId);
+          restartLaneAfterStopPersistence(cohort.sessionId);
+        }
+      }
+    } catch (RuntimeException failure) {
+      // Do not let a fresh turn acknowledge unknown cancellation outcomes through its history.
+      uncertainStopInputSessions.add(cohort.sessionId);
+      reportStopPersistenceFailure(failure);
+    }
+  }
+
+  /** Called under the same admission lock that quarantined the original serial lane. */
+  private void restartLaneAfterStopPersistence(String sessionId) {
+    SessionLane lane;
+    synchronized (sessionLaneLock) {
+      lane = sessionLanes.get(sessionId);
+      if (lane == null) return;
+      synchronized (lane) {
+        if (lane.draining || lane.queued.isEmpty() || uncertainStopInputSessions.contains(sessionId)) return;
+        lane.draining = true;
+      }
+    }
+    try { worker.execute(() -> drainSession(sessionId, lane)); }
+    catch (RuntimeException failure) {
+      synchronized (sessionLaneLock) { synchronized (lane) { lane.draining = false; } }
+      // Keep the exact queued requests; executor rejection is not permission to dispose later USERs.
+      reportStopPersistenceFailure(failure);
+    }
+  }
+
+  private boolean stoppedInputIsPendingCancellation(String sessionId, String requestId) {
+    if (uncertainStopInputSessions.contains(sessionId)) return true;
+    for (StoppedInputCohort cohort : unresolvedStoppedInputCohorts)
+      if (sessionId.equals(cohort.sessionId) && cohort.requestIds.contains(requestId)) return true;
+    return false;
   }
 
   private void recoverPendingInputs(String onlySessionId) {
@@ -1070,11 +1152,16 @@ public final class AgentForegroundService extends Service {
     org.json.JSONObject latest = null;
     synchronized (interruptAdmissionLock(sessionId)) {
       if (pendingRejectedSessionResolution.contains(sessionId)) return;
+      for (StoppedInputCohort cohort : new ArrayList<>(unresolvedStoppedInputCohorts))
+        if (sessionId.equals(cohort.sessionId) && !cohort.captureUncertain) resolveStoppedInputCohort(cohort);
+      if (uncertainStopInputSessions.contains(sessionId)) return;
+      restartLaneAfterStopPersistence(sessionId);
       List<org.json.JSONObject> currentPending = store.readPendingInterruptRequests(sessionId);
       if (currentPending.isEmpty()) return;
       if (activeRunTokens.containsKey(sessionId)) return;
       for (org.json.JSONObject request : currentPending) {
-        if (!sessionId.equals(request.optString("sessionId", sessionId))) continue;
+        if (!sessionId.equals(request.optString("sessionId", sessionId))
+            || stoppedInputIsPendingCancellation(sessionId, request.optString("requestId", ""))) continue;
         org.json.JSONObject dispatched = store.dispatchInterruptRequest(sessionId, request.optString("requestId", ""));
         if (dispatched != null) latest = dispatched;
         else if (request.optBoolean("alreadyDispatched")) latest = request;
@@ -1095,7 +1182,7 @@ public final class AgentForegroundService extends Service {
       releaseFollowUpClaim(sessionId, messageId);
       throw cancelled;
     } catch (RuntimeException startFailure) {
-      try { failPendingInputRecovery(sessionId); }
+      try { failPendingInput(sessionId, messageId); }
       catch (RuntimeException persistenceFailure) { reportStopPersistenceFailure(persistenceFailure); }
       finally {
         releaseFollowUpClaim(sessionId, messageId);
@@ -1249,20 +1336,18 @@ public final class AgentForegroundService extends Service {
   private void enqueueStoredMessageFollowUp(String sessionId, String messageId) {
     if (messageId == null || messageId.isEmpty()) return;
     if (worker.isShutdown()) {
-      failPendingInputRecovery(sessionId);
+      failPendingInput(sessionId, messageId);
       return;
     }
     CancellationToken ownerToken = sessionId == null ? null : activeRunTokens.get(sessionId);
     try {
       worker.execute(() -> {
-        if (ownerToken != null && ownerToken.wasStoppedByUser()) {
-          failPendingInputRecovery(sessionId);
-          return;
-        }
+        if (ownerToken != null && ownerToken.wasStoppedByUser())
+          resolveStoppedInputCohort(sessionId, ownerToken);
         runPendingInputRecoverySafely(sessionId);
       });
     } catch (java.util.concurrent.RejectedExecutionException rejected) {
-      failPendingInputRecovery(sessionId);
+      failPendingInput(sessionId, messageId);
     }
   }
 
@@ -2021,7 +2106,7 @@ public final class AgentForegroundService extends Service {
         AgentRunUiState.completeGeneration(sessionId, token.generation(), "stopped-" + sessionId,
             "STOPPED", chatMessage, "", 0L);
         lastRunReport = chatMessage;
-        failPendingInputRecovery(sessionId);
+        resolveStoppedInputCohort(sessionId, token);
       } else if (timedOut) {
         AgentRunUiState.completeGeneration(sessionId, token.generation(), "timeout-" + sessionId,
             "PARTIAL", chatMessage,

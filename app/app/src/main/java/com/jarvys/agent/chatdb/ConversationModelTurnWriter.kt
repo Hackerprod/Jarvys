@@ -80,6 +80,28 @@ internal class ConversationModelTurnWriter(
         }
     }
 
+    /** One exact native STOP cohort. No late discovery, partial terminal rows, or retry duplicates. */
+    suspend fun persistStoppedInputCohort(conversationId:String,requestIds:List<String>,
+        assistantMessage:String,conversationKind:String):ChatDbResult<List<String>> {
+        if(conversationId.isBlank() || assistantMessage.isBlank() || conversationKind.isBlank() || requestIds.any {it.isBlank()})
+            return ChatDbResult.Invalid("Exact STOP cohort identifiers and message are required")
+        return try {
+            database.withChatWriteTransaction {
+                val changed=mutableListOf<String>()
+                for(id in requestIds.distinct()) {
+                    // This existing reader sees the current writer lease, including earlier writes.
+                    // Only explicitly captured IDs qualify; resolved/incorporated rows are observations.
+                    if(readPendingInterruptRows(database.chatSql,conversationId,listOf(id)).isEmpty())continue
+                    requireSuccess(persistStoppedSubmission(StoppedSubmissionInput(conversationId,
+                        followUpRequestId=id,ownerUserMessageId=id,assistantMessage=assistantMessage,
+                        conversationKind=conversationKind)))
+                    changed.add(id)
+                }
+                ChatDbResult.Success(changed.toList())
+            }
+        } catch(abort:CompositeWriteAbort) {abort.result}
+    }
+
     /**
      * Atomically dispatches an optional steering receipt, records the failed assistant result, and
      * resolves both the owning user row and the receipt. Keeping these operations together means a

@@ -2297,6 +2297,12 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun readConversationTimelineSync(conversationId: String, turns: Int): List<AgentRunUiEvent> =
         execute { it.reader.readConversationTimeline(conversationId, turns) }
 
+    /** Native service exact-ID batch; reuses existing writer transaction, no new storage. */
+    fun persistStoppedInputCohortSync(conversationId:String,requestIds:List<String>,assistantMessage:String,
+        conversationKind:String):ChatDbResult<List<String>> = execute {
+        it.modelTurnWriter.persistStoppedInputCohort(conversationId,requestIds,assistantMessage,conversationKind)
+    }
+
     fun persistStoppedSubmissionSync(
         conversationId: String,
         followUpRequestId: String?,

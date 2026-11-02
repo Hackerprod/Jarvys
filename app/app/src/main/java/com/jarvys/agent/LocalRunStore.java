@@ -832,6 +832,15 @@ public final class LocalRunStore {
         return message != null && isConversationInputRole(message.getRole()) ? message.getInputState() : null;
     }
 
+    /** Atomically resolves only the exact pending IDs captured at a native STOP boundary. */
+    public List<String> persistStoppedInputCohort(String sessionId, List<String> exactRequestIds, String assistantMessage) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        if (exactRequestIds == null) throw new IllegalArgumentException("Exact STOP cohort is required");
+        return requireChatDbSuccess(chatDatabaseBridge.persistStoppedInputCohortSync(sessionId,
+                new ArrayList<>(exactRequestIds), assistantMessage, conversationKindFor(sessionId)),
+                "persist exact stopped input cohort");
+    }
+
     /** Persists a STOP/start-failure result and resolves its queued follow-up in one DB transaction. */
     public String persistStoppedSubmission(String sessionId, String followUpRequestId,
             String ownerUserMessageId, String userMessageContentIfMissing, String assistantMessage) {

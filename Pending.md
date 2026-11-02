@@ -1,6 +1,6 @@
-## Estado vigente — reparación v99 en curso; regresiones aún sin ejecutar — 02-11-2026
+## Estado vigente — reparación v99: tres defectos reproducidos en host, validación del fix pendiente — 02-11-2026
 
-Se recuperó el baseline remoto exacto de v99 sin sobrescribir datos. Se prepararon cuatro regresiones de lifecycle/STOP ante el reporte de bloqueo; producción aún intacta, sin nueva validación ni causa del teléfono confirmada. La disponibilidad de Central se aborda en un gate separado basado en upstream, preservando un único owner de efectos. [Checkpoint de reparación](docs/V99_REPAIR_CHECKPOINT.md). Los estados inferiores corresponden a entregas anteriores.
+Las dos regresiones nativas pasaron de rojo a verde (43/43 con bordes adicionales); las dos de STOP→USER fallaron en los asserts esperados y ya tienen corrección candidata con cohorte atómica. Se preservan fallos y bindings. Ejecutándose aceptación nueva; **sin PASS independiente del repair ni APK nuevo, ni causa del teléfono confirmada**. [Checkpoint](docs/V99_REPAIR_CHECKPOINT.md). Central autónomo/no bloqueante sigue en gate separado basado en upstream; menú/datos/Engram conservados. Los estados inferiores son históricos.
 
 ## Estado vigente — v99 P3 R2 PASS de packaging; entrega preparada — 01-11-2026
 

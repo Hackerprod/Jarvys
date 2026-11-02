@@ -3,7 +3,8 @@ package com.jarvys.agent
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.jarvys.agent.chatdb.ChatDatabaseBridge
+import com.jarvys.agent.chatdb.*
+import kotlinx.coroutines.runBlocking
 import com.jarvys.agent.device.ScreenData
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.workspaces.WorkspaceRegistry
@@ -35,6 +36,7 @@ class CentralStopFreshUserTest {
     private val release=CountDownLatch(1)
     private val freshEntered=CountDownLatch(1)
     private val calls=AtomicInteger()
+    private val heldToken=java.util.concurrent.atomic.AtomicReference<CancellationToken>()
     private val runtimeFailure=java.util.concurrent.atomic.AtomicReference<Throwable>()
     private var startId=0
     @Before fun setup() {
@@ -54,6 +56,7 @@ class CentralStopFreshUserTest {
             override fun complete(systemPrompt:String,userPrompt:String,images:List<ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=error("Conversation provider expected")
             override fun completeConversation(systemPrompt:String,history:List<ConversationTurn>,userPrompt:String,images:List<ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply {
                 if(calls.incrementAndGet()==1) {
+                    heldToken.set(token)
                     entered.countDown()
                     while(release.count>0)try {release.await()}catch(_:InterruptedException) { /* Deliberately noninterruptible physical owner. */ }
                     return ModelReply("STALE-OLD-ANSWER",emptyList())
@@ -98,6 +101,87 @@ class CentralStopFreshUserTest {
         service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context,session,original),0,++startId)
         await("Old provider entered"){entered.count==0L}
         return original
+    }
+    @Test fun stopLatchesExactTokenBeforeBlockedDatabaseSnapshot() {
+        startHeld()
+        val bridge=ChatDatabaseBridge.getInstance(context)
+        val executor=ChatDatabaseBridge::class.java.getDeclaredField("executor").apply {isAccessible=true}.get(bridge) as java.util.concurrent.ExecutorService
+        val databaseHeld=CountDownLatch(1)
+        val releaseDatabase=CountDownLatch(1)
+        val blocker=executor.submit {databaseHeld.countDown();releaseDatabase.await()}
+        assertTrue(databaseHeld.await(10,TimeUnit.SECONDS))
+        try {
+            AgentForegroundService.stopRun(session)
+            await("Exact native cancellation must precede the blocked Room snapshot"){heldToken.get().wasStoppedByUser()}
+            assertEquals("Provider remains physically owned until released",1,calls.get())
+            assertEquals(1L,release.count)
+            assertFalse("STOP persistence is still waiting for the blocked database",service.awaitStopTasksForTesting().isDone)
+        } finally {
+            releaseDatabase.countDown()
+            blocker.get(10,TimeUnit.SECONDS)
+            service.awaitStopTasksForTesting().get(10,TimeUnit.SECONDS)
+        }
+    }
+    private fun sql(statement:String)=storage.onDatabaseWorker {runBlocking {
+        val db=JarvysChatDatabaseProvider.getInstance(context)
+        db.withChatWriteTransaction {db.chatSql.execSQL(statement)}
+    }}
+    private fun laneIsQuarantined():Boolean {
+        val type=AgentForegroundService::class.java
+        val lock=type.getDeclaredField("sessionLaneLock").apply {isAccessible=true}.get(service)
+        synchronized(lock) {
+            val lanes=type.getDeclaredField("sessionLanes").apply {isAccessible=true}.get(service) as Map<*,*>
+            val lane=lanes[session] ?: return false
+            synchronized(lane) {
+                val draining=lane.javaClass.getDeclaredField("draining").apply {isAccessible=true}.getBoolean(lane)
+                val active=lane.javaClass.getDeclaredField("active").apply {isAccessible=true}.get(lane)
+                val queued=lane.javaClass.getDeclaredField("queued").apply {isAccessible=true}.get(lane) as Collection<*>
+                return !draining && active==null && queued.isNotEmpty()
+            }
+        }
+    }
+    @Test fun directStoredUserWaitsInOriginalLaneUntilExactStopCommitCanRecover() {
+        startHeld()
+        val captured=submit("Captured before failed direct STOP")
+        sql("CREATE TRIGGER fixture_stop_abort BEFORE INSERT ON messages WHEN NEW.role='assistant' AND NEW.owner_user_message_id='$captured' BEGIN SELECT RAISE(ABORT,'fixture_stop_failure'); END")
+        stop()
+        val fresh=storage.onDatabaseWorker {LocalRunStore(context).appendConversationMessage(session,"user","Fresh direct stored USER")}
+        service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context,session,fresh),0,++startId)
+        release.countDown()
+        await("Original native lane quarantined without a new token"){laneIsQuarantined()}
+        assertEquals(1,calls.get())
+        assertNull(storage.onDatabaseWorker {LocalRunStore(context).readConversationInputState(session,fresh)})
+        assertFalse(rows().any {it.optString("role")=="assistant" && it.optString("userMessageId")==fresh})
+        sql("DROP TRIGGER fixture_stop_abort")
+        storage.onDatabaseWorker {service.runPendingInputRecoverySafely(session)}
+        await("Original queued stored USER completes"){rows().any {it.optString("role")=="assistant" && it.optString("userMessageId")==fresh && it.optString("status")=="COMPLETED"}}
+        await("Serial lane idle"){!AgentForegroundService.hasActiveRun(session)}
+        assertEquals(2,calls.get())
+        assertEquals("resolved",storage.onDatabaseWorker {LocalRunStore(context).readConversationInputState(session,captured)})
+        assertEquals(1,rows().count {it.optString("role")=="assistant" && it.optString("userMessageId")==fresh})
+    }
+    @Test fun failedStopPersistenceDoesNotCancelFreshInputOrReplayCapturedInput() {
+        startHeld()
+        val captured=submit("Captured before failing STOP")
+        sql("CREATE TRIGGER fixture_stop_abort BEFORE INSERT ON messages WHEN NEW.role='assistant' AND NEW.owner_user_message_id='$captured' BEGIN SELECT RAISE(ABORT,'fixture_stop_failure'); END")
+        stop()
+        val fresh=submit("Fresh after failed STOP")
+        assertNull(storage.onDatabaseWorker {LocalRunStore(context).readConversationInputState(session,fresh)})
+        assertNull(storage.onDatabaseWorker {LocalRunStore(context).readConversationInputState(session,captured)})
+        release.countDown()
+        service.awaitSessionIdleForTesting(session).get(20,TimeUnit.SECONDS)
+        storage.onDatabaseWorker {service.runPendingInputRecoverySafely(session)}
+        pump()
+        assertEquals("Unresolved captured STOP must not infer a replay",1,calls.get())
+        assertFalse(rows().any {it.optString("role")=="assistant" && it.optString("userMessageId")==fresh})
+        assertNull(storage.onDatabaseWorker {LocalRunStore(context).readConversationInputState(session,fresh)})
+        sql("DROP TRIGGER fixture_stop_abort")
+        storage.onDatabaseWorker {service.runPendingInputRecoverySafely(session)}
+        await("Fresh completion after exact captured cancellation retry"){rows().any {it.optString("role")=="assistant" && it.optString("userMessageId")==fresh && it.optString("status")=="COMPLETED"}}
+        await("Serial lane idle"){!AgentForegroundService.hasActiveRun(session)}
+        assertEquals(2,calls.get())
+        assertEquals("resolved",storage.onDatabaseWorker {LocalRunStore(context).readConversationInputState(session,captured)})
+        assertFalse(rows().any {it.optString("content")=="STALE-OLD-ANSWER"})
     }
     @Test fun freshUserAfterStopSurvivesOldPhysicalUnwindAndRunsExactlyOnce() {
         startHeld()

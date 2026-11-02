@@ -26,3 +26,13 @@ Fresh frozen Full export passed with source binding unchanged. The first guarded
 Native production repair is now a candidate: positive process-local initial-start ownership for fresh spawned workers, consumed under the cycle lock; exact never-submitted STOP completes its own lifecycle even when persistence cleanup fails. Submitted/restored/replacement cycles are not inferred as unsubmitted. Coordinator preserves the original exception and independently attempts STOP/uncertainty cleanup, attaching secondary failures instead of hiding them. No synthetic worker result, whole-mission completion, or uncertain replay. Two adjacent regressions cover persistence failure and submission winning the STOP race.
 
 The service fixture now uses the same native connection readiness as current acceptance and captures the actual runtime exception. **Production service remains unchanged**, awaiting a meaningful red reproduction. Next frozen Full run is a mixed diagnostic: native green candidate plus corrected service red. No repair PASS is claimed.
+
+## Conclusive STOP red and complete Phase A fix candidate
+
+Second frozen Full diagnostic: native43/43 passed (39 existing plus four repair cases); corrected service2 failed at the intended assertions, proving a later USER was already resolved by the old STOP. Total45 tests, two expected service failures, zero errors/skips; source/artifact bindings unchanged. This establishes host reproduction, not the phone's exact cause.
+
+The service fix now captures exact STOP-owner input cohorts and never rescans later inputs from old cleanup. Exact token cancellation is latched before the potentially blocking database snapshot. A native writer batch resolves only captured IDs atomically using the existing transaction, with no schema change. Later USER input stays durable and waits for physical old-owner release. Failed STOP persistence conservatively gates recovery; existing serial-lane requests remain queued until exact known-cohort metadata resolution succeeds. No raw USER-to-steering conversion or new queue.
+
+New tests cover atomic rollback/reopen, idempotency, later-input conservation, direct stored input parked behind persistence uncertainty, and immediate token cancellation while the database is blocked. Known limitation: failed STOP capture before durable write has no persisted cut marker; in-process quarantine is not a claim of cancellation conservation after process death during storage failure. No provider termination or device guarantee.
+
+The combined fix is awaiting fresh focused Full/Play and complete matching acceptance, then independent review. **Not repair PASS or a new APK.**
