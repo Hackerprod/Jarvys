@@ -1,0 +1,227 @@
+{
+  "status": "FAIL-retained",
+  "sourceCommit": "7eb824805d3ede6d93aa5ceeee95cf3494a9931d",
+  "admissionEnabled": false,
+  "terminal": {
+    "exit": 1,
+    "sourceUnchanged": true,
+    "artifactsUnchanged": true,
+    "xmlFiles": 18,
+    "counts": {
+      "tests": 163,
+      "failures": 4,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "terminalSha256": "224fff914904cf72de0d9eeba4c42ef21f3024b6365b4c5aabdd40e0f68430f2",
+  "sourceBindingSha256": "02a4aca77ef9329391e5ff97f6119d9f238a148ca79c08a6ed0a5b8a30ee61c6",
+  "artifactManifestSha256": "9e3f4efc4cb026230f58e6817dd24367db777fbe51687b579ae88e024e519aa1",
+  "classes": [
+    {
+      "className": "com.jarvys.agent.CentralYieldArtifactSourceTest",
+      "counts": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "ddf50ef9529ad5e880937d3248d7950b64d930f93eae4d0572e63e564104fae1"
+    },
+    {
+      "className": "com.jarvys.agent.CentralYieldCheckpointCodecTest",
+      "counts": {
+        "tests": 14,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "057a700e1d3fdec22be8f93ff5431a8423d2823c0794962454bc3a3eedd9e090"
+    },
+    {
+      "className": "com.jarvys.agent.CentralYieldCheckpointStoreTest",
+      "counts": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "606b25c0e9bf4dd331e8b0a0b7b6b0d26420a8820e9cc84717c04a285828edaa"
+    },
+    {
+      "className": "com.jarvys.agent.CentralYieldCheckpointTest",
+      "counts": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "2506a23232f986b1429ae6e3d678f46b4ef4527bacaad93612f439b3737007ed"
+    },
+    {
+      "className": "com.jarvys.agent.CentralYieldSourceEvidenceTest",
+      "counts": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "60acd4c4ca12d7d136e780fc71fef16e5ff40e00e69bcc582704d74fc1cb9324"
+    },
+    {
+      "className": "com.jarvys.agent.CoreAgentLoopOrdinaryInterruptionResultTest",
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "c6b665229e1d4bd2681cf760ed4857e418d261d580db10c611bdbc4500b4f527"
+    },
+    {
+      "className": "com.jarvys.agent.NativeAssistantYieldCheckpointTest",
+      "counts": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "680f9c63d7c5861118ae443fc5ef0935c415333dccc50490ff43ab6265a0eb88"
+    },
+    {
+      "className": "com.jarvys.agent.ProviderRetryLeaseTest",
+      "counts": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "8e91d863fcea1b8d1c4a02584e36a46cfbc52828f792c1dbeaf04772f2c17c7e"
+    },
+    {
+      "className": "com.jarvys.agent.SealedInferenceTransportTest",
+      "counts": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "766c1929df7b64a938b09cdcd1bedd1d579749adaac6aa7ff41d2d12342a73bd"
+    },
+    {
+      "className": "com.jarvys.agent.chatdb.CentralSubmissionPersistenceTest",
+      "counts": {
+        "tests": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "ce972bc4c615b903c417b58dd4aeddaf6bc5121de8adb87dd031e6bcdc8db21b"
+    },
+    {
+      "className": "com.jarvys.agent.chatdb.CentralSubmissionSchemaCompatibilityTest",
+      "counts": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "57b8ba2b8a7a804cf4d9a67c3ec76dc263a358edfe44fbc9b332c32dc739db17"
+    },
+    {
+      "className": "com.jarvys.agent.chatdb.NativeRegenerationReceiptTest",
+      "counts": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "9bb903d2d311002c46bcee451fc2b6cf6e41261c82fafafa679126c768e1a3ed"
+    },
+    {
+      "className": "com.jarvys.agent.chatdb.NativeRegenerationSourceCompatibilityTest",
+      "counts": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "2918f6f92dc40b4cfa03e0eed14c5e1ce962f0841b3da4bde6f4b261de3da8c5"
+    },
+    {
+      "className": "com.jarvys.agent.chatdb.OrdinaryInterruptionWriterCompatibilityTest",
+      "counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "492d2db9d972777de9b48dd0db0973e55ed96c27d8e8b0178d93c2468217c246"
+    },
+    {
+      "className": "com.jarvys.agent.chatdb.RegeneratedOrphanProtectionTest",
+      "counts": {
+        "tests": 4,
+        "failures": 4,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "exactNativeMarkerRetainsUncertainProtectedSourceAcrossReopenWithoutPermission",
+        "unrelatedOrphanIsStillUnsafeAfterExactNativeRegeneration",
+        "lostCanonicalUserOrNonterminalResponseRemainsUnsafe",
+        "changedMarkerKindKeyOrSequenceNeverReceivesSafeAccounting"
+      ],
+      "xmlSha256": "ff2c208dd92672f772c8a7effa29f55b8c3f50e906914fef27c6a57375a9ffd1"
+    },
+    {
+      "className": "com.jarvys.agent.chatdb.RoomTreeProvenanceCompatibilityTest",
+      "counts": {
+        "tests": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "431993cf565b70fd1eec24846dc238c142b290094e5a7e3dbc74b23e4fffa1bd"
+    },
+    {
+      "className": "com.jarvys.agent.workspaces.WorkspaceCentralResumeSchemaTest",
+      "counts": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "96d05d7059434f6b43034282b0841dca40626bbb6fd03c8d855292a993d76c51"
+    },
+    {
+      "className": "com.jarvys.agent.workspaces.WorkspaceCentralResumeStoreTest",
+      "counts": {
+        "tests": 14,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "2e7884285c3fa6772759ce642e8d5cd4175a552aea22a654edd0831bfd6bdf20"
+    }
+  ],
+  "diagnosis": "All four failures are the RegeneratedOrphanProtectionTest enabled-only setup precondition in an OFF selector; bodies not executed.",
+  "play": "not run after Full failure"
+}
