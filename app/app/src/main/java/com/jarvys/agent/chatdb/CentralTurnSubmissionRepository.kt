@@ -54,7 +54,7 @@ internal class CentralTurnSubmissionRepository(private val database: JarvysChatD
         }
     }
     /** Exact committed native presentation marker; reading this data never mints a permit. */
-    fun regenerationEvidence(sessionId:String,userId:String,assistantId:String):NativeRegenerationEvidence? {
+    fun regenerationEvidence(sessionId:String,userId:String,assistantId:String,ownedRunId:String?=null):NativeRegenerationEvidence? {
         val row=list(sessionId).singleOrNull {it.userMessageId==userId}
         val sourceKind:String
         val sourceGeneration:String
@@ -72,19 +72,24 @@ internal class CentralTurnSubmissionRepository(private val database: JarvysChatD
             sourceDigest=captureCentralUserRootDigestInTransaction(database,sessionId,userId)
         }
         return sql.query("SELECT status,owner_user_message_id,run_id,hidden_kind,hidden_seq,seq FROM messages WHERE conversation_id=? AND message_id=? AND role='assistant'",arrayOf(sessionId,assistantId)).use { c ->
-            check(c.moveToFirst() && c.getString(0)=="COMPLETED" && c.getString(1)==userId && !c.isNull(2) && c.getString(2).isNotBlank() &&
+            check(c.moveToFirst() && NativeRegenerationSource.terminal(if(c.isNull(0))null else c.getString(0)) &&
                 c.getString(3)=="assistant_regenerated" && c.getType(4)==Cursor.FIELD_TYPE_INTEGER && c.getLong(4)>c.getLong(5))
-            val seq=c.getLong(4);val run=c.getString(2)
+            val status=if(c.isNull(0))null else c.getString(0);val explicit=if(c.isNull(1))null else c.getString(1)
+            val seq=c.getLong(4);val run=if(c.isNull(2))null else c.getString(2)
+            if(row!=null)check(status=="COMPLETED" && explicit==userId && !run.isNullOrBlank())
+            check(NativeRegenerationSource.ownerId(database,sessionId,assistantId)==userId)
+            val targetPosition=checkNotNull(NativeRegenerationSource.position(database,sessionId,assistantId))
+            val userPosition=checkNotNull(NativeRegenerationSource.position(database,sessionId,userId))
             check(sql.query("SELECT item_kind,item_key FROM conversation_items WHERE conversation_id=? AND seq=?",arrayOf(sessionId,seq)).use { m ->
                 m.moveToFirst() && m.getString(0)=="assistant_regenerated" && m.getString(1)==assistantId && !m.moveToNext() })
             check(!sql.query("SELECT 1 FROM messages newer JOIN conversation_items n ON n.conversation_id=newer.conversation_id AND n.seq=newer.seq " +
                 "JOIN conversation_items selected ON selected.conversation_id=newer.conversation_id AND selected.seq=? " +
-                "WHERE newer.conversation_id=? AND newer.role='assistant' AND newer.hidden_kind IS NULL AND " +
+                "WHERE newer.conversation_id=? AND newer.role='assistant' AND newer.hidden_kind IS NULL AND (? IS NULL OR newer.run_id IS NULL OR newer.run_id<>?) AND " +
                 "(n.sort_seq>selected.sort_seq OR (n.sort_seq=selected.sort_seq AND n.sort_sub>selected.sort_sub) OR " +
                 "(n.sort_seq=selected.sort_seq AND n.sort_sub=selected.sort_sub AND n.seq>selected.seq)) LIMIT 1",
-                arrayOf(c.getLong(5),sessionId)).use {it.moveToFirst()}) {"Native regeneration target was superseded"}
+                arrayOf(c.getLong(5),sessionId,ownedRunId,ownedRunId)).use {it.moveToFirst()}) {"Native regeneration target was superseded"}
             check(!c.moveToNext())
-            NativeRegenerationEvidence(sessionId,userId,assistantId,seq,run,sourceGeneration,sourceDigest,sourceKind)
+            NativeRegenerationEvidence(sessionId,userId,assistantId,seq,run,sourceGeneration,sourceDigest,sourceKind,status,explicit,targetPosition,userPosition)
         }
     }
     private fun changed() {check(sql.query("SELECT changes()").use {it.moveToFirst() && it.getLong(0)==1L}) {"Central submission CAS conflict"}}

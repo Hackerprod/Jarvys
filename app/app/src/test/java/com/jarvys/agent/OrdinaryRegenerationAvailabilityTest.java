@@ -24,6 +24,7 @@ public class OrdinaryRegenerationAvailabilityTest {
  final CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
  final AtomicInteger calls=new AtomicInteger();
  final AtomicBoolean socketReturned=new AtomicBoolean();
+ final AtomicReference<Throwable> nativeFailure=new AtomicReference<>();
  boolean commitWins, steeringMode, retainedMode;
  final CountDownLatch steerEntered=new CountDownLatch(1),steerRelease=new CountDownLatch(1);
  final AtomicReference<CancellationToken> regenerationToken=new AtomicReference<>();
@@ -34,7 +35,7 @@ public class OrdinaryRegenerationAvailabilityTest {
  Object field(String name)throws Exception {Field f=base.getClass().getDeclaredField(name);f.setAccessible(true);return f.get(base);}
  Object invoke(String name,Class<?>[] types,Object...args)throws Exception {Method m=base.getClass().getDeclaredMethod(name,types);m.setAccessible(true);try{return m.invoke(base,args);}catch(InvocationTargetException e){throw new RuntimeException(e.getCause());}}
  void pump()throws Exception {invoke("pump",new Class[]{});}
- void until(java.util.function.BooleanSupplier test)throws Exception {long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(20);while(!test.getAsBoolean()){pump();if(System.nanoTime()>end)fail("Native condition did not settle");Thread.sleep(10);}}
+ void until(java.util.function.BooleanSupplier test)throws Exception {long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(20);while(!test.getAsBoolean()){pump();if(nativeFailure.get()!=null)throw new AssertionError("Actual native runtime failed; provider calls="+calls.get(),nativeFailure.get());if(System.nanoTime()>end)fail("Native condition did not settle; provider calls="+calls.get()+"; states="+storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)));Thread.sleep(10);}}
  String send(String text)throws Exception{return (String)invoke("send",new Class[]{String.class},text);}
  @Before public void setup()throws Exception {
   base.setup();context=ApplicationProvider.getApplicationContext();service=(AgentForegroundService)field("service");storage=(ChatTestStore)field("storage");
@@ -51,7 +52,10 @@ public class OrdinaryRegenerationAvailabilityTest {
   service.runtimeFactory=(c,id,skills)->new CoreAgentRuntime(c,id,skills,CorePromptBudget.standard(),provider);
   service.mainChatRunner=(runtime,goal,history,attachments,token,progress)->{
    boolean regeneration=calls.get()==(retainedMode?0:1);if(regeneration)regenerationToken.set(token);
-   CoreAgentLoop.Result result=runtime.runMainChat(goal,history,attachments,token,progress);
+   CoreAgentLoop.Result result;
+   try {result=runtime.runMainChat(goal,history,attachments,token,progress);}
+   catch(java.util.concurrent.CancellationException stopped){throw stopped;}
+   catch(RuntimeException failure){nativeFailure.compareAndSet(null,failure);throw failure;}
    if(regeneration){regenerationResult.set(result);if(commitWins){entered.countDown();try{assertTrue(release.await(20,TimeUnit.SECONDS));}catch(InterruptedException failure){throw new AssertionError(failure);}}}
    return result;
   };
@@ -152,11 +156,20 @@ public class OrdinaryRegenerationAvailabilityTest {
  }
 
  @Test public void retainedV99CompletedHistoryRegenerationHasSameInterruptionBoundaryWithoutEnrollment()throws Exception {
+  retainedRegeneration("COMPLETED","retained-v99-run",true);
+ }
+ @Test public void retainedFailedPositionalManualRegenerationKeepsOrdinaryInterruptionWithoutInventedAuthority()throws Exception {
+  retainedRegeneration("FAILED",null,false);
+ }
+ @Test public void retainedUnspecifiedLegacyStatusRegeneratesWithoutInferringCompletionOrRootAuthority()throws Exception {
+  retainedRegeneration(null,null,false);
+ }
+ private void retainedRegeneration(String priorStatus,String priorRun,boolean explicitOwner)throws Exception {
   retainedMode=true;
-  String original=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String user=store.appendConversationMessage(session,"user","Retained v99 USER request");store.appendConversationMessage(session,"assistant","Retained successful answer",0L,"retained-v99-run",user,"COMPLETED",null);return user;});
+  String original=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String user=store.appendConversationMessage(session,"user","Retained v99 USER request");store.appendConversationMessage(session,"assistant","Retained successful answer",0L,priorRun,explicitOwner?user:null,priorStatus,null);return user;});
   assertTrue(storage.onDatabaseWorker(()->new LocalRunStore(context).readCentralSubmissions(session)).isEmpty());
   com.jarvys.agent.chatdb.RegenerationPromptValue event=storage.onDatabaseWorker(()->{LocalRunStore store=new LocalRunStore(context);String assistant=requiredMessageId(store.readConversationMessages(session).stream().filter(r->r.optString("role").equals("assistant")).findFirst().get());return store.regenerateAssistantIfLatest(session,assistant);});
-  assertNotNull(event.getNativeRegenerationReceipt());assertEquals("RETAINED",event.getNativeRegenerationReceipt().getSourceKind());
+  assertNotNull(event.getNativeRegenerationReceipt());assertEquals("RETAINED",event.getNativeRegenerationReceipt().getSourceKind());assertNull(event.getResumeReceipt());
   AgentForegroundService.startRegenerateAssistant(context,event.getText(),new ArrayList<>(),session,event.getUserMessageId(),event.getResumeReceipt(),event.getNativeRegenerationReceipt());
   until(()->entered.getCount()==0);
   String fresh=send("First native NEW_TURN after retained regeneration");

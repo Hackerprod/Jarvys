@@ -7,7 +7,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Canonical data only. Never accepted as an executable permission. */
 internal data class NativeRegenerationEvidence(val sessionId:String,val userMessageId:String,
-    val assistantMessageId:String,val hiddenSeq:Long,val runId:String,val storageGeneration:String,val sourceSha:String,val sourceKind:String)
+    val assistantMessageId:String,val hiddenSeq:Long,val runId:String?,val storageGeneration:String,val sourceSha:String,val sourceKind:String,
+    val targetStatus:String?,val explicitOwner:String?,val targetPosition:List<Long>,val userPosition:List<Long>)
 
 /** One process-live, one-use permission issued only after the native regeneration transaction commits. */
 class NativeRegenerationReceipt private constructor(internal val evidence:NativeRegenerationEvidence,
@@ -36,8 +37,16 @@ class NativeRegenerationReceipt private constructor(internal val evidence:Native
         val sessionId get()=receipt.sessionId
         val runId get()=owner.runId
         val userMessageId get()=receipt.userMessageId
-        fun requireCurrent(token:com.jarvys.agent.CancellationToken) {
+        internal fun originalReceipt()=receipt
+        internal fun requireOwner(current:com.jarvys.agent.AgentForegroundService.CentralSubmissionOwner) {
+            check(owner.runId==current.runId && owner.tokenGeneration==current.tokenGeneration)
+            owner.requireCurrent(sessionId);current.requireCurrent(sessionId)
+        }
+        fun requireTransactionOwner(token:com.jarvys.agent.CancellationToken) {
             owner.requireCurrent(sessionId,token)
+        }
+        fun requireCurrent(token:com.jarvys.agent.CancellationToken) {
+            requireTransactionOwner(token)
             val fence=receipt.lifecycle.fenceIdentity();fence.lock()
             try {check(receipt.lifecycle.isCurrentPure()) {"Consumed regeneration lifecycle changed"}}
             finally {fence.unlock()}

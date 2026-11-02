@@ -174,6 +174,8 @@ public final class AgentForegroundService extends Service {
     volatile Future<?> future;
     volatile NativeCentralBoundary yieldBoundary;
     volatile NativeRegenerationReceipt.ConsumedOwner nativeRegenerationOwner;
+    volatile OrdinaryRunOwner ordinaryOwner;
+    String nativeFollowUpClaimId="";
     volatile boolean handoffNudgeEligible = true;
     volatile String nativeSourceUserId;
     volatile CentralTreeAdmission.SuspensionClaim nativeSuspensionClaim;
@@ -197,6 +199,11 @@ public final class AgentForegroundService extends Service {
     public void requireTerminalEvidence(CentralTreeAdmission.TerminalEvidence evidence) {
       requireCurrent(active.sessionId);evidence.requireCurrent(active.token);
     }
+    public void requireFollowUpClaim(String messageId) {
+      requireCurrent(active.sessionId);
+      if(messageId==null || messageId.isEmpty() || !messageId.equals(active.nativeFollowUpClaimId)
+          || !hasFollowUpClaim(active.sessionId,messageId))throw new IllegalStateException("Native follow-up claim changed");
+    }
     public void requireCurrent(String session, CancellationToken token) {
       if (active.token != token) throw new IllegalStateException("Regeneration token changed");
       requireCurrent(session);
@@ -207,6 +214,57 @@ public final class AgentForegroundService extends Service {
           || service.activeRunTokens.get(session)!=active.token)
         throw new IllegalStateException("Native submission physical owner changed");
     }
+  }
+  /** Physical ordinary execution only; neither tree authority nor a persisted replay capability. */
+  public static final class OrdinaryRunOwner {
+    private final AgentForegroundService service;
+    private final ActiveRun active;
+    private final CentralSubmissionOwner physicalOwner;
+    private final NativeRegenerationReceipt.ConsumedOwner regeneration;
+    private final com.jarvys.agent.chatdb.NativeOrdinaryInputSource input;
+    private OrdinaryRunOwner(AgentForegroundService service,ActiveRun active,
+        NativeRegenerationReceipt.ConsumedOwner regeneration,com.jarvys.agent.chatdb.NativeOrdinaryInputSource input) {
+      if((regeneration==null)==(input==null))throw new IllegalArgumentException("Exact ordinary owner source required");
+      this.service=service;this.active=active;this.physicalOwner=new CentralSubmissionOwner(service,active);
+      this.regeneration=regeneration;this.input=input;
+    }
+    public String getSessionId(){return active.sessionId;}
+    public String getRunId(){return active.runId;}
+    public String getInputMessageId(){return regeneration!=null?regeneration.getUserMessageId():input.getMessageId();}
+    public void requireCurrent(CancellationToken token) {
+      if(token!=active.token || service.activeRuns.get(active.sessionId)!=active || active.ordinaryOwner!=this)
+        throw new IllegalStateException("Ordinary physical owner changed");
+      token.throwIfCancelled();
+      // Service admission lock callers must never acquire a database/lifecycle fence here.
+      if(regeneration!=null)regeneration.requireTransactionOwner(token);
+      else if("FOLLOW_UP".equals(input.getSourceKind()))physicalOwner.requireFollowUpClaim(input.getMessageId());
+    }
+    /** Called outside service admission/child locks; source evidence never mints another owner. */
+    public void revalidateSource(CancellationToken token) {
+      requireCurrent(token);
+      com.jarvys.agent.chatdb.ChatDatabaseBridge bridge=com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(service);
+      if(regeneration!=null)bridge.revalidateConsumedRegenerationSourceSync(regeneration,physicalOwner);
+      else bridge.revalidateOrdinaryInputSourceSync(input,physicalOwner);
+      requireCurrent(token);
+    }
+  }
+  private void bindOrdinaryInputOwner(ActiveRun active,ConversationInput input) {
+    if(!CentralAvailabilityPolicy.admissionEnabled() || input==null || input.origin!=ConversationInput.Origin.AGENT
+        || WorkspaceContinuationDelivery.isProtocol(input.provenance))return;
+    if(active.ordinaryOwner!=null || active.nativeRegenerationOwner!=null)throw new IllegalStateException("Ordinary owner already bound");
+    com.jarvys.agent.chatdb.NativeOrdinaryInputSource source=com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this)
+        .captureOrdinaryInputSourceSync(input,new CentralSubmissionOwner(this,active));
+    active.ordinaryOwner=new OrdinaryRunOwner(this,active,null,source);
+  }
+  private void bindOrdinaryFollowUpOwner(ActiveRun active,String claimId,ConversationInput input) {
+    if(!CentralAvailabilityPolicy.admissionEnabled() || claimId==null || claimId.isEmpty())return;
+    if(input==null || input.origin!=ConversationInput.Origin.USER || !claimId.equals(input.messageId)
+        || active.ordinaryOwner!=null || active.nativeRegenerationOwner!=null)
+      throw new IllegalStateException("Native follow-up source changed");
+    CentralSubmissionOwner owner=new CentralSubmissionOwner(this,active);owner.requireFollowUpClaim(claimId);
+    com.jarvys.agent.chatdb.NativeOrdinaryInputSource source=com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this)
+        .captureOrdinaryFollowUpSourceSync(input,owner);
+    active.ordinaryOwner=new OrdinaryRunOwner(this,active,null,source);
   }
   /** Denial-only STOP boundary; an inactive old token cannot cancel later admitted rows. */
   public static final class CentralSubmissionStopBoundary {
@@ -422,6 +480,7 @@ public final class AgentForegroundService extends Service {
                 controllerRejected = true;
               } else {
                 active = new ActiveRun(sessionId, controller, token);
+                active.nativeFollowUpClaimId=request.followUpClaimId;
                 activeRuns.put(sessionId, active);
                 activeRunTokens.put(sessionId, token);
                 activeRunToken = token;
@@ -1011,10 +1070,10 @@ public final class AgentForegroundService extends Service {
       if(activeRuns.get(owner.sessionId)!=owner || owner.yieldBoundary!=this)
         throw new IllegalStateException("Central yield owner changed");
     }
-    @Override public boolean ordinaryRegeneration() {
+    @Override public boolean ordinaryRun() {
       requireOwner();
-      if(owner.nativeRegenerationOwner==null)return false;
-      owner.nativeRegenerationOwner.requireCurrent(owner.token);return true;
+      if(owner.ordinaryOwner==null)return false;
+      owner.ordinaryOwner.requireCurrent(owner.token);return true;
     }
     @Override public CentralSubmissionAdmission.LivePermit pendingNewTurn() {
       synchronized(interruptAdmissionLock(owner.sessionId)) {
@@ -1354,6 +1413,7 @@ public final class AgentForegroundService extends Service {
             if (store.readConversationInputState(sessionId, messageId) != null) return;
             ConversationInput input = store.readConversationInput(sessionId, messageId);
             if (input == null || input.origin != ConversationInput.Origin.AGENT) return;
+            bindOrdinaryInputOwner(active,input);
             runRealAgent(active.token, "", new ArrayList<>(), sessionId, "", true,
                 false, messageId);
           } catch (RuntimeException earlyFailure) {
@@ -2003,6 +2063,14 @@ public final class AgentForegroundService extends Service {
               active.nativeRegenerationOwner=com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this)
                   .consumeNativeRegenerationReceiptSync(nativeRegeneration, new CentralSubmissionOwner(this, active));
             }
+            if(CentralAvailabilityPolicy.admissionEnabled()) {
+              if(active.nativeRegenerationOwner!=null) active.ordinaryOwner=new OrdinaryRunOwner(this,active,active.nativeRegenerationOwner,null);
+              else if(internalInputSubmission && submittedInput!=null && submittedInput.origin==ConversationInput.Origin.AGENT
+                  && !WorkspaceContinuationDelivery.isProtocol(submittedInput.provenance)) {
+                ConversationInput selected=new LocalRunStore(this).readConversationInput(chatSessionId,internalRunInputId);
+                bindOrdinaryInputOwner(active,selected);
+              } else if(!followUpRequestId.isEmpty()) bindOrdinaryFollowUpOwner(active,followUpRequestId,submittedInput);
+            }
             MemoryResumeAdmission memoryResume = null;
             if (regeneration && resumeLocator != null && !internalInputSubmission
                 && chatSessionId.equals(resumeLocator.getConversationId())
@@ -2327,11 +2395,11 @@ public final class AgentForegroundService extends Service {
       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance))
         runtime.bindClaimedContinuation(storedInput, token);
       ActiveRun regenerationRun=activeRuns.get(sessionId);
-      NativeRegenerationReceipt.ConsumedOwner ordinaryRegenerationOwner=regeneration && regenerationRun!=null
-          && regenerationRun.token==token ? regenerationRun.nativeRegenerationOwner : null;
+      OrdinaryRunOwner ordinaryRegenerationOwner=regenerationRun!=null
+          && regenerationRun.token==token ? regenerationRun.ordinaryOwner : null;
       if(ordinaryRegenerationOwner!=null) {
-        ordinaryRegenerationOwner.requireCurrent(token);
-        runtime.bindNativeRegenerationOwner(ordinaryRegenerationOwner,token);
+        ordinaryRegenerationOwner.revalidateSource(token);
+        runtime.bindNativeOrdinaryOwner(ordinaryRegenerationOwner,token);
       }
       runtime.withMemorySessionRegeneration(regeneration, memoryResumeAdmission);
       runtime.setMainChatSteeringCursor(userMessageId == null ? "" : userMessageId);
@@ -2529,7 +2597,7 @@ public final class AgentForegroundService extends Service {
       if(result.isOrdinaryInterrupted()) {
         if(ordinaryRegenerationOwner==null || treeAdmission!=null || !"PARTIAL".equals(result.outcome))
           throw new IllegalStateException("Ordinary interruption has no exact regeneration owner");
-        ordinaryRegenerationOwner.requireCurrent(token);
+        ordinaryRegenerationOwner.revalidateSource(token);
         result.ordinaryInterruptionReceipt().requireCurrent(ordinaryRegenerationOwner,token);
       }
       if(result.isYielded()) {
@@ -2604,7 +2672,7 @@ public final class AgentForegroundService extends Service {
         treeFailureReason=timedOut?"EXPIRED":isTerminalFailure(responseOutcome)?responseOutcome:"FAILED";
         treeAdmission.failOwnedRoot(this,treeFailureReason);treeExitDisposed=true;
       }
-      if (isTerminalFailure(responseOutcome) && !assistantOwnerInternal.get()) {
+      if (!result.isOrdinaryInterrupted() && isTerminalFailure(responseOutcome) && !assistantOwnerInternal.get()) {
         conversationStore.markConversationMessagesResolved(sessionId,
             java.util.Collections.singletonList(assistantOwnerMessageId.get()));
       }

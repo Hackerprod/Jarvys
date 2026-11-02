@@ -113,37 +113,37 @@ public final class CoreAgentRuntime {
   private CentralTreeAdmission.SuspensionClaim suspensionClaim;
   private CancellationToken suspensionToken;
   private boolean suspensionUsed;
-  private com.jarvys.agent.chatdb.NativeRegenerationReceipt.ConsumedOwner ordinaryRegenerationOwner;
-  private CancellationToken ordinaryRegenerationToken;
-  private boolean ordinaryRegenerationUsed;
+  private AgentForegroundService.OrdinaryRunOwner ordinaryRunOwner;
+  private CancellationToken ordinaryRunToken;
+  private boolean ordinaryRunUsed;
 
-  synchronized void bindNativeRegenerationOwner(
-      com.jarvys.agent.chatdb.NativeRegenerationReceipt.ConsumedOwner owner, CancellationToken token) {
+  synchronized void bindNativeOrdinaryOwner(
+      AgentForegroundService.OrdinaryRunOwner owner, CancellationToken token) {
     if (!CentralAvailabilityPolicy.admissionEnabled() || context == null || depth != 0
         || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
-        || ordinaryRegenerationOwner != null || centralTreeAdmission != null || suspensionClaim != null
+        || ordinaryRunOwner != null || centralTreeAdmission != null || suspensionClaim != null
         || centralSubmissionClaim != null || claimedContinuationInput != null)
-      throw new IllegalStateException("Invalid native ordinary regeneration owner");
-    owner.requireCurrent(token);
-    if (!sessionId.equals(owner.getSessionId())) throw new IllegalStateException("Ordinary regeneration session changed");
-    ordinaryRegenerationOwner = owner; ordinaryRegenerationToken = token;
+      throw new IllegalStateException("Invalid native ordinary run owner");
+    owner.revalidateSource(token);
+    if (!sessionId.equals(owner.getSessionId())) throw new IllegalStateException("Ordinary input session changed");
+    ordinaryRunOwner = owner; ordinaryRunToken = token;
   }
 
   /** Postcommit proof for an interrupted ordinary run; never a tree/suspension permission. */
   public static final class ConfirmedOrdinaryInterruption {
-    private final com.jarvys.agent.chatdb.NativeRegenerationReceipt.ConsumedOwner owner;
+    private final AgentForegroundService.OrdinaryRunOwner owner;
     private final CancellationToken token;
     private final CentralSubmissionAdmission.LivePermit request;
     private final MainChatTranscriptStore.TreeExitReceipt checkpoint;
-    private ConfirmedOrdinaryInterruption(com.jarvys.agent.chatdb.NativeRegenerationReceipt.ConsumedOwner owner,
+    private ConfirmedOrdinaryInterruption(AgentForegroundService.OrdinaryRunOwner owner,
         CancellationToken token, CentralSubmissionAdmission.LivePermit request, MainChatTranscriptStore.TreeExitReceipt checkpoint) {
       this.owner=owner;this.token=token;this.request=request;this.checkpoint=checkpoint;
     }
     CentralSubmissionAdmission.LivePermit request() { return request; }
-    public void requireCurrent(com.jarvys.agent.chatdb.NativeRegenerationReceipt.ConsumedOwner expected,
+    public void requireCurrent(AgentForegroundService.OrdinaryRunOwner expected,
         CancellationToken expectedToken) {
       if(expected!=owner || expectedToken!=token || !owner.getRunId().equals(checkpoint.runId)
-          || !owner.getUserMessageId().equals(checkpoint.ownerMessageId))
+          || !owner.getInputMessageId().equals(checkpoint.ownerMessageId))
         throw new IllegalStateException("Ordinary interruption owner changed");
       owner.requireCurrent(token);
     }
@@ -153,7 +153,7 @@ public final class CoreAgentRuntime {
     if (!CentralAvailabilityPolicy.admissionEnabled() || context == null || depth != 0
         || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
         || suspensionClaim != null || centralSubmissionClaim != null || claimedContinuationInput != null
-        || centralTreeAdmission != null || ordinaryRegenerationOwner != null)
+        || centralTreeAdmission != null || ordinaryRunOwner != null)
       throw new IllegalStateException("Invalid Central suspension binding");
     claim.requireCurrent(token);
     suspensionClaim = claim;
@@ -171,7 +171,7 @@ public final class CoreAgentRuntime {
       CancellationToken token) {
     if (!CentralAvailabilityPolicy.admissionEnabled() || context == null || depth != 0
         || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
-        || centralSubmissionClaim != null || claimedContinuationInput != null || suspensionClaim != null || ordinaryRegenerationOwner != null)
+        || centralSubmissionClaim != null || claimedContinuationInput != null || suspensionClaim != null || ordinaryRunOwner != null)
       throw new IllegalStateException("Invalid native Central submission binding");
     token.throwIfCancelled();
     claim.requireCurrent(claim.getPermit());
@@ -185,14 +185,14 @@ public final class CoreAgentRuntime {
   synchronized void setNativeCentralYieldBoundary(NativeCentralYieldBoundary boundary) {
     if (!CentralAvailabilityPolicy.admissionEnabled() || context == null || depth != 0 ||
         !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId) ||
-        (centralTreeAdmission == null && ordinaryRegenerationOwner == null) ||
-        boundary == null || boundary.ordinaryRegeneration() != (ordinaryRegenerationOwner != null) ||
+        (centralTreeAdmission == null && ordinaryRunOwner == null) ||
+        boundary == null || boundary.ordinaryRun() != (ordinaryRunOwner != null) ||
         nativeCentralYieldBoundary != null) throw new IllegalStateException("Native Central yield admission unavailable");
     nativeCentralYieldBoundary = java.util.Objects.requireNonNull(boundary);
   }
 
   synchronized void bindCentralTreeAdmission(CentralTreeAdmission authority,CancellationToken token) {
-    if(centralTreeAdmission!=null || ordinaryRegenerationOwner!=null || context==null || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId))
+    if(centralTreeAdmission!=null || ordinaryRunOwner!=null || context==null || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId))
       throw new IllegalStateException("Invalid Central tree capability binding");
     authority.requireCurrent(token);centralTreeAdmission=authority;
   }
@@ -204,7 +204,7 @@ public final class CoreAgentRuntime {
   synchronized void bindClaimedContinuation(ConversationInput input, CancellationToken token) {
     if (context == null || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
         || input == null || !WorkspaceContinuationDelivery.isProtocol(input.provenance)
-        || claimedContinuationInput != null || centralSubmissionClaim != null || suspensionClaim != null || ordinaryRegenerationOwner != null)
+        || claimedContinuationInput != null || centralSubmissionClaim != null || suspensionClaim != null || ordinaryRunOwner != null)
       throw new IllegalStateException("Invalid continuation runtime binding");
     token.throwIfCancelled();
     WorkspaceContinuationDelivery.claimedRunId(context, input, token);
@@ -213,12 +213,12 @@ public final class CoreAgentRuntime {
   }
 
   private synchronized String nextRuntimeRunId(boolean mainChat, CancellationToken token) {
-    if (ordinaryRegenerationOwner != null) {
-      if (!mainChat || depth != 0 || token != ordinaryRegenerationToken || ordinaryRegenerationUsed)
-        throw new IllegalStateException("Ordinary regeneration runtime already consumed or owner changed");
-      ordinaryRegenerationOwner.requireCurrent(token);
-      ordinaryRegenerationUsed = true;
-      return ordinaryRegenerationOwner.getRunId();
+    if (ordinaryRunOwner != null) {
+      if (!mainChat || depth != 0 || token != ordinaryRunToken || ordinaryRunUsed)
+        throw new IllegalStateException("Ordinary input runtime already consumed or owner changed");
+      ordinaryRunOwner.requireCurrent(token);
+      ordinaryRunUsed = true;
+      return ordinaryRunOwner.getRunId();
     }
     if (suspensionClaim != null) {
       if (!mainChat || depth != 0 || token != suspensionToken || suspensionUsed)
@@ -472,6 +472,7 @@ public final class CoreAgentRuntime {
       if (request != null && !request.isBlank() || attachments != null && !attachments.isEmpty())
         throw new IllegalStateException("Suspension restores only the exact retained checkpoint");
     } else if(centralTreeAdmission!=null)centralTreeAdmission.revalidateSource(token);
+    if (ordinaryRunOwner != null) ordinaryRunOwner.revalidateSource(token);
     final String operationRequest = suspensionClaim == null ? request : suspensionClaim.originalOperationRequest(token);
     CoreToolRegistry toolRegistry = createTools();
     if (!mainChat) {
@@ -616,7 +617,7 @@ public final class CoreAgentRuntime {
               CoreAgentLoop.ToolResultBudget.BOUNDED, turnContextProvider, new ProviderRetryWaiter());
       if (nativeCentralYieldBoundary != null) loop.setNativeCentralYieldBoundary(sessionId,nativeCentralYieldBoundary);
       if (transcriptStore != null) {
-        if(centralTreeAdmission!=null || ordinaryRegenerationOwner!=null)transcriptStore.enableTreeExitReceipt();
+        if(centralTreeAdmission!=null || ordinaryRunOwner!=null)transcriptStore.enableTreeExitReceipt();
         transcriptStore.attach(loop, history, currentTurnOwnerMessageId, runId);
       }
       if (suspensionClaim != null) {
@@ -630,17 +631,17 @@ public final class CoreAgentRuntime {
       }
       CoreAgentLoop.Result completed = loop.run(request, history, attachments, token, listener, currentUserMessageId, runId);
       if (completed.isOrdinaryInterrupted()) {
-        if (ordinaryRegenerationOwner == null || centralTreeAdmission != null || nativeCentralYieldBoundary == null
-            || !nativeCentralYieldBoundary.ordinaryRegeneration() || transcriptStore == null)
+        if (ordinaryRunOwner == null || centralTreeAdmission != null || nativeCentralYieldBoundary == null
+            || !nativeCentralYieldBoundary.ordinaryRun() || transcriptStore == null)
           throw new IllegalStateException("Ordinary interruption has no exact native owner");
-        ordinaryRegenerationOwner.requireCurrent(token);
+        ordinaryRunOwner.revalidateSource(token);
         CoreAgentLoop.YieldCandidate candidate=completed.ordinaryInterruptionCandidate();
         nativeCentralYieldBoundary.requireCurrent(candidate.request);
         MainChatTranscriptStore.requireSafeYieldCheckpoint(candidate.checkpoint);
         MainChatTranscriptStore.TreeExitReceipt persisted=transcriptStore.confirmTreeExit(candidate.checkpoint,runId);
         ConfirmedOrdinaryInterruption receipt=new ConfirmedOrdinaryInterruption(
-            ordinaryRegenerationOwner,token,candidate.request,persisted);
-        receipt.requireCurrent(ordinaryRegenerationOwner,token);
+            ordinaryRunOwner,token,candidate.request,persisted);
+        receipt.requireCurrent(ordinaryRunOwner,token);
         completed.withConfirmedOrdinaryInterruption(receipt);
         confirmedNonterminalExit=true;
         return AgentResultPresentation.localize(context,completed);
@@ -732,6 +733,7 @@ public final class CoreAgentRuntime {
   com.jarvys.agent.chatdb.InteractionProtectionSnapshot validateRuntimeProtectedContext(
       List<ConversationTurn> transcript, CancellationToken token) {
     token.throwIfCancelled();
+    if (ordinaryRunOwner != null) ordinaryRunOwner.revalidateSource(token);
     if (suspensionClaim != null) {
       if (token != suspensionToken) throw new IllegalStateException("context_suspension_token_changed");
       suspensionClaim.requireBound(token);
@@ -901,6 +903,9 @@ public final class CoreAgentRuntime {
           // A provider must never forward a retained pre-dispatch signal into local re-preparation.
           throw new IllegalStateException("provider_forwarded_context_invalidation", downstream);
         }
+        // Canonical ordinary source may have changed while only the network was in flight.
+        // Revalidate on the owner before CoreAgentLoop can commit this reply/tool proposal.
+        if (ordinaryRunOwner != null) ordinaryRunOwner.revalidateSource(runToken);
         if (reactionTool != null) reactionTool.modelRequestCompleted();
         return reply;
       }

@@ -2346,6 +2346,77 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         } catch(failure:Throwable) {NativeRegenerationReceipt.invalidate(receipt);throw failure}
     }
 
+    fun revalidateConsumedRegenerationSourceSync(consumed:NativeRegenerationReceipt.ConsumedOwner,
+        owner:com.jarvys.agent.AgentForegroundService.CentralSubmissionOwner) = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            consumed.requireOwner(owner);val receipt=consumed.originalReceipt()
+            check(anchor.accepts(receipt.lifecycle,repos.database))
+            runBlocking {repos.database.withChatReadTransaction {
+                check(CentralTurnSubmissionRepository(repos.database).regenerationEvidence(receipt.sessionId,
+                    receipt.userMessageId,receipt.assistantMessageId,owner.runId)==receipt.evidence)
+                consumed.requireOwner(owner)
+            }}
+        }
+    }
+    fun captureOrdinaryInputSourceSync(input:com.jarvys.agent.ConversationInput,
+        owner:com.jarvys.agent.AgentForegroundService.CentralSubmissionOwner):NativeOrdinaryInputSource = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            owner.requireCurrent(input.conversationId)
+            val generation=runBlocking {ConnectionProjectionRepository(repos.database).generation()}
+            runBlocking {repos.database.withChatReadTransaction {
+                val row=requireNotNull(repos.reader.readMessage(input.conversationId,input.messageId))
+                NativeOrdinaryInputSource.capture(row,input,generation,anchor.attest(repos.database,generation)).also {owner.requireCurrent(input.conversationId)}
+            }}
+        }
+    }
+    private fun ordinaryFollowUpLedger(database:JarvysChatDatabase,session:String,id:String,pending:Boolean):List<String> {
+        val values=mutableListOf<String>()
+        database.chatSql.query("SELECT seq,content,dispatched_message_id,dispatched_seq,input_state FROM interrupt_requests WHERE conversation_id=? AND request_id=?",arrayOf(session,id)).use { c ->
+            check(c.moveToFirst() && c.getString(2)==id && !c.isNull(3))
+            check(c.isNull(4) || !pending && c.getString(4)=="incorporated")
+            for(i in 0..3)values.add(c.getString(i));check(!c.moveToNext())
+        }
+        database.chatSql.query("SELECT ordinal,skill_id FROM interrupt_request_skills WHERE conversation_id=? AND request_id=? ORDER BY ordinal",arrayOf(session,id)).use { c ->
+            while(c.moveToNext()){values.add(c.getString(0));values.add(c.getString(1))}
+        }
+        return values
+    }
+    fun captureOrdinaryFollowUpSourceSync(input:com.jarvys.agent.ConversationInput,
+        owner:com.jarvys.agent.AgentForegroundService.CentralSubmissionOwner):NativeOrdinaryInputSource = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            owner.requireCurrent(input.conversationId);owner.requireFollowUpClaim(input.messageId)
+            val generation=runBlocking {ConnectionProjectionRepository(repos.database).generation()}
+            runBlocking {repos.database.withChatReadTransaction {
+                val row=requireNotNull(repos.reader.readMessage(input.conversationId,input.messageId))
+                val ledger=ordinaryFollowUpLedger(repos.database,input.conversationId,input.messageId,true)
+                check(ledger[1]==row.text && ledger[3]==row.seq.toString())
+                NativeOrdinaryInputSource.captureFollowUp(row,input,generation,anchor.attest(repos.database,generation),ledger)
+                    .also {owner.requireFollowUpClaim(input.messageId)}
+            }}
+        }
+    }
+    fun revalidateOrdinaryInputSourceSync(source:NativeOrdinaryInputSource,
+        owner:com.jarvys.agent.AgentForegroundService.CentralSubmissionOwner) = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            owner.requireCurrent(source.sessionId);check(anchor.accepts(source.lifecycle,repos.database))
+            runBlocking {repos.database.withChatReadTransaction {
+                check(repos.database.chatSql.query("SELECT value FROM storage_meta WHERE key=?",arrayOf(ConnectionProjectionRepository.GENERATION_KEY)).use {
+                    it.moveToFirst() && it.getString(0)==source.storageGeneration && !it.moveToNext()
+                }) {"Ordinary source storage generation changed"}
+                source.requireSame(requireNotNull(repos.reader.readMessage(source.sessionId,source.messageId)))
+                if(source.sourceKind=="FOLLOW_UP") {
+                    owner.requireFollowUpClaim(source.messageId)
+                    check(ordinaryFollowUpLedger(repos.database,source.sessionId,source.messageId,false)==source.followUpLedger)
+                }
+                owner.requireCurrent(source.sessionId)
+            }}
+        }
+    }
+
     fun hideTranslationSync(conversationId: String, messageId: String): ChatDbResult<Long> =
         execute { it.conversations.hideTranslation(conversationId, messageId) }
 

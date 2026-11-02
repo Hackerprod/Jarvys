@@ -1,0 +1,143 @@
+{
+  "sourceCommit": "27250bf4d6fa818e43c811a5788c46e386c3f2b4",
+  "scope": "Retained diagnostic evidence; not Phase B acceptance PASS",
+  "runs": [
+    {
+      "exit": 1,
+      "sourceUnchanged": true,
+      "artifactsUnchanged": true,
+      "xmlFiles": 7,
+      "counts": {
+        "tests": 109,
+        "failures": 3,
+        "errors": 0,
+        "skipped": 0
+      },
+      "name": "phase-b-r1-enabled-native-tests-1",
+      "status": "acceptance-fail",
+      "terminalSha256": "62b1460f847944bb185c133faae1c44c1bab990788c0a574c3e69bda35d3e0b8",
+      "classes": [
+        {
+          "name": "com.jarvys.agent.CentralAvailabilityBoundaryAcceptanceTest",
+          "tests": 16,
+          "failures": 0,
+          "xmlSha256": "a48bc7fcecfe1d038b5380f29c4809b35bcba3705f99508bc5d2ff55db7b927f",
+          "failedTests": []
+        },
+        {
+          "name": "com.jarvys.agent.CentralAvailabilityServiceTest",
+          "tests": 4,
+          "failures": 0,
+          "xmlSha256": "61259e4ceaa8775c1ad0a11842d449570fd468930f551bdde4c933672b2baa46",
+          "failedTests": []
+        },
+        {
+          "name": "com.jarvys.agent.CentralTreeServiceAcceptanceTest",
+          "tests": 26,
+          "failures": 0,
+          "xmlSha256": "a11410f5235d30ccc34e37665ec5371b33026a5186bbf360fc114dc4b443dc0d",
+          "failedTests": []
+        },
+        {
+          "name": "com.jarvys.agent.InternalContinuationSuspensionAuthorityTest",
+          "tests": 1,
+          "failures": 1,
+          "xmlSha256": "b82df438c8264e1a45fd90cd3fa0c33c6751da6a9bc655b476f3fafeee177c09",
+          "failedTests": [
+            "suspendedActualInternalContinuationKeepsOperationContextButCannotDelegate"
+          ]
+        },
+        {
+          "name": "com.jarvys.agent.MainAgentInteractionTest",
+          "tests": 54,
+          "failures": 0,
+          "xmlSha256": "96e8d7fae59dad75c265b87b30cb5617ecee4760f80f5c3ef86867383110b01b",
+          "failedTests": []
+        },
+        {
+          "name": "com.jarvys.agent.OrdinaryRegenerationAvailabilityTest",
+          "tests": 5,
+          "failures": 2,
+          "xmlSha256": "84d470c5485b1d3b60752293c6619a86c655d38e2de009e2e067a549f1bf9f32",
+          "failedTests": [
+            "retainedV99CompletedHistoryRegenerationHasSameInterruptionBoundaryWithoutEnrollment",
+            "actualStopOfRegenerationIsNotOrdinaryInterruption"
+          ]
+        },
+        {
+          "name": "com.jarvys.agent.OriginalUserSuspensionAuthorityTest",
+          "tests": 3,
+          "failures": 0,
+          "xmlSha256": "60600fabe7ab81e35b6cbb98f665b6b502350ba24bdf060e14c1ffd6c6dab228",
+          "failedTests": []
+        }
+      ]
+    },
+    {
+      "exit": 1,
+      "sourceUnchanged": true,
+      "artifactsUnchanged": true,
+      "xmlFiles": 2,
+      "counts": {
+        "tests": 2,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "name": "phase-b-r1-external-diagnostic-tests-2",
+      "status": "invalid-exact-source-binding",
+      "terminalSha256": "f57f3964e681a028d345fcfc3ebc4572a1669e6e54810001e0c36b12f6c7612e",
+      "classes": [
+        {
+          "name": "com.jarvys.agent.LateSteerAvailabilityDiagnosticTest",
+          "tests": 1,
+          "failures": 0,
+          "xmlSha256": "6234b94c9e0e0679884e4344da98c935d29879b5baabd3ec87e4997d7276ace4",
+          "failedTests": []
+        },
+        {
+          "name": "com.jarvys.agent.OrdinaryAgentAvailabilityDiagnosticTest",
+          "tests": 1,
+          "failures": 1,
+          "xmlSha256": "b161a90adc81ed09a00bcfe7f76bdde6492bea4de494701b863c80923550d8ee",
+          "failedTests": [
+            "nativeNonOptedResultAcknowledgedButCannotYieldHeldInference"
+          ]
+        }
+      ],
+      "limitation": "An uncompiled unrelated fixture edit differed from the export source baseline; within-run unchanged maps do not validate candidate binding."
+    },
+    {
+      "exit": 0,
+      "sourceUnchanged": true,
+      "artifactsUnchanged": true,
+      "xmlFiles": 2,
+      "counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "name": "phase-b-r1-external-diagnostic-tests-3",
+      "status": "defects-reproduced-not-acceptance",
+      "terminalSha256": "7c640c61b10ef4a754322bd721a8cf24af3d40de822e61a236833cd854fd9598",
+      "classes": [
+        {
+          "name": "com.jarvys.agent.LateSteerAvailabilityDiagnosticTest",
+          "tests": 1,
+          "failures": 0,
+          "xmlSha256": "fbfc1e77109cf9e785285287afed17d045b6fe5c325e993d257a798084983129",
+          "failedTests": []
+        },
+        {
+          "name": "com.jarvys.agent.OrdinaryAgentAvailabilityDiagnosticTest",
+          "tests": 1,
+          "failures": 0,
+          "xmlSha256": "ec27de7ba465b1e66f0f6676a48327d57231d4f9b05a56302116869cbb2b3238",
+          "failedTests": []
+        }
+      ],
+      "meaning": "Both assertions deliberately detect blocked fresh USER during ordinary AGENT and late-STEER inference. Exact before/after source maps match the exported candidate; production/artifacts unchanged."
+    }
+  ]
+}

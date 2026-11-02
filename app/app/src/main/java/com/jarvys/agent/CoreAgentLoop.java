@@ -636,7 +636,7 @@ public final class CoreAgentLoop {
         nativeYieldBoundary.requireCurrent(request);
         if (checkpoint.appliedIncomingIds.contains(request.getUserMessageId()))
             throw new IllegalStateException("New turn was incorporated into the old execution");
-        if (nativeYieldBoundary.ordinaryRegeneration()) {
+        if (nativeYieldBoundary.ordinaryRun()) {
             Result interrupted = new Result(runId, "Interrupted by a newer request.", turns, "PARTIAL",
                     Math.max(0L, System.currentTimeMillis()-startedAtMs), InterruptionReason.SUPERSEDED_BY_NEW_TURN);
             interrupted.ordinaryInterruption = new YieldCandidate(request, checkpoint);

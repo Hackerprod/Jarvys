@@ -707,16 +707,24 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     suspend fun regenerateIfLatestAssistant(
         conversationId: String,
         messageId: String,
-    ): ChatDbResult<RegenerationPromptValue?> = transactionResult {
-        if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
-        val target = findMessage(conversationId, messageId) ?: return@transactionResult ChatDbResult.NotFound
-        if (target.role != ROLE_ASSISTANT) return@transactionResult ChatDbResult.Invalid("regeneration target must be an assistant message")
-        if (target.hiddenKind != null) return@transactionResult ChatDbResult.Success(null)
+    ): ChatDbResult<RegenerationPromptValue?> =
+        if(com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled()) regenerateAvailabilitySource(conversationId,messageId)
+        else transactionResult {regenerateNativeSource(conversationId,messageId,false)}
+
+    /** Data-only native writer primitive. Never issues an executable receipt, catalog entry, or dispatch. */
+    internal suspend fun regenerateAvailabilitySource(conversationId:String,messageId:String):ChatDbResult<RegenerationPromptValue?> =
+        transactionResult {regenerateNativeSource(conversationId,messageId,true)}
+
+    private suspend fun regenerateNativeSource(conversationId:String,messageId:String,availabilitySource:Boolean):ChatDbResult<RegenerationPromptValue?> = run {
+        if (findConversation(conversationId) == null) return@run missingConversation(conversationId)
+        val target = findMessage(conversationId, messageId) ?: return@run ChatDbResult.NotFound
+        if (target.role != ROLE_ASSISTANT) return@run ChatDbResult.Invalid("regeneration target must be an assistant message")
+        if (target.hiddenKind != null) return@run ChatDbResult.Success(null)
         val explicitOwnerId = target.ownerUserMessageId
         val explicitOwner = explicitOwnerId?.takeIf { it.isNotBlank() }
             ?.let { findMessage(conversationId, it) }
         if (!explicitOwnerId.isNullOrBlank() && explicitOwner?.role != ROLE_USER)
-            return@transactionResult ChatDbResult.Invalid("assistant replies owned by internal inputs cannot be regenerated")
+            return@run ChatDbResult.Invalid("assistant replies owned by internal inputs cannot be regenerated")
 
         val latestActiveAssistantId = sql.query(
             "SELECT m.message_id FROM messages m " +
@@ -725,36 +733,32 @@ class ConversationRepository internal constructor(private val database: JarvysCh
                 "ORDER BY i.sort_seq DESC,i.sort_sub DESC,i.seq DESC LIMIT 1",
             arrayOf(conversationId),
         ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-        if (latestActiveAssistantId != messageId) return@transactionResult ChatDbResult.Success(null)
+        if (latestActiveAssistantId != messageId) return@run ChatDbResult.Success(null)
 
-        val targetPosition = sql.query(
-            "SELECT sort_seq,sort_sub,seq FROM conversation_items WHERE conversation_id=? AND seq=?",
-            arrayOf(conversationId, target.seq),
-        ).use { cursor ->
-            if (cursor.moveToFirst()) SortPosition(cursor.getLong(0), cursor.getInt(1), cursor.getLong(2)) else null
-        } ?: return@transactionResult ChatDbResult.NotFound
-
-        val owner = explicitOwner?.takeIf { it.role == ROLE_USER } ?: if (explicitOwnerId.isNullOrBlank()) sql.query(
-            "SELECT m.message_id FROM messages m " +
-                "JOIN conversation_items i ON i.conversation_id=m.conversation_id AND i.seq=m.seq " +
-                "WHERE m.conversation_id=? AND m.role='user' AND " +
-                "(i.sort_seq<? OR (i.sort_seq=? AND i.sort_sub<?) OR " +
-                "(i.sort_seq=? AND i.sort_sub=? AND i.seq<?)) " +
-                "ORDER BY i.sort_seq DESC,i.sort_sub DESC,i.seq DESC LIMIT 1",
-            arrayOf(conversationId, targetPosition.sortSeq, targetPosition.sortSeq, targetPosition.sortSub,
-                targetPosition.sortSeq, targetPosition.sortSub, targetPosition.seq),
-        ).use { cursor ->
-            if (cursor.moveToFirst()) findMessage(conversationId, cursor.getString(0)) else null
-        } else null
-        if (owner == null) return@transactionResult ChatDbResult.NotFound
+        val owner = NativeRegenerationSource.ownerId(database,conversationId,messageId)?.let {findMessage(conversationId,it)}
+        if (owner == null) return@run ChatDbResult.NotFound
+        if(availabilitySource &&
+            conversationId==com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION &&
+            (owner.hiddenKind!=null || !NativeRegenerationSource.terminal(target.status)))
+            return@run ChatDbResult.Invalid("Regeneration requires a known terminal native assistant source")
         if(owner.messageId in CentralTurnSubmissionRepository(database).historyExcluded(conversationId))
-            return@transactionResult ChatDbResult.Invalid("Queued or uncertain Central submission cannot be regenerated")
+            return@run ChatDbResult.Invalid("Queued or uncertain Central submission cannot be regenerated")
         if(CentralTurnSubmissionRepository(database).list(conversationId).any {it.userMessageId==owner.messageId} &&
-            (target.status!="COMPLETED" || target.runId.isNullOrBlank()))
-            return@transactionResult ChatDbResult.Invalid("Positive Central regeneration requires an exact completed assistant")
+            (explicitOwner==null || target.status!="COMPLETED" || target.runId.isNullOrBlank()))
+            return@run ChatDbResult.Invalid("Positive Central regeneration requires an exact completed assistant")
         val prompt = hydrateMessages(conversationId, listOf(owner.messageId)).singleOrNull()
-            ?: return@transactionResult ChatDbResult.NotFound
+            ?: return@run ChatDbResult.NotFound
 
+        if(availabilitySource &&
+            conversationId==com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION &&
+            NativeRegenerationSource.terminal(target.status) &&
+            CentralTurnSubmissionRepository(database).list(conversationId).none {it.userMessageId==owner.messageId}) {
+            check(prompt.parts.none {it.kind==CentralSubmissionRequest.PART_KIND || it.kind==com.jarvys.agent.ConversationInput.PROVENANCE_PART_KIND})
+            captureCentralUserRootDigestInTransaction(database,conversationId,owner.messageId)
+            // Existing native writer initializes a retained destination only as part of this successful action.
+            // The outer writer transaction rolls generation and presentation marker back together on failure.
+            ConnectionProjectionRepository(database).generation()
+        }
         val seq = allocateSequence(conversationId)
         val now = epochSeconds()
         insertItem(conversationId, seq, "assistant_regenerated", messageId, seq, 0, latestTurnAnchor(conversationId), now)

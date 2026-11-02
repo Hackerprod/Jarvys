@@ -157,7 +157,14 @@ final class CentralYieldCheckpointCodec {
         if(!row.isNull("source")) {
             JSONObject source=row.getJSONObject("source");ConversationTurn.Source bound=new ConversationTurn.Source(
                 ConversationTurn.Source.Kind.valueOf(str(source.get("kind"))),str(source.get("conversationId")),str(source.get("sourceId")),str(source.get("callId")));
-            if(kind==ConversationTurn.Kind.MESSAGE&&!result.durableMessageId.equals(bound.sourceId))throw new IllegalArgumentException("Message source mismatch");
+            if(kind==ConversationTurn.Kind.MESSAGE) {
+                // A persisted ordinary assistant has a canonical row Source, but is not an input
+                // to acknowledge. ConversationReader intentionally leaves its input identity empty.
+                boolean ordinaryAssistantWithoutInputId = result.durableMessageId.isEmpty()
+                    && "assistant".equals(result.role) && result.incomingMetadata == null;
+                if(!ordinaryAssistantWithoutInputId && !result.durableMessageId.equals(bound.sourceId))
+                    throw new IllegalArgumentException("Message source mismatch");
+            }
             result.bindSource(bound);
         }
         return result;
