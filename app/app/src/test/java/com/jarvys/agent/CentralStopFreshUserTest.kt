@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Real serial service/runtime with a provider that cannot physically unwind until released. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk=[34],application=TreeNativeTestApplication::class,shadows=[ArtifactOsShadow::class,CentralStopFreshUserTest.StopFailureObservation::class])
+@Config(sdk=[34],application=TreeNativeTestApplication::class,shadows=[ArtifactOsShadow::class,CentralStopFreshUserTest.StopFailureObservation::class,CentralStopFreshUserTest.NativeAdmissionFailureObservation::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class CentralStopFreshUserTest {
     private val storage=ChatTestStore(runTestOnWorker=false,registerApplicationFilesDirectory=true)
@@ -39,6 +39,7 @@ class CentralStopFreshUserTest {
     private val heldToken=java.util.concurrent.atomic.AtomicReference<CancellationToken>()
     private val runtimeFailure=java.util.concurrent.atomic.AtomicReference<Throwable>()
     private var startId=0
+    private val deliveredActions=mutableListOf<String>()
     @org.robolectric.annotation.Implements(AgentErrorReporter::class)
     class StopFailureObservation {
         companion object {
@@ -52,6 +53,16 @@ class CentralStopFreshUserTest {
             }
         }
     }
+    @org.robolectric.annotation.Implements(LocalDiagnostics::class)
+    class NativeAdmissionFailureObservation {
+        companion object {
+            val failures=java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+            @JvmStatic @org.robolectric.annotation.Implementation
+            fun recoverable(context:Context?,origin:LocalDiagnostics.Origin,failure:Throwable?) {
+                if(origin==LocalDiagnostics.Origin.SERVICE && failure!=null)failures.add(failure)
+            }
+        }
+    }
     private fun assertActualStopInsertFault() {
         assertTrue("Actual STOP INSERT fault must fire, not schema validation or an earlier failure",
             StopFailureObservation.failures.any {failure ->
@@ -59,7 +70,7 @@ class CentralStopFreshUserTest {
             })
     }
     @Before fun setup() {
-        StopFailureObservation.failures.clear()
+        StopFailureObservation.failures.clear();NativeAdmissionFailureObservation.failures.clear()
         storage.localRunStore(context.filesDir)
         storage.onDatabaseWorker {
             FreshStorageBootstrap.ensure(context)
@@ -101,7 +112,10 @@ class CentralStopFreshUserTest {
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
         val app=Shadows.shadowOf(context as Application)
         var intent=app.nextStartedService
-        while(intent!=null){service.onStartCommand(intent,0,++startId);intent=app.nextStartedService}
+        while(intent!=null){
+            deliveredActions.add("${intent.action}:regeneration=${intent.getBooleanExtra("chat_regeneration",false)}:native=${intent.hasExtra("native_regeneration_action")}:followup=${intent.hasExtra("chat_follow_up_request_id")}")
+            service.onStartCommand(intent,0,++startId);intent=app.nextStartedService
+        }
     }
     private fun await(description:String,condition:()->Boolean) {
         val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(20)
@@ -165,9 +179,20 @@ class CentralStopFreshUserTest {
         assertEquals(queued,prompt.userMessageId);assertNull(prompt.resumeReceipt)
         val receipt=prompt.nativeRegenerationReceipt
         if(CentralAvailabilityPolicy.admissionEnabled())assertNotNull("Actual retained manual action owns ordinary admission",receipt)
+        if(receipt!=null) {
+            assertSame(receipt,NativeRegenerationReceipt.lookupLive(receipt.opaqueId))
+            assertTrue(storage.onDatabaseWorker {bridge.validateNativeRegenerationReceiptSync(receipt)})
+        }
         AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),session,prompt.userMessageId,prompt.resumeReceipt,receipt)
         if(receipt!=null)AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),session,prompt.userMessageId,prompt.resumeReceipt,receipt)
-        await("Explicit native regeneration of eligible stopped USER reaches real provider"){freshEntered.count==0L}
+        try {
+            await("Explicit native regeneration of eligible stopped USER reaches real provider"){freshEntered.count==0L}
+        } catch(failure:Throwable) {
+            val diagnostic=AssertionError("Native stopped-source regeneration failed before provider: calls=${calls.get()}, liveReceipt=${receipt?.let {NativeRegenerationReceipt.lookupLive(it.opaqueId)===it}}, queuedClaims=$claims, active=${AgentForegroundService.hasActiveRun(session)}, delivered=$deliveredActions",failure)
+            NativeAdmissionFailureObservation.failures.forEach {diagnostic.addSuppressed(it)}
+            StopFailureObservation.failures.forEach {diagnostic.addSuppressed(it)}
+            throw diagnostic
+        }
         await("Regenerated USER completes"){rows().any {it.optString("role")=="assistant" && it.optString("userMessageId")==queued && it.optString("status")=="COMPLETED"}}
         await("Serial lane idle"){!AgentForegroundService.hasActiveRun(session)}
         assertEquals(2,calls.get())
