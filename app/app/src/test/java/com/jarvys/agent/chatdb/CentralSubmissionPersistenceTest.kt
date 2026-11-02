@@ -210,4 +210,23 @@ class CentralSubmissionPersistenceTest {
         assertTrue("Real native cascade must be observed before rollback",inspected)
         assertEquals(row,read(row.submissionId));assertEquals(1,ConversationRepository(db).getMessage(session,row.userMessageId)!!.attachments.size)
     }
+    @Test fun retainedSuspensionProjectionExcludesFreshCompletedRootButRequiresOriginalProtectedSource()=work {
+        val repo=ConversationRepository(db);val reader=ConversationReader(db)
+        val original=(repo.appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","original parked source")))) as ChatDbResult.Success).value
+        val retained=reader.loadConversationContext(session)
+        val fresh=(repo.appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","unrelated fresh root")))) as ChatDbResult.Success).value
+        repo.appendMessage(AppendMessageInput(session,"assistant",listOf(MessagePartInput("text","fresh completed answer")),status="COMPLETED",ownerUserMessageId=fresh.messageId,runId="fresh-run"))
+        val visible=reader.loadConversationContext(session);val protection=reader.readInteractionProtection(session)
+        val scoped=db.withChatReadTransaction {CentralSuspensionSourceScope.select(db,session,original.messageId,"successor-run",retained,emptyMap(),emptySet(),visible)}
+        assertEquals(retained.map {it.source()},scoped.map {it.source()})
+        assertFalse(scoped.any {it.content.contains("fresh")})
+        CentralSuspensionSourceScope.requirePresent(retained,scoped,protection)
+        rejected {CentralSuspensionSourceScope.requirePresent(retained,emptyList(),protection)}
+        rejected {db.withChatReadTransaction {CentralSuspensionSourceScope.select(db,session,original.messageId,"successor-run",retained,emptyMap(),emptySet(),visible.filterNot {it.source()?.sourceId==original.messageId})}}
+        // The real incoming receipt digest is not replaceable by a canonical unrelated USER ID.
+        rejected {db.withChatReadTransaction {CentralSuspensionSourceScope.select(db,session,original.messageId,"successor-run",retained,mapOf(fresh.messageId to "a".repeat(64)),emptySet(),visible)}}
+        db.testChatSql.execSQL("UPDATE message_parts SET payload='mutated retained source' WHERE conversation_id=? AND message_id=? AND kind='text'",arrayOf(session,original.messageId))
+        val changed=reader.loadConversationContext(session)
+        rejected {db.withChatReadTransaction {CentralSuspensionSourceScope.select(db,session,original.messageId,"successor-run",retained,emptyMap(),emptySet(),changed)}}
+    }
 }

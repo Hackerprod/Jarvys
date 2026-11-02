@@ -73,13 +73,16 @@ final class MainChatTranscriptStore {
     /** Confirmed checkpoint facts only; the native tree owner separately authorizes parking. */
     public static final class ConfirmedCentralYield {
         private final CoreAgentLoop.Checkpoint retained;
-        private final String oldCycle, runId, owner, rootId, certificate, digest, reference;
+        private final String oldCycle, runId, owner, rootId, certificate, digest, reference, ownerChain;
+        private final ConversationInput.Origin initialOwnerOrigin;
         private final CentralSubmissionAdmission.LivePermit request;
         private ConfirmedCentralYield(CrewCheckpointStore.ConfirmedCentralYieldSnapshot snapshot,
                 CoreAgentLoop.Checkpoint retained, CentralSubmissionAdmission.LivePermit request) {
             this.retained=retained;this.request=request;this.digest=snapshot.payloadSha256();this.reference=snapshot.referenceId();
             try {
                 JSONObject identity=snapshot.identity();
+                ownerChain=identity.getJSONArray("incomingOwners").toString();
+                initialOwnerOrigin=ConversationInput.Origin.valueOf(identity.getString("initialOwnerOrigin"));
                 oldCycle=identity.getString("oldCycleId");runId=identity.getString("runId");
                 owner=identity.getString("ownerMessageId");rootId=identity.getString("rootId");
                 JSONObject selected=identity.getJSONObject("selectedSubmission");
@@ -102,6 +105,10 @@ final class MainChatTranscriptStore {
         public String oldCycleId(){return oldCycle;}
         public String ownerMessageId(){return owner;}
         public String rootId(){return rootId;}
+        public JSONArray incomingOwners(){try{return new JSONArray(ownerChain);}catch(JSONException invalid){throw new IllegalStateException(invalid);}}
+        public String finalOwnerMessageId(){JSONArray chain=incomingOwners();return chain.length()==0?owner:chain.optJSONObject(chain.length()-1).optString("messageId");}
+        public ConversationInput.Origin finalOwnerOrigin(){JSONArray chain=incomingOwners();return chain.length()==0?initialOwnerOrigin:
+            ConversationInput.Origin.valueOf(chain.optJSONObject(chain.length()-1).optString("origin"));}
         public String checkpointDigest(){return digest;}
         public String checkpointReference(){return reference;}
         public String certificate(){return certificate;}
@@ -132,7 +139,7 @@ final class MainChatTranscriptStore {
         public ConfirmedCentralYield original(){return original;}
     }
     ConfirmedCentralYield confirmYield(CoreAgentLoop.YieldCandidate candidate,String runId,String rootId,String oldCycle,
-            NativeCentralYieldBoundary boundary,CancellationToken token) {
+            NativeCentralYieldBoundary boundary,CancellationToken token,JSONArray incomingOwners) {
         token.throwIfCancelled();boundary.requireCurrent(candidate.request);
         if(oldCycle==null || oldCycle.isEmpty())throw new IllegalStateException("Exact old tree cycle required");
         TreeExitReceipt receipt=confirmTreeExit(candidate.checkpoint,runId);
@@ -149,7 +156,10 @@ final class MainChatTranscriptStore {
             JSONObject identity=new JSONObject().put("storageGeneration",request.getStorageGeneration())
                 .put("rootId",rootId).put("oldCycleId",oldCycle).put("runId",runId)
                 .put("ownerMessageId",receipt.ownerMessageId).put("confirmedReceiptDigest",receipt.digest)
-                .put("selectedSubmission",selected);
+                .put("selectedSubmission",selected).put("incomingOwners",new JSONArray(incomingOwners.toString()));
+            ConversationInput initialOwner=store.readConversationInput(sessionId,receipt.ownerMessageId);
+            if(initialOwner==null)throw new IllegalStateException("Yield original transcript owner unavailable");
+            identity.put("initialOwnerOrigin",initialOwner.origin.name());
             CrewCheckpointStore.ConfirmedCentralYieldSnapshot saved=new CrewCheckpointStore(store.filesDirectory())
                 .saveCentralYieldConfirmed(sessionId,identity,candidate.checkpoint);
             token.throwIfCancelled();boundary.requireCurrent(request);
@@ -207,6 +217,17 @@ final class MainChatTranscriptStore {
                 throw new IllegalStateException("Central exit has uncertain effects");
             return confirmedTreeReceipt;
         }
+    }
+
+    private static final class CommittedSourceSnapshot {
+        final String runId;final Set<ConversationTurn.Source> sources;
+        CommittedSourceSnapshot(String runId,Set<ConversationTurn.Source> sources){this.runId=runId;this.sources=Collections.unmodifiableSet(new HashSet<>(sources));}
+    }
+    private volatile CommittedSourceSnapshot committedSourceSnapshot=new CommittedSourceSnapshot("",Collections.emptySet());
+    Set<ConversationTurn.Source> confirmedSourcesForRun(String runId) {
+        CommittedSourceSnapshot current=committedSourceSnapshot;
+        if(runId==null || !runId.equals(current.runId))throw new IllegalStateException("Checkpoint source witness belongs to another run");
+        return current.sources;
     }
 
     private volatile Object attachmentIdentity = new Object();
@@ -310,6 +331,7 @@ final class MainChatTranscriptStore {
         final Object attachment = new Object();
         attachmentIdentity = attachment;
         committedCalls.clear();
+        committedSourceSnapshot=new CommittedSourceSnapshot(runId,Collections.emptySet());
         Set<ConversationTurn> historical = Collections.newSetFromMap(new IdentityHashMap<>());
         if (priorHistory != null) historical.addAll(priorHistory);
         Map<ConversationTurn, String> batches = new IdentityHashMap<>();
@@ -475,6 +497,11 @@ final class MainChatTranscriptStore {
                                 if ("STARTED".equals(checkpoint.toolLifecycle.get(call.id))) binding.started = true;
                             }
                         }
+                        Set<ConversationTurn.Source> committedSources=new HashSet<>(committedSourceSnapshot.sources);
+                        committedSources.addAll(sourceBindings.values());
+                        for(ConversationTurn bound:batches.keySet()) {
+                            if(bound.source()!=null)committedSources.add(bound.source());
+                        }
                         if(captureTreeExit) {
                             java.security.MessageDigest sha=java.security.MessageDigest.getInstance("SHA-256");
                             String receipt=new JSONObject().put("owner",userMessageId).put("run",runId)
@@ -486,6 +513,7 @@ final class MainChatTranscriptStore {
                             confirmedTreeReceipt=new TreeExitReceipt(runId,userMessageId,digest.toString(),checkpoint.appliedIncomingIds);
                             confirmedTreeCheckpoint=checkpoint;
                         }
+                        committedSourceSnapshot=new CommittedSourceSnapshot(runId,committedSources);
                     } finally {
                         pendingCheckpointRows.remove();
                     }

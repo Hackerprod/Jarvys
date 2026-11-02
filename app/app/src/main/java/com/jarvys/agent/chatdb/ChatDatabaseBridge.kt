@@ -2189,8 +2189,14 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).fenced {
             check(JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database).accepts(claim.lifecycle,repos.database))
             claim.requireBound(token)
+            val origin=CentralUserRootCheckpoint(claim.storageGeneration,com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION,
+                claim.originalUserMessageId,claim.originDigest,claim.lifecycle)
+            val before=runBlocking {repos.reader.centralYieldEvidence(origin,turns)}
+            before.validate(applicationContext.filesDir)
             val result=runBlocking {repos.reader.validateProtectedContext(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION,
                 turns,suspensionClaim=claim,suspensionToken=token)}
+            val after=runBlocking {repos.reader.centralYieldEvidence(origin,turns)}
+            check(before.fingerprint==after.fingerprint) {"Suspension sources changed during validation"}
             claim.requireBound(token)
             result
         }

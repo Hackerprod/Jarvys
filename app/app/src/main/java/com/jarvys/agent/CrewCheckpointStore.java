@@ -170,13 +170,24 @@ public final class CrewCheckpointStore {
             || !selected.getString("sourceSha256").matches("[0-9a-f]{64}")
             || !identity.getString("confirmedReceiptDigest").matches("[0-9a-f]{64}")
             || !(selected.get("revision") instanceof Integer || selected.get("revision") instanceof Long)
-            || selected.getLong("revision")<0 || identity.length()!=7 || selected.length()!=6)
+            || selected.getLong("revision")<0 || identity.length()!=9 || selected.length()!=6)
             throw new IOException("Invalid native yield immutable identity");
+        ConversationInput.Origin.valueOf(required(identity,"initialOwnerOrigin"));
+        JSONArray chain=identity.getJSONArray("incomingOwners");Set<String> seen=new LinkedHashSet<>();
+        for(int i=0;i<chain.length();i++) {
+            JSONObject owner=chain.getJSONObject(i);
+            if(owner.length()!=3 || !seen.add(required(owner,"messageId")) || !required(owner,"digest").matches("[0-9a-f]{64}"))
+                throw new IOException("Invalid ordered yield owner proof");
+            ConversationInput.Origin.valueOf(required(owner,"origin"));
+        }
     }
 
     private static void requireCentralYieldScope(String session,JSONObject identity,CoreAgentLoop.Checkpoint checkpoint) throws Exception {
         String excluded=identity.getJSONObject("selectedSubmission").getString("userMessageId");
         if(checkpoint.appliedIncomingIds.contains(excluded))throw new IOException("New USER was consumed by old checkpoint");
+        JSONArray chain=identity.getJSONArray("incomingOwners");
+        for(int i=0;i<chain.length();i++)if(!checkpoint.appliedIncomingIds.contains(chain.getJSONObject(i).getString("messageId")))
+            throw new IOException("Yield owner chain includes an unincorporated input");
         for(ConversationTurn turn:checkpoint.transcript) {
             ConversationTurn.Source source=turn.source();
             if(source!=null && !session.equals(source.conversationId))throw new IOException("Foreign conversation source in Central checkpoint");

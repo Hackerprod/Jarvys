@@ -576,6 +576,7 @@ public final class CoreAgentRuntime {
       }
       if (suspensionClaim != null) {
         if (transcriptStore == null) throw new IllegalStateException("Suspension transcript store unavailable");
+        suspensionClaim.attachCheckpointSourceWitness(transcriptStore,runId,token);
         loop.restoreAndConfirmNativeSuccessor(suspensionClaim.confirmedYield().retainedCheckpoint());
         MainChatTranscriptStore.ConfirmedCentralSuccessor successor = transcriptStore.confirmYieldSuccessor(
             suspensionClaim, suspensionClaim.confirmedYield(), loop.checkpointSnapshot(), runId, token);
@@ -588,7 +589,8 @@ public final class CoreAgentRuntime {
           throw new IllegalStateException("Yield has no exact native owner");
         centralTreeAdmission.requireCurrent(token);
         completed.withConfirmedYield(transcriptStore.confirmYield(completed.yieldCandidate(),runId,
-            centralTreeAdmission.rootId(),centralTreeAdmission.cycleId(),nativeCentralYieldBoundary,token));
+            centralTreeAdmission.rootId(),centralTreeAdmission.cycleId(),nativeCentralYieldBoundary,token,
+            centralTreeAdmission.confirmedIncomingOwnersForYield(context,completed.yieldCandidate().checkpoint,token)));
         confirmedNativeYield = true;
         return completed;
       } else if(centralTreeAdmission!=null)centralTreeAdmission.confirmExit(transcriptStore.confirmTreeExit(loop.checkpointSnapshot(),runId),token);

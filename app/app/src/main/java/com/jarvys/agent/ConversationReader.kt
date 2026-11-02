@@ -143,6 +143,10 @@ internal class ConversationReader(
         val submissions=com.jarvys.agent.chatdb.CentralTurnSubmissionRepository(database)
         check(submissionClaim==null || suspensionClaim==null)
         suspensionClaim?.let { submissions.requireSuspension(it,checkNotNull(suspensionToken)) }
+        val suspensionEvidenceIds=suspensionClaim?.let { claim ->
+            claim.confirmedYield().retainedCheckpoint().transcript.mapNotNull {it.source()?.takeIf {source ->source.kind==ConversationTurn.Source.Kind.MESSAGE}?.sourceId}.toSet()+
+                claim.confirmedIncomingOwnerDigests(checkNotNull(suspensionToken)).keys
+        }.orEmpty()
         val claimed=submissionClaim?.let { submissions.requireClaim(it).also { row ->check(row.sessionId==conversationId) } }
         val excludedSubmissions=submissions.historyExcluded(conversationId) - setOfNotNull(claimed?.userMessageId,suspensionClaim?.originalUserMessageId,evidenceOrigin?.originUserMessageId)
         val modelSnapshot = transcript.readModelTranscript(conversationId)
@@ -219,7 +223,10 @@ internal class ConversationReader(
                     val internal = internalConversationTurn(message, index)
                     // Deferred continuation inputs are admitted only by their durable fresh-turn claim.
                     // Generic history/compaction must never consume a pending or uncertain episode.
-                    if (WorkspaceContinuationDelivery.isProtocol(internal.incomingMetadata?.provenance) && message.messageId !in evidenceIncomingIds) return@forEach
+                    if (WorkspaceContinuationDelivery.isProtocol(internal.incomingMetadata?.provenance)) {
+                        if(message.messageId !in evidenceIncomingIds && message.messageId !in suspensionEvidenceIds) return@forEach
+                        check(message.inputState=="incorporated") {"Scoped suspension protocol source was not incorporated"}
+                    }
                     context += internal
                 } else if (!assistantItems.isNullOrEmpty()) {
                     context += ConversationTurn.assistantReply(message.text, index, assistantItems)
@@ -237,7 +244,14 @@ internal class ConversationReader(
                     context[context.lastIndex] = last.withDurableMessageId(message.messageId)
                 }
             }
-        context
+        if(suspensionClaim==null) context else {
+            val token=checkNotNull(suspensionToken)
+            suspensionClaim.requireOwnerPure(token)
+            com.jarvys.agent.chatdb.CentralSuspensionSourceScope.select(database,conversationId,
+                suspensionClaim.originalUserMessageId,suspensionClaim.runId,
+                suspensionClaim.confirmedYield().retainedCheckpoint().transcript,
+                suspensionClaim.confirmedIncomingOwnerDigests(token),suspensionClaim.currentCheckpointSources(token),context)
+        }
     }
 
     /** Evidence-only source lookup; never returns a provider context or grants execution. */
@@ -288,9 +302,17 @@ internal class ConversationReader(
                 if (source.kind == ConversationTurn.Source.Kind.MESSAGE)
                     check(current.content == turn.content && current.role == turn.role) { "context_protected_payload_changed" }
             }
-            val required = visible.mapNotNull { it.source() }.filter { it in projection.protectedSources }.toSet()
-            val present = turns.mapNotNull { it.source() }.toSet()
-            check(present.containsAll(required)) { "context_protected_payload_unavailable" }
+            if(suspensionClaim!=null) {
+                suspensionClaim.requireOwnerPure(checkNotNull(suspensionToken))
+                com.jarvys.agent.chatdb.CentralSuspensionSourceScope.requirePresent(
+                    suspensionClaim.confirmedYield().retainedCheckpoint().transcript,turns,projection)
+                val incoming=suspensionClaim.confirmedIncomingOwnerDigests(suspensionToken).keys
+                check(turns.mapNotNull {it.source()?.takeIf {source -> source.kind==ConversationTurn.Source.Kind.MESSAGE}?.sourceId}.containsAll(incoming)) {"Suspension incorporated owner missing"}
+            } else {
+                val required = visible.mapNotNull { it.source() }.filter { it in projection.protectedSources }.toSet()
+                val present = turns.mapNotNull { it.source() }.toSet()
+                check(present.containsAll(required)) { "context_protected_payload_unavailable" }
+            }
         }
         projection
     }

@@ -113,8 +113,52 @@ public final class CentralTreeAdmission implements AutoCloseable {
         List<IncomingOwner> confirmed=new ArrayList<>();
         for(CoreAgentLoop.IncomingMessage message:messages)if(message!=null && "main_chat".equals(message.sourceKind))
             confirmed.add(new IncomingOwner(message,ChatDatabaseBridge.getInstance(context).confirmCentralTreeIncomingSync(ownerCentralSessionId(),message)));
-        requireCurrent(expected);incomingOwners.addAll(confirmed);
+        requireCurrent(expected);synchronized(incomingOwners){incomingOwners.addAll(confirmed);}
     }
+    org.json.JSONArray confirmedIncomingOwnersForYield(Context context,CoreAgentLoop.Checkpoint checkpoint,CancellationToken expected) {
+        requireCurrent(expected);
+        if(Thread.currentThread()!=ownerThread || exitReceipt!=null)throw new IllegalStateException("Yield owner chain no longer current");
+        org.json.JSONArray result=new org.json.JSONArray();Set<String> seen=new HashSet<>();
+        List<IncomingOwner> owners; synchronized(incomingOwners){owners=new ArrayList<>(incomingOwners);}
+        try {
+            for(IncomingOwner owner:owners) {
+                if(!seen.add(owner.message.id) || !checkpoint.appliedIncomingIds.contains(owner.message.id))
+                    throw new IllegalStateException("Yield owner missing from exact incorporated checkpoint");
+                String current=ChatDatabaseBridge.getInstance(context).confirmCentralTreeIncomingSync(ownerCentralSessionId(),owner.message);
+                if(!current.equals(owner.digest))throw new IllegalStateException("Yield owner source changed");
+                result.put(new org.json.JSONObject().put("messageId",owner.message.id)
+                    .put("origin",owner.message.origin.name()).put("digest",owner.digest));
+            }
+        }catch(org.json.JSONException invalid){throw new IllegalStateException(invalid);}
+        requireCurrent(expected);return result;
+    }
+    private void restoreYieldIncomingOwners(Context context,MainChatTranscriptStore.ConfirmedCentralYield receipt,CancellationToken expected) {
+        requireCurrent(expected);
+        if(Thread.currentThread()!=ownerThread || !incomingOwners.isEmpty() || exitReceipt!=null)
+            throw new IllegalStateException("Yield attribution cannot replace a live owner chain");
+        List<IncomingOwner> restored=new ArrayList<>();Set<String> seen=new HashSet<>();
+        org.json.JSONArray chain=receipt.incomingOwners();
+        try {
+            for(int i=0;i<chain.length();i++) {
+                org.json.JSONObject proof=chain.getJSONObject(i);String id=proof.getString("messageId");
+                if(!seen.add(id) || !receipt.retainedCheckpoint().appliedIncomingIds.contains(id))
+                    throw new IllegalStateException("Restored owner was not incorporated by the yielded execution");
+                ConversationInput input=store.readConversationInput(ownerCentralSessionId(),id);
+                if(input==null || !input.origin.name().equals(proof.getString("origin")))throw new IllegalStateException("Restored owner source missing or relabeled");
+                CoreAgentLoop.IncomingMessage message=CoreAgentLoop.IncomingMessage.mainChat(input);
+                String digest=ChatDatabaseBridge.getInstance(context).confirmCentralTreeIncomingSync(ownerCentralSessionId(),message);
+                if(!digest.equals(proof.getString("digest")))throw new IllegalStateException("Restored owner content changed");
+                restored.add(new IncomingOwner(message,digest));
+            }
+        }catch(org.json.JSONException invalid){throw new IllegalStateException(invalid);}
+        requireCurrent(expected);synchronized(incomingOwners){incomingOwners.addAll(restored);}
+    }
+    private Map<String,String> incomingOwnerDigests() {
+        Map<String,String> result=new LinkedHashMap<>();
+        synchronized(incomingOwners){for(IncomingOwner owner:incomingOwners)result.put(owner.message.id,owner.digest);}
+        return Collections.unmodifiableMap(result);
+    }
+
     void confirmExit(MainChatTranscriptStore.TreeExitReceipt receipt,CancellationToken expected) {
         requireCurrent(expected);
         if(receipt==null || exitReceipt!=null)throw new IllegalStateException("Exit receipt cannot be replaced");
@@ -364,6 +408,7 @@ public final class CentralTreeAdmission implements AutoCloseable {
         private volatile boolean bound;
         private volatile boolean invalid;
         private String successorCertificate;
+        private MainChatTranscriptStore checkpointSourceWitness;
         private volatile CentralResumeRecord boundRecord;
         private SuspensionClaim(SuspensionPermit permit,CentralResumeRecord reservation,CancellationToken token,String originalRun){
             this.permit=permit;this.reservation=reservation;this.token=token;this.originalRun=originalRun;
@@ -420,6 +465,20 @@ public final class CentralTreeAdmission implements AutoCloseable {
                 if(!Objects.equals(actual,boundRecord))throw new IllegalStateException("Terminal resume proof changed");
             }
         }
+        void attachCheckpointSourceWitness(MainChatTranscriptStore store,String actualRun,CancellationToken expected) {
+            requireCurrent(expected);
+            if(checkpointSourceWitness!=null || !runId().equals(actualRun) || successor==null)
+                throw new IllegalStateException("Successor checkpoint source witness changed");
+            store.confirmedSourcesForRun(actualRun);checkpointSourceWitness=store;
+        }
+        public Set<ConversationTurn.Source> currentCheckpointSources(CancellationToken expected) {
+            requireOwnerPure(expected);
+            if(checkpointSourceWitness==null)throw new IllegalStateException("Successor checkpoint source witness missing");
+            return checkpointSourceWitness.confirmedSourcesForRun(runId());
+        }
+        public Map<String,String> confirmedIncomingOwnerDigests(CancellationToken expected) {
+            requireOwnerPure(expected);return successor.incomingOwnerDigests();
+        }
         public boolean isBound(){return bound && !invalid;}
         public void markUncertain(Context context,String reason){
             if(reason==null || reason.isEmpty())throw new IllegalArgumentException("Uncertainty reason required");
@@ -431,7 +490,9 @@ public final class CentralTreeAdmission implements AutoCloseable {
         public CentralTreeAdmission attachSuccessorOwner(Context context,CancellationToken expected){
             requireCurrent(expected);if(successor!=null)throw new IllegalStateException("Successor owner already attached");
             CentralTreeAdmission authority=new CentralTreeAdmission(permit.store,permit.source,token,false);
-            authority.bindRoot(rootId());authority.registerStop(context);successor=authority;return authority;
+            authority.bindRoot(rootId());authority.registerStop(context);
+            try {authority.restoreYieldIncomingOwners(context,permit.confirmed,expected);successor=authority;return authority;}
+            catch(RuntimeException failure){authority.close();throw failure;}
         }
         public void bindAndIncorporate(Context context,MainChatTranscriptStore.ConfirmedCentralSuccessor receipt,CancellationToken expected){
             requireCurrent(expected);

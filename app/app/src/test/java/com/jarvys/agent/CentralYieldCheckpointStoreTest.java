@@ -24,6 +24,7 @@ public class CentralYieldCheckpointStoreTest {
     private JSONObject identity() throws Exception {
         return new JSONObject().put("storageGeneration","generation").put("rootId","root")
             .put("oldCycleId","old-cycle").put("runId","run").put("ownerMessageId","original-user")
+            .put("initialOwnerOrigin","USER").put("incomingOwners",new org.json.JSONArray())
             .put("confirmedReceiptDigest",String.join("",Collections.nCopies(64,"a")))
             .put("selectedSubmission",new JSONObject().put("submissionId","submission").put("userMessageId","new-user")
                 .put("sourceSha256",String.join("",Collections.nCopies(64,"b"))).put("storageGeneration","generation")
@@ -218,6 +219,43 @@ public class CentralYieldCheckpointStoreTest {
             assertArrayEquals(original,Files.readAllBytes(retained.get().toPath()));
             assertFalse(targetPath.get().exists());
         }
+    }
+
+    @Test public void orderedOwnerChainSurvivesSnapshotAndDeterminesFinalAttributionWithoutAuthority() throws Exception {
+        File root=root();CrewCheckpointStore store=new CrewCheckpointStore(root);
+        org.json.JSONArray chain=new org.json.JSONArray()
+            .put(new JSONObject().put("messageId","steer-first").put("origin","USER").put("digest",String.join("",Collections.nCopies(64,"c"))))
+            .put(new JSONObject().put("messageId","agent-last").put("origin","AGENT").put("digest",String.join("",Collections.nCopies(64,"d"))));
+        JSONObject id=identity().put("incomingOwners",chain);
+        CoreAgentLoop.Checkpoint original=loop();
+        CoreAgentLoop.Checkpoint withOwners=new CoreAgentLoop.Checkpoint(original.transcript,
+            new LinkedHashSet<>(Arrays.asList("steer-first","agent-last")),original.toolLifecycle,original.genuineUserIndex);
+        CrewCheckpointStore.ConfirmedCentralYieldSnapshot saved=store.saveCentralYieldConfirmed(SESSION,id,withOwners);
+        assertEquals(chain.toString(),saved.identity().getJSONArray("incomingOwners").toString());
+        JSONObject selected=id.getJSONObject("selectedSubmission");
+        String certificate=CentralYieldCheckpointCodec.canonical(new JSONObject().put("version",1).put("kind","CENTRAL_YIELD")
+            .put("runId","run").put("oldCycleId","old-cycle").put("ownerMessageId","original-user").put("rootId","root")
+            .put("checkpointDigest",saved.payloadSha256()).put("checkpointReferenceId",saved.referenceId())
+            .put("submissionId","submission").put("submissionUserMessageId","new-user")
+            .put("submissionSourceSha256",selected.getString("sourceSha256"))
+            .put("storageGeneration","generation").put("submissionRevision",1));
+        MainChatTranscriptStore.ConfirmedCentralYield evidence=MainChatTranscriptStore.recoveredYield(saved,certificate);
+        assertEquals("agent-last",evidence.finalOwnerMessageId());assertEquals(ConversationInput.Origin.AGENT,evidence.finalOwnerOrigin());
+        assertThrows(IllegalStateException.class,evidence::request);
+        evidence.incomingOwners().remove(1);
+        assertEquals(2,evidence.incomingOwners().length());
+    }
+    @Test public void missingDuplicateAndUnappliedOwnerChainNeverDefaultsToOriginalAttribution() throws Exception {
+        File root=root();CrewCheckpointStore store=new CrewCheckpointStore(root);
+        JSONObject missing=identity();missing.remove("incomingOwners");
+        assertThrows(IllegalStateException.class,()->store.saveCentralYieldConfirmed(SESSION,missing,loop()));
+        JSONObject proof=new JSONObject().put("messageId","steer").put("origin","USER").put("digest",String.join("",Collections.nCopies(64,"c")));
+        JSONObject unapplied=identity().put("incomingOwners",new org.json.JSONArray().put(proof));
+        assertThrows(IllegalStateException.class,()->store.saveCentralYieldConfirmed(SESSION,unapplied,loop()));
+        CoreAgentLoop.Checkpoint original=loop();
+        CoreAgentLoop.Checkpoint applied=new CoreAgentLoop.Checkpoint(original.transcript,Collections.singleton("steer"),original.toolLifecycle,0);
+        JSONObject duplicate=identity().put("incomingOwners",new org.json.JSONArray().put(proof).put(proof));
+        assertThrows(IllegalStateException.class,()->store.saveCentralYieldConfirmed(SESSION,duplicate,applied));
     }
 
 }

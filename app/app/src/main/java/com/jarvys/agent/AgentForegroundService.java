@@ -2258,7 +2258,10 @@ public final class AgentForegroundService extends Service {
       }
       skills.markUsed(usedSkillIds);
       final String reflectionUserMessageId = userMessageId == null ? "" : userMessageId;
-      assistantOwnerMessageId.set(reflectionUserMessageId);
+      assistantOwnerMessageId.set(suspensionClaim!=null
+          ? suspensionClaim.confirmedYield().finalOwnerMessageId() : reflectionUserMessageId);
+      if(suspensionClaim!=null) assistantOwnerInternal.set(
+          suspensionClaim.confirmedYield().finalOwnerOrigin()!=ConversationInput.Origin.USER);
       final CentralTreeAdmission runTreeAdmission=treeAdmission;
       CoreAgentLoop.ProgressListener progress =
           new CoreAgentLoop.ProgressListener() {
