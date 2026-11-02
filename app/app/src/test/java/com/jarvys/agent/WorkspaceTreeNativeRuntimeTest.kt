@@ -73,7 +73,7 @@ class WorkspaceTreeNativeRuntimeTest {
     }
     private data class Fixture(val scope:WorkspaceRecord,val manager:CrewManager,val root:String,val bot:CrewManager.Bot)
     private fun start(beforeMessage:((CrewManager,CrewManager.Bot,CrewMessage)->Unit)?=null,
-        configureManager:((CrewManager)->Unit)?=null,script:(List<ConversationTurn>,List<ToolSpec>,CancellationToken)->ModelReply):Fixture=storage.onDatabaseWorker {
+        configureManager:((CrewManager)->Unit)?=null,admissionCheck:((Int,TreeExecutionReservation)->Unit)?=null,script:(List<ConversationTurn>,List<ToolSpec>,CancellationToken)->ModelReply):Fixture=storage.onDatabaseWorker {
         val scope=WorkspaceRegistry(app).use { it.createWorkspace(UUID.randomUUID().toString(),"Native tree") }
         ChatDatabaseBridge.getInstance(app).ensureConversationSync(scope.executionSessionId,"workspace")
         val provider=object:ModelProviderClient {
@@ -96,7 +96,8 @@ class WorkspaceTreeNativeRuntimeTest {
                 "PARENT_PLAN",caps,"Planner",TreeMode.WORK,TreeReply.AWAIT,"test_backend_top_assignment_no_invocation_authority"))
             root.rootId to tree.reserveFirstExecution(TreeNodeFence.of(child),CrewProcessIdentity.ID)
         }
-        val result=WorkspaceCoordinator(app,{manager},{}).startReservedTreeAssignment(pair.second,CancellationToken.uncancellable(),Runnable {})
+        val admissionCalls=AtomicInteger()
+        val result=WorkspaceCoordinator(app,{manager},{}).startReservedTreeAssignment(pair.second,CancellationToken.uncancellable(),Runnable { admissionCheck?.invoke(admissionCalls.incrementAndGet(),pair.second) })
         Fixture(scope,manager,pair.first,manager.bot(result.getString("bot_id"))!!)
     }
     private fun task(history:List<ConversationTurn>)=history.firstOrNull { it.incomingMetadata?.provenance?.kind==ConversationInput.Kind.TASK }?.content.orEmpty()
@@ -887,6 +888,45 @@ class WorkspaceTreeNativeRuntimeTest {
                 WorkspaceTreeTaskEvidence.requireOutbound(app,f.scope.executionSessionId,f.bot.id,f.bot.missionId,message)
             }
         }}
+    }
+
+    @Test fun postbindAdmissionFailureCompletesNeverSubmittedNativeCycleWithoutReplay()=deferredAdmissionFailure(3,false)
+    @Test fun prebindAdmissionFailureKeepsOriginalCauseAndConservesUncertainReservation()=deferredAdmissionFailure(2,true)
+    private fun deferredAdmissionFailure(failAt:Int,expectCleanupFailure:Boolean) {
+        val providerCalls=AtomicInteger();val original=IllegalStateException("controlled_postspawn_admission_failure")
+        var reservation:TreeExecutionReservation?=null
+        val thrown=runCatching {
+            start(admissionCheck={step,admitted ->
+                reservation=admitted
+                if(step==failAt)throw original
+            }) {_,_,_->providerCalls.incrementAndGet();ModelReply("Must not execute",emptyList())}
+        }.exceptionOrNull()
+        assertSame("Cleanup must not mask the original admission error",original,thrown)
+        if(expectCleanupFailure)assertTrue("Exact prebind cleanup denial is retained",original.suppressed.isNotEmpty())
+        val manager=managers.single();val bot=manager.bots().single();val token=bot.token;val cycle=bot.cycleId()
+        fun field(name:String)=CrewManager.Bot::class.java.getDeclaredField(name).apply{isAccessible=true}.get(bot)
+        assertFalse(field("initialStartSubmitted") as Boolean);assertNull(field("thread"))
+        assertEquals(CrewManager.Status.STOPPED,bot.status());assertTrue(token.isCancellationRequested)
+        assertFalse("No executor owns this deferred cycle",field("cycleScheduled") as Boolean)
+        assertEquals(0L,(field("terminated") as CountDownLatch).count)
+        val waiter=pool.submit {bot.awaitTermination()};try {waiter.get(15,TimeUnit.SECONDS)}finally{waiter.cancel(true)}
+        assertTrue(bot.hasDurableCheckpoint());assertTrue(bot.requiresExplicitResume());assertTrue(bot.canResume())
+        assertNull("Never fabricate a worker result for an unsubmitted cycle",bot.resultEvidence())
+        assertEquals(0,providerCalls.get())
+        assertEquals("Individual child cleanup does not finish its supervising mission","RUNNING",manager.missionSnapshots().single().status)
+        val workspace=bot.scopeIdentity().removePrefix("native-workspace:")
+        storage.onDatabaseWorker { WorkspaceRegistry(app).use {db ->
+            val tree=WorkspaceTreeStore(db);val saved=reservation!!;val node=tree.getNode(saved.rootId,saved.nodeId)!!
+            assertEquals(TreeNodeState.UNCERTAIN,node.state);assertEquals(saved.eventId,node.executionEventId)
+            assertTrue(node.admissionsClosed);assertTrue(node.wakesClosed)
+            val assignment=db.getAssignment(workspace,saved.assignmentId)!!
+            assertEquals(if(failAt==2)WorkspaceAssignmentState.UNCERTAIN else WorkspaceAssignmentState.BOUND,assignment.state)
+            deny {WorkspaceCoordinator(app,{manager},{}).startReservedTreeAssignment(saved,CancellationToken.uncancellable(),Runnable {})}
+            deny {manager.startPreparedForMission(bot)}
+            deny {manager.resumeExact(bot.id,token,"Do not bypass registered recovery")}
+        }}
+        assertFalse(manager.stopExact(bot.id,CancellationToken.crewChild()))
+        assertSame(token,bot.token);assertEquals(cycle,bot.cycleId());assertEquals(0,providerCalls.get())
     }
 
 }
