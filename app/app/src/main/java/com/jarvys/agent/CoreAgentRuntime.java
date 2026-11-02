@@ -588,7 +588,7 @@ public final class CoreAgentRuntime {
           throw new IllegalStateException("Yield has no exact native owner");
         centralTreeAdmission.requireCurrent(token);
         completed.withConfirmedYield(transcriptStore.confirmYield(completed.yieldCandidate(),runId,
-            centralTreeAdmission.cycleId(),nativeCentralYieldBoundary,token));
+            centralTreeAdmission.rootId(),centralTreeAdmission.cycleId(),nativeCentralYieldBoundary,token));
         confirmedNativeYield = true;
         return completed;
       } else if(centralTreeAdmission!=null)centralTreeAdmission.confirmExit(transcriptStore.confirmTreeExit(loop.checkpointSnapshot(),runId),token);

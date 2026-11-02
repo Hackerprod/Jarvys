@@ -74,12 +74,12 @@ final class ProviderAttemptLease implements AutoCloseable {
         }
     }
     /** Auth refresh, diagnostics and full response parsing resume on the owner, never on transport. */
-    void transportReturned() {
+    synchronized void transportReturned() {
+        // Linearize validation and transition with requestYield. A superseding input must
+        // remain typed YIELD, never become an apparent invalid-transport failure.
         requireOwnerCurrent();
-        synchronized (this) {
-            if (stage != Stage.INFERENCE) throw new IllegalStateException("No current inference transport");
-            stage = Stage.PREPARING;
-        }
+        if (stage != Stage.INFERENCE) throw new IllegalStateException("No current inference transport");
+        stage = Stage.PREPARING;
     }
     /** Native retry delay: PREPARING only, with exact input/STOP wake and no polling. */
     void awaitBackoff(long millis) {

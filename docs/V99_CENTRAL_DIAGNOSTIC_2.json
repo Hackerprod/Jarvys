@@ -1,0 +1,82 @@
+{
+  "status": "diagnostic-only-not-complete-D3-or-acceptance",
+  "sourceCommit": "74e27f3732e3e91c56a5e969e13ffd0b6011b689",
+  "classes": [
+    {
+      "class": "com.jarvys.agent.CentralYieldCheckpointTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xmlSha256": "521cef80d5b4a22f4c2e51d15508484764d2779ad7634fb8e13176b34e4a3df6"
+    },
+    {
+      "class": "com.jarvys.agent.ProviderRetryLeaseTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xmlSha256": "f37dee8c775aa1aab8190a037e8fc9ca585d28d18100d2a8dcac3f046006188c"
+    },
+    {
+      "class": "com.jarvys.agent.SealedInferenceTransportTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xmlSha256": "186d0a4052b13ac81c042080ef0e1fca0031f66939a93a660a241e3f1ceff063"
+    },
+    {
+      "class": "com.jarvys.agent.chatdb.CentralSubmissionPersistenceTest",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xmlSha256": "684725bf21bddf0eea3404ed2e9071ab9dc5fa724916cbbcb249682482c54df8"
+    },
+    {
+      "class": "com.jarvys.agent.chatdb.CentralSubmissionSchemaCompatibilityTest",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xmlSha256": "ac143e7faf6e54bc62f2b114817c98ed460642d2e24b870aac676bae0d4fbd65"
+    },
+    {
+      "class": "com.jarvys.agent.chatdb.RoomTreeProvenanceCompatibilityTest",
+      "tests": 21,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xmlSha256": "beacdbf7c09ea88662995c74b328e1268598e8464c86eaed11f88f4f9d8cee1e"
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceCentralResumeSchemaTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xmlSha256": "812a7768a3341ecbbc22fa86f7cd835df5981dd6080c1d04937fe8e1ca171a10"
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceCentralResumeStoreTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xmlSha256": "558d5ad4c45a7e8becf4279f5ea0943443fd7dd157f0188ff997d4782dbce169"
+    }
+  ],
+  "terminal": {
+    "exit": 0,
+    "sourceUnchanged": true,
+    "artifactsUnchanged": true,
+    "xmlFiles": 8,
+    "counts": {
+      "tests": 70,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  }
+}

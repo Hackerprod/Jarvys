@@ -49,6 +49,150 @@ public final class CrewCheckpointStore {
         void beforeSync(File directory) throws IOException;
     }
 
+    /** Immutable execution evidence only. Never a live resume or USER admission capability. */
+    public static final class ConfirmedCentralYieldSnapshot {
+        private final String payload, hash;
+        private ConfirmedCentralYieldSnapshot(String payload, String hash) { this.payload=payload;this.hash=hash; }
+        public String referenceId(){return "central-yield-v1:"+hash;}
+        public String payloadSha256(){return hash;}
+        public JSONObject identity(){try{return new JSONObject(payload).getJSONObject("identity");}
+            catch(Exception invalid){throw new IllegalStateException("Invalid confirmed yield identity",invalid);}}
+        public CoreAgentLoop.Checkpoint checkpoint(){try{return CentralYieldCheckpointCodec.decode(new JSONObject(payload).getJSONObject("loop"));}
+            catch(Exception invalid){throw new IllegalStateException("Invalid confirmed yield checkpoint",invalid);}}
+    }
+
+    ConfirmedCentralYieldSnapshot saveCentralYieldConfirmed(String session, JSONObject identity,
+            CoreAgentLoop.Checkpoint checkpoint) {
+        synchronized(ConversationMetadataAccess.lockForSession(session)) {
+            requireActive(session);
+            try {
+                requireCentralYieldIdentity(session,identity);
+                requireCentralYieldScope(session,identity,checkpoint);
+                long budget=materializationBudget();
+                estimatedSize(identity,budget);
+                JSONObject payload=new JSONObject().put("kind","CENTRAL_YIELD").put("version",1)
+                    .put("conversationId",session).put("identity",new JSONObject(identity.toString()))
+                    .put("loop",CentralYieldCheckpointCodec.encode(checkpoint));
+                estimatedSize(payload,budget);
+                String serialized=escapeJsonSurrogates(CentralYieldCheckpointCodec.canonical(payload));
+                byte[] bytes=serialized.getBytes(StandardCharsets.UTF_8);
+                if(bytes.length>budget)throw new IOException("Yield checkpoint exceeds materialization headroom");
+                String hash=digest(bytes), reference="central-yield-v1:"+hash;
+                byte[] envelope=escapeJsonSurrogates(new JSONObject().put("kind","CENTRAL_YIELD")
+                    .put("schemaVersion",1).put("sha256",hash).put("payload",serialized).toString()).getBytes(StandardCharsets.UTF_8);
+                if(envelope.length>materializationBudget())throw new IOException("Yield envelope exceeds materialization headroom");
+                File target=centralYieldFile(session,reference), directory=target.getParentFile();
+                verify(directory);
+                if(!directory.isDirectory() && !directory.mkdirs())throw new IOException("Could not create native yield checkpoint directory");
+                verify(directory);
+                if(target.exists())return readCentralYieldConfirmedLocked(session,reference,hash);
+                File pending=File.createTempFile("central-yield-pending-",".json",directory);
+                verify(pending);
+                try(FileOutputStream output=new FileOutputStream(pending)){
+                    output.write(envelope);output.flush();output.getFD().sync();
+                }
+                requireActive(session);verify(directory);verify(target);verify(pending);
+                // Session lock serializes native writers. A different existing immutable target is never replaced.
+                if(target.exists())throw new IOException("Immutable yield checkpoint appeared during write");
+                atomicReplace(pending,target);
+                syncDirectoryChain(directory);
+                return readCentralYieldConfirmedLocked(session,reference,hash);
+            } catch(Exception failure){throw new IllegalStateException("Native yield checkpoint was not confirmed; evidence retained",failure);}
+        }
+    }
+
+    public ConfirmedCentralYieldSnapshot readCentralYieldConfirmed(String session,String reference,String hash) {
+        synchronized(ConversationMetadataAccess.lockForSession(session)) {
+            requireActive(session);
+            try{return readCentralYieldConfirmedLocked(session,reference,hash);}
+            catch(Exception failure){throw new IllegalStateException("Native yield checkpoint unavailable; evidence retained",failure);}
+        }
+    }
+
+    public ConfirmedCentralYieldSnapshot readCentralYieldConfirmed(String session,String reference,String hash,String expectedGeneration) {
+        ConfirmedCentralYieldSnapshot snapshot=readCentralYieldConfirmed(session,reference,hash);
+        if(expectedGeneration==null || !expectedGeneration.equals(snapshot.identity().optString("storageGeneration")))
+            throw new IllegalStateException("Native yield checkpoint storage generation changed");
+        return snapshot;
+    }
+
+    private ConfirmedCentralYieldSnapshot readCentralYieldConfirmedLocked(String session,String reference,String expectedHash) throws Exception {
+        if(expectedHash==null || !expectedHash.matches("[0-9a-f]{64}") || !reference.equals("central-yield-v1:"+expectedHash))
+            throw new IOException("Yield checkpoint reference changed");
+        File target=centralYieldFile(session,reference);
+        String bytes=readCentralYieldAndSync(target);
+        JSONObject envelope=new JSONObject(bytes);
+        if(!"CENTRAL_YIELD".equals(envelope.optString("kind")) || envelope.length()!=4
+            || !(envelope.get("schemaVersion") instanceof Number) || envelope.getDouble("schemaVersion")!=1.0)
+            throw new IOException("Unknown native yield envelope");
+        String payload=required(envelope,"payload"),hash=digest(payload.getBytes(StandardCharsets.UTF_8));
+        if(!hash.equals(expectedHash) || !hash.equals(required(envelope,"sha256")))throw new IOException("Native yield checkpoint hash changed");
+        JSONObject decoded=new JSONObject(payload);
+        if(decoded.length()!=5 || !"CENTRAL_YIELD".equals(decoded.optString("kind")) || (!(decoded.get("version") instanceof Number) || decoded.getDouble("version")!=1.0)
+            || !session.equals(required(decoded,"conversationId")))throw new IOException("Native yield checkpoint scope changed");
+        requireCentralYieldIdentity(session,decoded.getJSONObject("identity"));
+        CoreAgentLoop.Checkpoint loop=CentralYieldCheckpointCodec.decode(decoded.getJSONObject("loop"));
+        requireCentralYieldScope(session,decoded.getJSONObject("identity"),loop);
+        String actual=CentralYieldCheckpointCodec.canonical(CentralYieldCheckpointCodec.encode(loop));
+        if(!actual.equals(CentralYieldCheckpointCodec.canonical(decoded.getJSONObject("loop"))))
+            throw new IOException("Native yield checkpoint does not roundtrip exactly");
+        requireActive(session);verify(target);syncDirectoryChain(target.getParentFile());
+        return new ConfirmedCentralYieldSnapshot(payload,hash);
+    }
+
+    private File centralYieldFile(String session,String reference) throws IOException {
+        ConversationMetadataAccess.validateSessionId(session);
+        if(!com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(session))throw new IOException("Native yield requires Central scope");
+        if(reference==null || !reference.matches("central-yield-v1:[0-9a-f]{64}"))throw new IOException("Invalid native yield reference");
+        File target=new File(new StorageGeneration(filesDirectory).directory("crew-context"),
+            digest(session.getBytes(StandardCharsets.UTF_8))+"/central-yields/"+reference.substring("central-yield-v1:".length())+".json");
+        verify(target);return target;
+    }
+
+    private static void requireCentralYieldIdentity(String session,JSONObject identity) throws Exception {
+        if(!com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(session))throw new IOException("Not a Central yield");
+        for(String key:new String[]{"storageGeneration","rootId","oldCycleId","runId","ownerMessageId","confirmedReceiptDigest"})
+            required(identity,key);
+        JSONObject selected=identity.getJSONObject("selectedSubmission");
+        for(String key:new String[]{"submissionId","userMessageId","sourceSha256","storageGeneration","processId"})required(selected,key);
+        if(!identity.getString("storageGeneration").equals(selected.getString("storageGeneration"))
+            || !selected.getString("sourceSha256").matches("[0-9a-f]{64}")
+            || !identity.getString("confirmedReceiptDigest").matches("[0-9a-f]{64}")
+            || !(selected.get("revision") instanceof Integer || selected.get("revision") instanceof Long)
+            || selected.getLong("revision")<0 || identity.length()!=7 || selected.length()!=6)
+            throw new IOException("Invalid native yield immutable identity");
+    }
+
+    private static void requireCentralYieldScope(String session,JSONObject identity,CoreAgentLoop.Checkpoint checkpoint) throws Exception {
+        String excluded=identity.getJSONObject("selectedSubmission").getString("userMessageId");
+        if(checkpoint.appliedIncomingIds.contains(excluded))throw new IOException("New USER was consumed by old checkpoint");
+        for(ConversationTurn turn:checkpoint.transcript) {
+            ConversationTurn.Source source=turn.source();
+            if(source!=null && !session.equals(source.conversationId))throw new IOException("Foreign conversation source in Central checkpoint");
+            if(source==null && (turn.kind==ConversationTurn.Kind.TOOL_CALLS || turn.kind==ConversationTurn.Kind.TOOL_RESULT
+                || turn.kind==ConversationTurn.Kind.MESSAGE && "user".equals(turn.role)))
+                throw new IOException("Central checkpoint execution/user evidence lacks its committed source");
+            if(excluded.equals(turn.durableMessageId) || turn.incomingMetadata!=null && excluded.equals(turn.incomingMetadata.id)
+                || source!=null && source.kind==ConversationTurn.Source.Kind.MESSAGE && excluded.equals(source.sourceId))
+                throw new IOException("New USER leaked into old checkpoint");
+        }
+        for(CrewInputIncorporation proof:checkpoint.incorporations.values())
+            if(!session.equals(proof.binding.executionSessionId))throw new IOException("Foreign input incorporation in Central checkpoint");
+    }
+
+    private static String readCentralYieldAndSync(File file) throws Exception {
+        verify(file);
+        if(!file.isFile() || file.length()>materializationBudget())throw new IOException("Invalid native yield checkpoint file");
+        if(Build.VERSION.SDK_INT>=26)return Nio.readCentralYieldAndSync(file);
+        FileDescriptor descriptor=Os.open(file.getPath(),OsConstants.O_RDONLY|OsConstants.O_NOFOLLOW,0);
+        try {
+            if(!OsConstants.S_ISREG(Os.fstat(descriptor).st_mode))throw new IOException("Native yield is not a regular file");
+            try(FileInputStream input=new FileInputStream(descriptor)){
+                descriptor=null;String value=read(input);verify(file);Os.fsync(input.getFD());return value;
+            }
+        } finally {if(descriptor!=null)try{Os.close(descriptor);}catch(ErrnoException ignored){}}
+    }
+
     public static final class Snapshot {
         public final JSONObject artifactOwnership;
         public final String botId;
@@ -594,7 +738,10 @@ public final class CrewCheckpointStore {
                 Arrays.sort(children, Comparator.comparing(File::getName));
                 for (File child : children) {
                     String hash = child.getName();
-                    if (!"coding-jobs".equals(hash)) {
+                    if ("central-yields".equals(hash)) {
+                        try { validateCentralYieldNamespace(conversationId,child); }
+                        catch(Exception invalid){result.issues.add("Native Central yield evidence is unavailable; originals preserved");}
+                    } else if (!"coding-jobs".equals(hash)) {
                         if (!hash.matches("[0-9a-f]{64}")) {
                             result.issues.add("Unrecognized entry in private Crew checkpoint directory");
                         } else {
@@ -624,6 +771,24 @@ public final class CrewCheckpointStore {
             } catch (IOException failure) {
                 throw new IllegalStateException("Could not enumerate private Crew checkpoints", failure);
             }
+        }
+    }
+
+    private void validateCentralYieldNamespace(String session,File directory) throws Exception {
+        verify(directory);
+        if(!directory.isDirectory())throw new IOException("Native yield namespace is not a directory");
+        File[] entries=directory.listFiles();
+        if(entries==null)throw new IOException("Native yield namespace cannot be inspected");
+        for(File entry:entries) {
+            verify(entry);
+            if(!entry.isFile())throw new IOException("Unknown native yield object");
+            String name=entry.getName();
+            if(name.matches("[0-9a-f]{64}\\.json")) {
+                String hash=name.substring(0,64);
+                readCentralYieldConfirmedLocked(session,"central-yield-v1:"+hash,hash);
+            } else if(name.startsWith("central-yield-pending-") && name.endsWith(".json")) {
+                throw new IOException("Unconfirmed native yield write retained");
+            } else throw new IOException("Unknown native yield namespace entry");
         }
     }
 
@@ -727,6 +892,21 @@ public final class CrewCheckpointStore {
             java.nio.file.Files.move(source.toPath(), target.toPath(),
                     java.nio.file.StandardCopyOption.ATOMIC_MOVE,
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+
+        static String readCentralYieldAndSync(File file) throws Exception {
+            boolean interrupted=Thread.interrupted();
+            try {
+                while(true) {
+                    verify(file);
+                    if(!java.nio.file.Files.isRegularFile(file.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))
+                        throw new IOException("Invalid native yield checkpoint");
+                    try(FileChannel channel=FileChannel.open(file.toPath(),java.nio.file.StandardOpenOption.READ,java.nio.file.LinkOption.NOFOLLOW_LINKS)){
+                        if(channel.size()>materializationBudget())throw new IOException("Native yield exceeds materialization headroom");
+                        String value=read(Channels.newInputStream(channel));verify(file);channel.force(true);return value;
+                    } catch(ClosedByInterruptException interruptedSync){interrupted=true;Thread.interrupted();}
+                }
+            } finally {if(interrupted)Thread.currentThread().interrupt();}
         }
 
         static ObservedCheckpoint readAndSync(File file, String conversationId, String botId,

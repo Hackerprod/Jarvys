@@ -362,6 +362,40 @@ public final class ConversationTurn {
     return Collections.unmodifiableList(new ArrayList<>(parts));
   }
 
+  /** Exact retained execution evidence only; this factory confers no source or dispatch authority. */
+  static ConversationTurn restoreExactSnapshot(ConversationTurn base, String thinking, int imageCount,
+      List<ChatAttachment> attachments, String modelContent, List<Image> images, String durableMessageId) {
+    if (base == null || thinking == null || modelContent == null || durableMessageId == null
+        || attachments == null || images == null || imageCount < 0 || imageCount < images.size())
+      throw new IllegalArgumentException("Invalid exact turn snapshot");
+    if ((base.kind != Kind.MESSAGE || !"user".equals(base.role)) && !attachments.isEmpty())
+      throw new IllegalArgumentException("Snapshot attachments require a genuine user turn");
+    if (base.kind != Kind.MESSAGE && (!thinking.isEmpty() || !durableMessageId.isEmpty()))
+      throw new IllegalArgumentException("Snapshot message fields disagree with turn kind");
+    int attachedImages = 0;
+    java.util.Set<String> attachmentIds = new java.util.HashSet<>();
+    for (ChatAttachment attachment : attachments) {
+      if (attachment == null || !attachmentIds.add(attachment.id))
+        throw new IllegalArgumentException("Invalid snapshot attachment identity");
+      if (attachment.isImage()) attachedImages++;
+    }
+    for (Image image : images) if (image == null) throw new IllegalArgumentException("Missing snapshot image");
+    if (imageCount < attachedImages) throw new IllegalArgumentException("Snapshot image count changed");
+    return new ConversationTurn(base, thinking, imageCount, attachments, modelContent, images, durableMessageId);
+  }
+
+  private ConversationTurn(ConversationTurn base, String thinking, int imageCount,
+      List<ChatAttachment> attachments, String modelContent, List<Image> images, String durableMessageId) {
+    this.kind=base.kind; this.role=base.role; this.content=base.content;
+    this.incomingMetadata=base.incomingMetadata; this.toolCalls=base.toolCalls;
+    this.providerOutputItems=base.providerOutputItems; this.modelErrorCode=base.modelErrorCode;
+    this.systemEventReferenceId=base.systemEventReferenceId; this.toolCallId=base.toolCallId;
+    this.toolName=base.toolName; this.originalMessageIndex=base.originalMessageIndex;
+    this.summarizedMessageCount=base.summarizedMessageCount; this.thinking=thinking;
+    this.imageCount=imageCount; this.attachments=immutable(attachments); this.modelContent=modelContent;
+    this.images=immutable(images); this.durableMessageId=durableMessageId;
+  }
+
   public static ConversationTurn toolCalls(String assistantText, List<ModelReply.Call> calls) {
     return toolCalls(assistantText, calls, Collections.emptyList());
   }

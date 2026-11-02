@@ -87,6 +87,55 @@ public class ProviderRetryLeaseTest {
         assertFalse(token.isCancellationRequested());
     }
 
+    @Test public void yieldBeforeTransportReturnPreservesTypedYield() throws Exception {
+        assertTransportReturnOrdering(true);
+    }
+
+    @Test public void transportReturnBeforeYieldCannotCommitReply() throws Exception {
+        assertTransportReturnOrdering(false);
+    }
+
+    // Deliberately tests the two ordered outcomes, not an instrumented internal micro-race.
+    private static void assertTransportReturnOrdering(boolean yieldFirst) throws Exception {
+        ExecutorService owner = Executors.newSingleThreadExecutor();
+        CancellationToken token = CancellationToken.cancellable();
+        AtomicInteger childStops = new AtomicInteger();
+        token.registerCancelAction(childStops::incrementAndGet);
+        AtomicReference<ProviderAttemptLease> active = new AtomicReference<>();
+        CountDownLatch boundary = new CountDownLatch(1), yielded = new CountDownLatch(1);
+        Future<Boolean> result = owner.submit(() -> {
+            try (ProviderAttemptLease current = lease(token)) {
+                current.beginInference();
+                active.set(current);
+                if (!yieldFirst) {
+                    current.transportReturned();
+                    assertEquals(ProviderAttemptLease.Stage.PREPARING, current.stage());
+                }
+                boundary.countDown();
+                assertTrue(yielded.await(5, TimeUnit.SECONDS));
+                try {
+                    if (yieldFirst) current.transportReturned();
+                    else current.tryCommitReply();
+                    return false;
+                } catch (ProviderAttemptLease.YieldRequested expected) {
+                    assertEquals(yieldFirst ? ProviderAttemptLease.Stage.SUPERSEDED
+                            : ProviderAttemptLease.Stage.PREPARING, current.stage());
+                    return true;
+                }
+            }
+        });
+        try {
+            assertTrue(boundary.await(5, TimeUnit.SECONDS));
+            active.get().requestYield();
+            yielded.countDown();
+            assertTrue(result.get(5, TimeUnit.SECONDS));
+            assertFalse(token.isCancellationRequested());
+            assertEquals(0, childStops.get());
+        } finally {
+            yielded.countDown(); token.cancelExactRunAsync(); owner.shutdownNow();
+        }
+    }
+
     @Test public void backoffRejectsInferenceStageWithoutReclassifyingIt() {
         CancellationToken token = CancellationToken.cancellable();
         try (ProviderAttemptLease current = lease(token)) {
