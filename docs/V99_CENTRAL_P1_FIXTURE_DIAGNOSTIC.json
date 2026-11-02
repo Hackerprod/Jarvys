@@ -1,0 +1,26 @@
+{
+  "status": "FAIL-retained-fixture-NPE",
+  "sourceCommit": "0e60b418de23fa4171841c0860949fece5861164",
+  "terminal": {
+    "exit": 1,
+    "sourceUnchanged": true,
+    "artifactsUnchanged": true,
+    "xmlFiles": 1,
+    "counts": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "terminalSha256": "9e54f2c109af140360e26ac3c2f85a6af6c1b9179696131273267f6d1792c25d",
+  "sourceBindingSha256": "2702cff079bebd55cd951ce6220ebfa77057831fd9fa8f759c57343c86b49d85",
+  "artifactManifestSha256": "7fa9d119390374d04fed8727737ded15a31e969f83820ac498567a3c43c36e64",
+  "xmlSha256": "a43bea943fd10563ce10d14b4917e254979cf3fddc4afba27878fa36f66efa9f",
+  "priorXmlSha256": "31c55f9da8bd8c09db99fc0f510e761911fe49d462cee35d8047118f5e57b779",
+  "sameCountsTerminalHashAsPrior": true,
+  "distinctXmlCause": true,
+  "className": "com.jarvys.agent.InternalContinuationSuspensionAuthorityTest",
+  "failedMethod": "suspendedActualInternalContinuationKeepsOperationContextButCannotDelegate",
+  "diagnosticSummary": "Whole-wrapper capture exposes NullPointerException at fixture line111; previous attempt had no nested cause. No broader/native/Play run."
+}

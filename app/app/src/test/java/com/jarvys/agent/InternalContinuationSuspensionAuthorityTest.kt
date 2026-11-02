@@ -105,7 +105,14 @@ class InternalContinuationSuspensionAuthorityTest {
                     val authority=CoreAgentRuntime::class.java.getDeclaredField("centralTreeAdmission").apply {isAccessible=true}.get(runtime) as CentralTreeAdmission
                     try {authority.requireFreshDelegation(token);fail("Internal continuation gained original USER authority")}
                     catch(expected:IllegalStateException){denied.set(expected.message)}
-                    val readTool=runtime.createTools().get(CentralWorkspaceTool.NAME)
+                    // Direct guard probes need only the real tool's declaration/effect classifier.
+                    // createTools() is a base registry: the actual main-chat tool is installed later.
+                    // Never claim this probe backend executed the result read; native rows below prove it.
+                    val probeBackend=java.lang.reflect.Proxy.newProxyInstance(CentralWorkspaceTool.Backend::class.java.classLoader,
+                        arrayOf(CentralWorkspaceTool.Backend::class.java)) {_,method,_ ->
+                        throw AssertionError("Direct guard probe must not execute backend: "+method.name)
+                    } as CentralWorkspaceTool.Backend
+                    val readTool=CentralWorkspaceTool(context,session,"guard-probe",operation.get(),probeBackend)
                     val readArgs=mapOf<String,Any>("action" to "read_result","workspace_id" to workspace.workspaceId,
                         "result_id" to selected.get().getString("resultReferenceId"),"expected_sha256" to selected.get().getString("contentSha256"))
                     WorkspaceContinuationDelivery.requireSuspendedResultRead(context,claim,token,readTool,readArgs)
