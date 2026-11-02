@@ -88,6 +88,7 @@ class InternalContinuationSuspensionAuthorityTest {
         val resumedP1=AtomicInteger()
         val prior=service.mainChatRunner
         service.mainChatRunner=AgentForegroundService.MainChatRunner {runtime,goal,history,attachments,token,progress ->
+            try {
             val claimed=CoreAgentRuntime::class.java.getDeclaredField("claimedContinuationInput").apply {isAccessible=true}.get(runtime) as ConversationInput?
             if(claimed!=null && WorkspaceContinuationDelivery.isProtocol(claimed.provenance))initialP1.incrementAndGet()
             val claim=CoreAgentRuntime::class.java.getDeclaredField("suspensionClaim").apply {isAccessible=true}.get(runtime) as CentralTreeAdmission.SuspensionClaim?
@@ -126,6 +127,10 @@ class InternalContinuationSuspensionAuthorityTest {
                     finishedClaim.set(claim);finishedToken.set(token);finishedTool.set(readTool)
                     resumedP1.incrementAndGet()
                 }
+            }
+            } catch(failure:Throwable) {
+                get<AtomicReference<Throwable>>("failure").compareAndSet(null,failure)
+                throw failure
             }
         }
         field("socketReply").set(base,{index:Int ->when(index) {

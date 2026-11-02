@@ -1,0 +1,26 @@
+{
+  "status": "FAIL-retained-not-acceptance",
+  "sourceCommit": "4e4d24182a4d4c013e837032a11f0b3d3dccb59d",
+  "terminal": {
+    "exit": 1,
+    "sourceUnchanged": true,
+    "artifactsUnchanged": true,
+    "xmlFiles": 1,
+    "counts": {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "terminalSha256": "9e54f2c109af140360e26ac3c2f85a6af6c1b9179696131273267f6d1792c25d",
+  "sourceBindingSha256": "fbd1a4177c066e48a77a9c69f763f81077f68ac6a526bc535646c51d194ef278",
+  "artifactManifestSha256": "8aa980a031f51ab0d77782d1747902432e71260f580009ff36fd14b46a4e8e68",
+  "className": "com.jarvys.agent.InternalContinuationSuspensionAuthorityTest",
+  "failedMethods": [
+    "suspendedActualInternalContinuationKeepsOperationContextButCannotDelegate"
+  ],
+  "xmlSha256": "31c55f9da8bd8c09db99fc0f510e761911fe49d462cee35d8047118f5e57b779",
+  "diagnosticSummary": "Fresh USER and resumed internal owner did not finish; this fixture XML supplies no nested cause.",
+  "followOnNativeUnionPlay": "not run after failure"
+}
