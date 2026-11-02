@@ -1,12 +1,12 @@
 package com.jarvys.agent;
 
-/** Existing schema pre-write gate passed; new lineage writes await paired compatibility validation.
+/** Paired schema/lineage pre-write gates passed; enabled for local acceptance, not delivery approval.
  * Stored metadata never constitutes execution permission. */
 public final class CentralAvailabilityPolicy {
     private CentralAvailabilityPolicy() {}
     public static boolean roomMigrationEnabled() { return true; }
     public static boolean registryMigrationEnabled() { return true; }
-    public static boolean admissionEnabled() { return false; }
+    public static boolean admissionEnabled() { return true; }
     /** Call before acquiring a Room writer/lifecycle lease. Never upgrades or grants permission. */
     public static void requireRegistrySchemaReady(android.content.Context context) {
         if (!admissionEnabled()) throw new IllegalStateException("Central availability admission is not enabled");
