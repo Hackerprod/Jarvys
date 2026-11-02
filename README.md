@@ -1,3 +1,7 @@
+## Estado vigente — reparación v99 fase B: PASS independiente acotado; packaging v100 pendiente — 02-11-2026
+
+**PASS independiente B** sobre `b40a7f49`: autor Full/Play1.358 pruebas por sabor; revisor314+2 adversariales por sabor, todo sin fallos y con bindings exactos. Cerrados ambos defectos R1 y el claim transitorio rechazado R2. [Checkpoint PASS y límites](docs/V99_CENTRAL_IMPLEMENTATION_PASS.md). Se prepara v100 con firma DEBUG original y cambios exclusivos de versión/build; **no APK nuevo aprobado ni entregado**. Sin garantía temporal universal, validación en teléfono/proveedor vivo ni causa original confirmada. Menú/datos/Engram conservados; todos los FAIL históricos permanecen.
+
 ## Estado vigente — reparación v99 fase B: par host R2 completo, revisión pendiente — 02-11-2026
 
 Fuente `b40a7f49`: **Full y Play 148 clases / 1.358 pruebas cada uno**, cero fallos/errores/omisiones, bindings invariantes. Corregidas las rutas de disponibilidad de regeneración/AGENT/STEER, conservación de autoridad original y lectura P1, y limpieza de claims rechazados. R1 FAIL y diagnósticos quedan preservados. **Revisión independiente R2 pendiente; no PASS B ni APK nuevo.** [Candidato exacto, evidencias y límites](docs/V99_CENTRAL_IMPLEMENTATION_CANDIDATE_R2.md). Sin garantía temporal universal ni causa del teléfono confirmada; menú/datos/Engram conservados. Estados inferiores históricos.

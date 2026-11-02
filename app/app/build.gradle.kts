@@ -38,8 +38,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
         targetSdk = 35
-        versionCode = 99
-        versionName = "1.2.92-BOT-TREES" + if (recoveryTestBuild) "-test" else ""
+        versionCode = 100
+        versionName = "1.2.93-CENTRAL-AVAILABLE" + if (recoveryTestBuild) "-test" else ""
         manifestPlaceholders["jarvysApplicationLabel"] = if (recoveryTestBuild) "Jarvys Prueba" else "@string/app_name"
         manifestPlaceholders["jarvysNotificationListenerLabel"] =
             if (recoveryTestBuild) "Jarvys Prueba: notificaciones" else "@string/notification_listener_label"
