@@ -1,3 +1,7 @@
+## Estado vigente — reparación v99 fase A: PASS independiente acotado — 02-11-2026
+
+Corregidos y revisados los defectos de limpieza de workers diferidos, conservación del error original y STOP que absorbía mensajes USER posteriores. Fuente `011ed51e96b5f6a0ecdaed7a6b6ca701d220f6f0`: Full y Play **121 clases / 1.146 pruebas cada uno**, cero fallos, errores u omisiones; suplemento Full5 separado. Se conserva R1 FAIL. [Checkpoint y límites](docs/V99_REPAIR_CHECKPOINT.md), [resultados](docs/V99_REPAIR_HOST_RESULTS.json). **No APK nuevo ni causa del teléfono confirmada.** La fase B de disponibilidad/autonomía tiene PASS de diseño, no de implementación; comienza detrás de gates de compatibilidad desactivados. Menú, datos y Engram conservados; estados inferiores históricos.
+
 ## Estado vigente — reparación v99: tres defectos reproducidos en host, validación del fix pendiente — 02-11-2026
 
 Las dos regresiones nativas pasaron de rojo a verde (43/43 con bordes adicionales); las dos de STOP→USER fallaron en los asserts esperados y ya tienen corrección candidata con cohorte atómica. Se preservan fallos y bindings. Ejecutándose aceptación nueva; **sin PASS independiente del repair ni APK nuevo, ni causa del teléfono confirmada**. [Checkpoint](docs/V99_REPAIR_CHECKPOINT.md). Central autónomo/no bloqueante sigue en gate separado basado en upstream; menú/datos/Engram conservados. Los estados inferiores son históricos.

@@ -1,8 +1,8 @@
-# v99 repair checkpoint — regression candidate, not PASS
+# v99 repair checkpoint — Phase A scoped host PASS; Phase B implementation pending
 
 2026-11-02. Baseline `15ea334ce62b9559f76f72107031f9298538bde4`, the verified source backup for delivered v99. The delivered APK, prior host/packaging evidence and historical FAIL records remain unchanged. Device feedback reports stalled delegation and Central responsiveness; source findings are not proof of the phone's exact cause.
 
-## Phase A: bounded lifecycle and STOP correctness
+## Historical initial candidate — bounded lifecycle and STOP correctness
 
 Production is unchanged at this checkpoint. Four new deterministic regression cases are prepared, **not compiled or executed yet**:
 
@@ -42,3 +42,17 @@ The combined fix is awaiting fresh focused Full/Play and complete matching accep
 The first combined affected Full run executed155 tests with one existing semantic failure: explicit queued STOP used start-failure wording instead of the native stopped message. New service/storage7 and native43 all passed, but this was not acceptance. Independent clean-context review also found a process-local claim leak: skipping duplicate terminal persistence skipped the queued follow-up's claim release. Its separate guarded native regression reproduced one intended failure, with source/artifacts unchanged. R1 is **FAIL**, retained.
 
 The revised candidate separates unconditional claim-only STOP cleanup from terminal persistence, restores the existing localized STOP wording, and removes resolved cohort bookkeeping only after its exact owner is inactive. A permanent queued-follow-up STOP→explicit regeneration regression verifies claim release, one terminal bubble and fresh execution. No old assertion was weakened. Matching affected Full/Play and final121-class acceptance remain pending; independent R2 must assess corrected bytes.
+
+## Phase A final independent R2 PASS
+
+Exact production/test source `011ed51e96b5f6a0ecdaed7a6b6ca701d220f6f0`; source binding SHA256 `62dc8b06be368494196bbc6ba314b55699ec512215876b62cc2f6f778dc9c535` over 1,996 files. Fresh Full/Play affected cohorts each156 passed; final exact matching121-class cohorts each1,146 passed, zero failures/errors/skips, unchanged source/artifacts. Independent evaluator reconciled every XML/class set and reran its original compiled regression unchanged RED→GREEN. Independent R2 report SHA256 `79823061c7bbd00995f491fe22745dc98b54d9a8be9d94cd0b65bc19ce41b064`: **PASS for bounded Phase A source/host repair**. Original R1 FAIL remains retained.
+
+Separate Full-only Proot planner/process-tree supplement5 passed after reviewer sealing; not part of the1,146 count or independent verdict, and no native binary execution. [Public exact host manifest](V99_REPAIR_HOST_RESULTS.json). This selected acceptance is not a claim that every repository test was run.
+
+Provider physical unwind remains necessary in Phase A. Failed STOP capture before a durable write still has no persisted cut marker; in-process quarantine is not cross-process cancellation conservation during storage failure. Historical unclassified15-second fixture failure remains retained. No phone-cause, latency/reliability, physical install, live-provider or new APK claim.
+
+## Phase B independent design gate and next work
+
+Design R2 at `21635258ad02e8652b3881c06a79655b799996ce`, artifact SHA256 `560a4e8fa1022980ad10855c2005f038b2c4002ba6070a0dc81f0c96f188198c`, independently **PASS for design only**; review SHA256 `b7298937ad110f972d8cb1d8cc2856ec2dbef552abcb64eaf16ef7a0eaa2ca35`. Its R1 FAIL is retained. The exact [design artifact](V99_CENTRAL_AVAILABILITY_DESIGN.md) retains its candidate-era wording; this checkpoint records the subsequent verdict without changing reviewed bytes.
+
+Implement atomic native NEW_TURN submissions, provider-only supersession, typed safe yield and exact event-driven Central resumption on original roots. Room and Registry additive compatibility gates stay OFF before matching pre-write D3; implementation and final matching acceptance require a new independent verdict. No invented limits, new chat/memory, Chief inheritance, destructive reset or uncertain replay.

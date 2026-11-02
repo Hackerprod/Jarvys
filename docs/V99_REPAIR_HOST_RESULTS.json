@@ -1,0 +1,2120 @@
+{
+  "status": "independent-scoped-phase-a-host-pass",
+  "productionCommit": "011ed51e96b5f6a0ecdaed7a6b6ca701d220f6f0",
+  "sourceBindingSha256": "62dc8b06be368494196bbc6ba314b55699ec512215876b62cc2f6f778dc9c535",
+  "boundFiles": 1996,
+  "selectorSha256": "af425c277d8c787613274a2769037e2f0f579a0557e78b18ceb0b920a194c813",
+  "sameFullPlayTestNames": true,
+  "mainAcceptance": {
+    "full": {
+      "classes": 121,
+      "counts": {
+        "tests": 1146,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "sourceUnchanged": true,
+      "artifactsUnchanged": true,
+      "terminalSha256": "d88cc9cfb3af6b59f26a7783de4054f0a195fdac844690934b4f9642088d2aa8",
+      "artifactManifestSha256": "c7efdd448023ef6dc7c7f804db1b107ef22648a6ac1c91ce145b7c749e2de1d0"
+    },
+    "play": {
+      "classes": 121,
+      "counts": {
+        "tests": 1146,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "sourceUnchanged": true,
+      "artifactsUnchanged": true,
+      "terminalSha256": "d88cc9cfb3af6b59f26a7783de4054f0a195fdac844690934b4f9642088d2aa8",
+      "artifactManifestSha256": "c7b14ad8efd1dc23f1e5d913d08144b3cf00fd0ed8f7a2fd13b57cef0574f874"
+    }
+  },
+  "classes": [
+    {
+      "class": "com.jarvys.agent.AgentForegroundServiceMainThreadAdmissionTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "75f5dc88bd8fc7acc1d87f963be446ea8dee2168f6eb5e3115d538f0c7a22f83"
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "08f7bc4504632fa0c56839957ea91055eb6e7aa47afb10fe44ab2dbafedd1794"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.AgentMessagingPipelineTest",
+      "full": {
+        "tests": 14,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "93dafd3c76ff045fa911c30557c1e997fef335dc0adcbcf22a06795f9e8e73ea"
+      },
+      "play": {
+        "tests": 14,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "459ea07bd7604ee6398a395ba23778912a300b9c8a8ce52ce09cf0ab1df336dd"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.AgentModelTurnLimitTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "2d04e2fef4bf81172a864a7044376e9b0d0daf7ee76fb44b95b251d2289729e2"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "6ac8ed6f5bd81a86dd637d838951be24ba85cb17cdcb193afe2ecf40c2208733"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralAgentInputCatalogTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "f7d10826f80f66e74ab9c708392c813c87cb40cef02239a7a79c2c0fa395c1db"
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "c1614b600b6099d289b2905134b1ba3bbfd21d533d64c9d3bef96ce83672df50"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralInvocationSourceTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "006b90d0a235d5bbb926cd2af2cfd12e9fdd5f8e58fbb256db428a962d26ebea"
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "0b0e486e01de1a9b8df9e3e009f854520e950559306df32011eba2f12828bb70"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralPreparedContextTest",
+      "full": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "23a26f6a215957183ca6d05955f08aaa628f2725c7a3487330b6205d0b2ea2b1"
+      },
+      "play": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "ecb5889fb38b5e82f725b7b4b51e8771b55f8190b6470f6e4842210012459f75"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralRuntimeSourceIntegrationTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d5583894b6a34336b20e75471f93747bd08c53f27d72dbbbeeff376cf7689707"
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "fac6bde19d20022216a6cbfacb91ec85bad2949eb3cba1d7e2ead0e110314503"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralTreeAdmissionTest",
+      "full": {
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "be9ad619e7d2ad4946798a482a0cc990ca33db1abe8c214fc71baccc8ddc7332"
+      },
+      "play": {
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "139aa8fec8f99610e70e2478cd7bc5e1da559e9ec5709164e79566767d46e0f4"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralTreeServiceAcceptanceTest",
+      "full": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d608289795cb248915b38deeed5d91d2cd205beeb840a8ca9ceb0c27f349be8b"
+      },
+      "play": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "cd83bd1e22574095c5e94b7a602ef6016117265e8b925c4717fae3d26fb7fa94"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralUserTargetControlToolTest",
+      "full": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "3876d469b9345f86e157f1fa3902ba8542856bb42059c9343d6ad563310406b8"
+      },
+      "play": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "b31fba9e686c64e419441ea2c22fced37729a7d5da366300d641f5ccb1c41093"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralWorkspaceCancelToolTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "0b1639e7ce24a2e891fcae034261f504f34a26ac027844502d47da626f4ce975"
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "27a11e216a846bcf062a8e8de46b4ddd29161004f046d5b7ab56ff10adee814a"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.ContinuationGenerationReceiptTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "96b1d455089d110276d3c447807e157f36a60b0c1ff5e92b777d2049dbbc960f"
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "b0c833c0d4626ae3c3319fcc390c7e3a28b0c626b5ef6b453300d3234b8d448e"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.ContinuationServiceRunTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "c8b89f70a516c036cb6e7d9c5826b205b37e915c0229a26157d344a2f95a5623"
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "f907bf7e8c05affdbd0b180141241e6c506885162afa7d8673cb7febc0c4facc"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.ContinuousMissionServiceTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9f209e41a1a9ae02f284079f98db4b665c3f69d6965c7c3b3b4cd04f64a2fe89"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7b94059f1ecde89dec5959a0b1d2c59746ee114b9a443867124d27e3b9eea11b"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoordinationRefEncodingCompatibilityTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "b2563d3835f4921992db46fa43b96eb38a434aac06dec68465639c112d5d5220"
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "e18c134fc46480651e676affcc48a343ce9290dd5bc4a49b2eea075d8df3a77c"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopArchitectureTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "aaa9deae5a60dbf15769f8ac31971f0c408832bc9c6a547f4c95dcbee3a524d4"
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "70d9183b344cef4311b9ebe6073eb18c0acabef2f3ac28c15dc7322c1a30402f"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopBatchSemanticsTest",
+      "full": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d219da81f95b52518a4beab10a7941ebc733904ad40b4a793d28782c4a80429e"
+      },
+      "play": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d6e29dd63b360851287f4224bb949a9505cb2b7b7e860700118327eda3829715"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopCheckpointRecoveryTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "825b889ca72a5b1881711c0b481b0739891340daf2adcb80db3f7e22999a8d84"
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "0794c1e398ac55fbd07bdae832e404e9d9701778a4b5b884128e8d9b46f3ee95"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopCompactionBehaviorTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "424683d6d257c68779c05e9159f55097a6ad38602b1607a2e773ce7a1d8abd3b"
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a81035936c75cdf36b33cb610b8d8b0f0cf7965a41923eb3c6f522ed45db4fb5"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopExclusiveYieldTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "2e297941459ae7da133cccbb3c4af4efb3c84dca9a895c47eabc74dd5d13cc78"
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "096508e3800fcea9c6978bba37e9bd65c1cbf36b69fca6f7ebc7b887672f178e"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopFailureRecoveryTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d2865491d56bcaea217fe9f9fdbac6d56a22ed32c196afec914c8e0188c3fa6e"
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9332294155d53def0c293020610620c70a05c899c93f7ad7ceb66d1068754468"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopProviderCompactionRecoveryTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "b5b9ac85fc6ec92786a604f4cf04b0dcad2612ef8dd1b566f3413630a9a6397d"
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "4ef93dbb061bc9eff618ebb7a7a6d7b8a15de2cad7812278554fc51bcf44e13d"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopProviderRetryTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "e666ac11ecba0e6840cf4d17afee8b46f45374a26f96d75ab2efe47ad378f882"
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a23cf5c8f0c5b76c9f9b5b945ae5307aea78f99f1dcb1178af845b7b26d295dc"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopProviderUnavailableTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "ecfbf82d5beed63032d93aa9aa2b7d1b9a16b167dfa623c3e75f3a73c877724a"
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7fe38e46eaf5217c5608175472728f0f32a3cf4b6bcae622afa9b21cf36cafba"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopTest",
+      "full": {
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "0568bbf2cc4fa752e748a88dc3a0e5334574281fca354428cc1be2ffff33dd60"
+      },
+      "play": {
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "ceaeb99308d968864a4fe567d7e471da53ccfadf845bc2aa3bb2cae662e73a29"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreAgentLoopToolAdmissionTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "3b40f348b33b058638f970a160bbb78f6ac0de91cd3cd1db997549ef4954bc68"
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "ec55eb6e6ab00fa7289e7406cabdcf865d4d7851532f45cf48f8e698b563a8c2"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreInputIncorporationTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "283bd280f77eb6e2f502d0d86daee4bb7bae303256c6bedb796f91783ff6b6f0"
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "24242bc01abc2eeb8270826b48e43a0eb77f4e23f53db950acb724e3616d8d74"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CoreIntermediateAssistantSourceTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "1e3ed1891921dbaedfc8da943032ab5ff130dc9f9d8c12dabd28f3954789f176"
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "2a0b8e75d2b995f298b75706b394deba1d624a599bbf8f56b6386c92d256865a"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewC0Test",
+      "full": {
+        "tests": 23,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "4cc5b8aba2148934cbcaecbd7579f891f4f94b0d315ddc343237d0bda5fe0659"
+      },
+      "play": {
+        "tests": 23,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "4da6edda080471e14c948c3bcb15a50a0d6407c57a2427484c82fd258c7180e7"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewC1ComposeTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "37688646c8038d0f42a23e6d0558f8cab658308df33c328a5cdbc804642fc0c1"
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "2838e8f4a420b5a26ba8b073de8755e6bfdbf436c35d933af9870c69be646e20"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewC1cTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "8abff647dfc10f884fce2a9d26472399ce1d2a16f2380e6e5df90dc14e34531d"
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "3f1f7159523b67cd1a62682634c51b5eb070513c584b0107be901d624ae4be59"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewC2Test",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "e188308d9c93d151b0a7ebfc1862fee261dc225907bd612bd7988a075324b1c6"
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "756ba2f7c287c95ed538898793e1d9663c27d4e525e28daae0df86b6a62dccb2"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewCheckpointDurabilityTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "b266bb002ab002bc7f799100f3638414b46910ec4e44f58acafa38886d29cc77"
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9c3adf2f51cd9086f6f32aab237f11938e964fb6d84ced8dbb2c9d29e831b799"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewCheckpointIncorporationCodecTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7f900a2a0e947d7590adb06db08d17c394adc606bb3dfea842446e8658b885cb"
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "1cb4a693281528ba79bf03ecd02cd77230cb3a2c33f93a06026c95ca9c94911a"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewCheckpointRecoveryTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "6ea83f5f374fe9c9c9489de7589ef271c8f51f3bfd840d98df2f111abb2f93e6"
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "127d821c5c68d0f8bf9517441eb95cfb51ea5101b0f940f1380933da8f12439e"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewContextArtifactsRecoveryTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "6688cc6d1efa8b57467d09032bde72b97e3e51b2525db2d957a4975284678d8f"
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "757e55c5561655c27e0470543b16a3987340253a2ba72fd5a06e2005c9d62030"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewContinuationStoreTest",
+      "full": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "2d982a1d8f11841bbb7ebf6071299887296f229172544d9ef677bd7a5f87173a"
+      },
+      "play": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "2ff03ec65b3addd99505e0741615014d3ac7be8a59f89f05af28755078b448b8"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewConversationCompactionRecoveryTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d24f13bc4db08806101c2264ead25f1b01f5b0dbdfffe60dd2c34e361c2a5e9e"
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "494cc86a0fa03274a1f9f1b688b4ad20bcd32deb27ba112b7a591546136403e5"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewConversationReplayTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7689e72dafd9b6a4ba43961af15ce075b387f94462c8d827e1bac4b73344d1c8"
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "e9407c2f08cf10429ccdc63c682d11f67331e64ba023d3d7a16169433fcc7ce2"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewCoordinationCheckpointTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "204714e5bbaabd611e6cba3844abd68a3a017aa1b5c9c24236448cb42eb309fc"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "6a233ff53695f5258c0d5f263facce8749639325ac24e8b6cceb53566c58e5cf"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewInputContextExtractorTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "f98a08da086ff7f4f08dc85a607bdc281ad459f9ab636b7b9a186ca64ef64f68"
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "32ea84fc92662da344beea43009e7943620cf1e906c190d0610bc7850e49a89f"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewInputContextTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "663bdbc6d04b001cdc69c9a71a9c81e74c258fffc95072f22b238750ae8c8a82"
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "0ddcb8ded128656f446f79ab7dc19f3b767b88ced26fc31ce84d30c361ea12d2"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewInvocationRuntimeIntegrationTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "743a7926e903c35eec8d504a1660e44fb96043b1b0571a291370e7001ecaa372"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d7b67d8da062b88b499557c976f569c488658cfdae9ad893155d6cc2506fd292"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewInvocationSourceTest",
+      "full": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "27e83c8d48fa2dc1b85b12228b868032118d1a0bcf2330bb23d9a371fbd5e41d"
+      },
+      "play": {
+        "tests": 13,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "e75fcda01ea6241c8ebc2425a9ce55cee85646ea4b7389965a0f8585f910cabc"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewMissionPersistenceTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "bc1b4ba6342f4629a921aecbc2f5e5d9e2bc40a00e737555453b5afbfadf5ba5"
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9125c8e2735ca47b7a0aafdda1bc5fe5f78954471fb606d043701b0ea3270425"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewMissionTitleCheckpointTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "ba6ea9f13a7e1b039127aeff8f7b1965dfd81ea7610ec4702e368b4fb29e524b"
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "73205e8a9a40bba99ce672f0fc423fbe48729ba74fd65b0a04e51320bfd93b23"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewMissionTitleRuntimeTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "685db584a6e64768c50613edb2d7f4da2710a2308f94c593d94fdd90e66a4b85"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "1c80c2f1bcd51301314e003d8b39b30725d0656bf54083b2dfb589d0083f37b3"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewModelPhaseComposeTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "319d2b14c6c2b5edeb4e83ce9d2fc33a8760fd2740e654da9ff314829856170b"
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "b89d30fece0cfc2c55a43fbf327a58705f681cdbfef7a3ceb489807a1edc9dbd"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewModelPhaseTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "f747857f4ab31b276e3b2fb8353acdd189882294691c0a6be6dcce0502604230"
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "6226f3047bdec7fdf7f64f15ecfb43ce6a19caf03fbb3daf68b392a5c9f9bbdb"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewPartialPresentationUx38Test",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "5b3328821d7bf267a98c11171e688caf4b68d30321d3b201bf3b12b785ca6dc2"
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "5bba04c1c180cfbbdb649a0c75433ea2cbee2b1ff396e094cf9c653f6cc6b0a1"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewTerminalPublicationTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "b9b9a9a1b5344f3db505aa6c73316b1ea4aab0a042b25f209606ae1d2f219206"
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "cff69b16ac03f921a3d4bb798cee035b015aa1521628b8d3d4a048b04b9a3bfb"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewTreeInputCodecTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9e7bc5737e5c4f30999b7abb54950ba97cec90bf60c48c2757eaf231cfd3ed66"
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9d64fca3d1f2343b1f6332712c903a09f5c06baad765e52accdb9428bdeca075"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CrewTreeWaitCheckpointTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d6773671b7816f48c5a911c5289aef68ab9d6c4ee93a53b696220b06762b98b0"
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "de5230333bc25c5fba3bc856c889bbabf38b797c716428bf0ec2f5da0a3336d5"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.ExactRunCancellationTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "f8eaeded0e8b5fcb0e7937e652b3f62138c0f9fc6d0edd0ad781ad8086db1bfa"
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7531633a7ae66d5ce70a233a0b8e115b2d77fdb602918c788ec3aceedfdcac2f"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.MainActivityWorkspaceRoutingTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "447037e30371e601f6a73b0bf0bb7ead944ae8bd7491e401866c452872ebd003"
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "bb5d2ef076bcf6502d38e3da00c7ecd8034f40901f8069abf06435923ababd93"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.MainAgentInteractionTest",
+      "full": {
+        "tests": 54,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "baa7d727669197471138c8fa22d51c1327a6aaf359a82429250a8cfdd9f9ba93"
+      },
+      "play": {
+        "tests": 54,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "6faf5a0459622a318829838540cdacede342402d17cc15c0e741c41e4aa5b008"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.MainChatTurnContextProviderTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "2bfb1a2fe73d4bc27ccf0d304da628d36bdafc917cdc25569ae7b66add961b77"
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "73669274d281f52f2b7dee96c52681037c40516425b9c2eaa3d066958adffbf0"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.NativeContinuationLivePermitTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "090ee685c02cc267832c6ee87cb0c7f9bf8a2e54c30eb9d174a584982b8f7c9a"
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "52932378f2de84ad781a531c06a7f4c27d99927c8c30dfc9b888cedd6e2e6316"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.NativeContinuationStopTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "c3c6264f989e8134cb73ec4bfc3be37d3f67566f1bfb46e512c7ba3ba82759b2"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "240c3194430a77dc758000b238c5f27337525266093f2e981e28a18e49b184d7"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.NativeMemoryActionRuntimeTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "089915f9725b8d79eff365734702e0e4a3b2fb327166c6fbbb228bb76248875e"
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "094fe54006eccf7f8db386e5fa6be680054fbe1ca74022b7c4459fd4e71b35e3"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.NativeMemoryViewGuardTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "8e01d6e21f36b787aded68ffdeb3342a54cf80cf7159dd520606104da17247b8"
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7aa9d8eeaa3273d979b84caf1bc9569003b2a47de7f7811711cdc1de47b2ca54"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.NativeWorkspaceCheckpointRecoveryTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "0e285a8b96c8af4c67601b713de8a8f507b7877661bc36623ff9a19ae72e5fa2"
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "614144ef7ee18d7296a2837a2ac6d9b34ac4364e0b972a38e3b6602ff42a68fe"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceArtifactDeliveryTest",
+      "full": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "263f343bd51845fe984508d1421e4b181a3367dd1a64758e5d967d0d3a548e58"
+      },
+      "play": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "2bd7ded010739263529767f1f58ca70480514cfe5d1791b86473001c465dd305"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceAttachmentRecoveryTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "1dc90414beb049fa0b271c1d8ca735bba172ab7cd8f4aa19a5fb1a40d9b1acc7"
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "8a1af3792e1a84ad303116fff4953788d9bd29affa1cba9a596b2d56eb7ea921"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceContinuationAnswersTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "bd25699d734903032fd969d5c43fa11a945f7308f57bbfdf4567c7989d4a1981"
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "e07e9114e5315013124940828402d9ad5d8ba865d582a67af9c2ce72123d42d9"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceContinuationDeliveryTest",
+      "full": {
+        "tests": 15,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "dc93bcaa8b9a627c1361c6647fb6e54ba7bf94c33dc6ef764b1ac8ff7aa9474f"
+      },
+      "play": {
+        "tests": 15,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a5241bdc6dff34c81bec1d64c5f15bfd9c799a824406122f27dc02e6db7e8742"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceCoordinationDeliveryTest",
+      "full": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "dc866bd4f60261b4d328bf3bdf5d12ba80405593217efb514fe360b6d04242c3"
+      },
+      "play": {
+        "tests": 24,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "b68b1941242e667bf9318d158bbab956d8f0b8fa3a80e5bfb1bfa58f243d3f4d"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceCoordinationLedgerTest",
+      "full": {
+        "tests": 29,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "c434c2b6ba30ed4132f5cf0e9f264231e583edbd39f2187a6d900519a3a72021"
+      },
+      "play": {
+        "tests": 29,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7a9037bbf2ff1ed146093516c57c7c47ff7ae11dd79ef652b4a3ccb4f517e5a4"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceEffectReceiptTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7782ca936f5db5d2090842fa0c5193fd7942765af660038905387962f78b5079"
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "b653e9e94993d59f0f6a99f4790e6cd82f4d3eb7fd802147cee3e8f622092ce8"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceFactoryPromptTest",
+      "full": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9f40d295efd8924648b90e9a096d477f21d57dc465f30d529e04446ece2edcfc"
+      },
+      "play": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "6e2babbb02856b2363724714873d5609abbe58337e18446f373c6c9ef109365b"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceInputIncorporationDeliveryTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "c2a00d243f2bb0482fa1ee7a648cb482ffb250e3db32b9caf6e7357c8aedac55"
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d87012703e1265846e6c3f296e55ac4db0447532fb74d5e270b868d068ba5bd5"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceInputIncorporationLedgerTest",
+      "full": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "c8c89477d02e026cdecaa09a8b16fd998a098414b55e57c23e0e78e94067f4aa"
+      },
+      "play": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "766230cf78d7403a7ef835ff86b584e696b1633b510245d5cbb14ff3596a3f8c"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceMemoryContinuityTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a031394556d6bec031189320a5784c951e2dfe41f2b6b3da089c4d0c5b31f310"
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "e592b537c791595ad16a1e407e88e298e9fa9fc48a75b9f8aef71b1ae6fc7fd0"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspacePreviewTouchPolicyTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "1ea9d4867ee0756d7ea64ac208511d816ed7c483fe7eb9d9be8a088529bf1e2d"
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "626a7f197c17af65770da7211c56a1606eef06b2396b757ae07c6b99a7e16f57"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceResultDeliveryTest",
+      "full": {
+        "tests": 22,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "486df181ffafdb4eefb541dea2549528a53d4db51b056471d0e18f0aa48376a7"
+      },
+      "play": {
+        "tests": 22,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "336fd59965d59c416a5cb85a259c45dbfefa27647dc2f63df78e09c4873bff66"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceResultLedgerTest",
+      "full": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "83bfeec84183a0a47b18611cad14dd10332ad48e75a35c7dbff483b33bc4190f"
+      },
+      "play": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "1988e6ed40fac00014826b94722b1540f9d067cb7cedaf4a0a32f86b58be4d02"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceStoreTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "19aa40e7d2fd859b80156aa0c5d96218b137575bf62235f15c7946af34637488"
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "fab5a9a95cf51273c635932cd86e70c51225015616ebc33c7c95d46d3e942170"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceSupervisorMessagePipelineTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "2dc741d7a037548e7f95cbda45a6e95ec7802e0825f964a025df6ecee3bb9fc8"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "ce30650ce96066d03c11182ba446e03200883efeecd0f1c0fd20a7fefcd6c441"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceTreeNativeRuntimeTest",
+      "full": {
+        "tests": 43,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "fe128e27237d318218cf870345e075ca6368a3fff3e214bd4510b01d6d5aef32"
+      },
+      "play": {
+        "tests": 43,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9654bb0721884c8d6ae03e2007aa07a8e0dac5ec7c3f3966a88d4ee98af92054"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.WorkspaceTreeP1PreclaimTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "ff6a95f317f866b4e06aa228b27ee92eec4952906aa01343cd95dd26652e6d2d"
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "e6be83d3d886e31a4d817b96680bad8326cc22fc1e68331ef35f3b4794975e70"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.chatdb.WorkspaceLedgerIndependenceTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d4e1543ab9cc1923ed2bbec042543d064d5992c757cbb7509fdecc68cada562a"
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "c04ae2b4fb5eb6db829a7d6712ad01cd365d43f182e94314b44e6a2bc684a02a"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewAvatarContrastRecoveryTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9c7e4efbcacf8b77bd1783f33f7c02e553ca0d9c69aff38694105e243632020a"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "f868088dadfedef4fec26330c4ecc8cee8487d2625f9b9cd25d4c7653974c7d1"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewBotAvatarComposeTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "5f591a9794201b1b8521b35e7b1b04dc5758ce1357a92f615f50c7c94ce35c26"
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "14fa24a24dc76118a643408538b8b0c51861d54fcafbf27158a809b6d044345a"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewCodingProfileComposeTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d7d169bd5ae1ed9da79b90d24f8c117e4f24d8c14e6d042644aa33f45b42c7f0"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9c29bc869d3aa6912253f9e90735914d9b3b9b50cc28f614bc866d8f065001a6"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewCoordinationCaptureTest",
+      "full": {
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "f01019bc61bc15def045c3693a33ae825519c8b4e0f4ab23107d7872b5bca622"
+      },
+      "play": {
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a2df63c91b5aa49747c8610d622587f7c22a1cae831f4be92680a8d4a26f67f3"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewCoordinationEvidenceTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "abca7f753fd059d7cbb55a448eeea17c9a19f89cff1b9743d4cc79fecfb4cf59"
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a7fe90597c0293b3bff62bd2f76db655867a6aa87805553ac0fa129ac42c1007"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewInputBindingTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "8e81adfad8f43e10158e15d4b9382796e96b9e7b677356ae648fd19d9f14bc2d"
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "10ea5a907c9e5b1ae200e81196d122ff297d7758b0adba2b3ac6e645444cfabc"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewInputCheckpointManagerTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a86b1cd81878e33fb0236710025ce58e671104a3756a8068ac1b06b03a898c77"
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "4836a9bd7e7afbfae75beab505c05b1be25bd98cfbc5bea30fb7b4e7e6e402c0"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewManagerRecoveryTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "11e070759f93bedd9ed0b192a674435038f93111b9c4c571bd7f5c0cedd7b198"
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a9bffcef512444db1800e1462626bfb7f511b910df24db6b24f074aa69fa8d05"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewMissionTitleManagerTest",
+      "full": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "6b494b1ff894739eeb893890a96d43472cb91345c4bbb17c95551db181048e1e"
+      },
+      "play": {
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "06718e0870839557257a95aaaad72e0da155f2ecd74a8763fefd8a8bfe70f339"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewMissionTitleTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "519420b99313ff9beaa286356efe72882a1a35d40000bf6b24d0039e08babeee"
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7a6cea60645f9192928b20bfda63a773993e23504c896e2ddea38c5bb22ac0bf"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewProfileRecoveryTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "fb7dc3d8a95c23a839d918e3aed660af9d71b1c9cdb090f4fc90faa3c8e3ee8f"
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "c1d77b1bbe5b8cdfaa8e95614c87fa4d3b7813e401c9f34bc73c4d89528ed677"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewProviderUnavailableRecoveryTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "1b5b8ddf806cef830f83115ae3d3e0f578ec3bf87687e4123ac80483c4432668"
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "56fbbb6774fa55c6b9fee7737300a4d9bba04a9bf5e1317a31f397d22b66440b"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewResultCaptureTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "4eebc1087a1f848f3a4d97a0458a690c78160ac435cd4b980207f5e6ba8aad26"
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a75130c096504f6d7a06c44a90556c06f335572aab7def7c97a7b9bc89396d08"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewResultEvidenceTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7b678f4a8a09a22333718997c68047b7d5d10ffd746a45ce34cf1fa8cf7167da"
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "5baaefe4414cb3f809ea16838b369d28bc7b1605861c908e0bac5973dcba50e3"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewResumePanelComposeTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "54acf320102c1285c7d5e889c5d424496a652afb4e11a2dfb901ab0facca9507"
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "bfed1d048f40661d3a559cb1760269f3ead4dac9f74a2c8f2d1a117726a4172c"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewTaskPresentationTest",
+      "full": {
+        "tests": 39,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "04b2c29b763c7e8ab8de44b758c9efa9b7b9d173fab80aa957233e78e631489b"
+      },
+      "play": {
+        "tests": 39,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "c50f148fde7b39054d515a3e355c545121c17a73338e69366e0cb377378a2f30"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewWorkspaceCycleOwnershipTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a1cd6408df4219c6f3672dfb5434087e17461e43d151e06813f645e1846d752f"
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "6596ea8b24ee624c5ec68c383ca6a3232f6c6ba29b3cfedd1f9d5c47204f6d6b"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewWorkspaceMissionAdmissionTest",
+      "full": {
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "be622ab4f3d3fc5c590c418275693a3a06713157fe4c1c35093f812aee8012ce"
+      },
+      "play": {
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "da0c03eb8ef8668601efe4bfc03e73c24af1b57774e81e9ef505e1a660a01d83"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.ui.chat.PreservedCentralDrawerComposeTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d86701bfa3a0632839d175966e22e8bacc2070f1dd5495cda590bc92c06a5e21"
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "eff2770edafa1c063fa71699efe6413eed010b1dbce3bbf6f57d9ae67fe62307"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.CentralMascotScaleComposeTest",
+      "full": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "0be5248263046af5d76e122052874b529f4b3e65017ebbe8c2025049e7f26436"
+      },
+      "play": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "f19e286ccda4fc20facff172f27df9f462866b4ff771f70bb3eeccb5d84de4b9"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.CentralWorkspaceContinueResultToolTest",
+      "full": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "0afd6946fffe55fc85092542dde3fd1296d0258b822016f07bf7c7922ead0558"
+      },
+      "play": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "5a0a9207271443242cda774cd96309bd4431abd2181fce4a90d28904986d937d"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.CentralWorkspaceCoordinationToolTest",
+      "full": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "19ea5d73fb7f7dddaebec5dfae4ce4ddf3d8183f6c16b60105f22c8b3eab4048"
+      },
+      "play": {
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7839fbb36ee74105ca96f2387a9621f1d0fa292b7e6e5a45ffb3aab34055c1b0"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.CentralWorkspaceToolTest",
+      "full": {
+        "tests": 35,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "3f6077af70d7df5149176e2b2872190c990a0271f98e8aeb02eae9bb6aaac2e6"
+      },
+      "play": {
+        "tests": 35,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "764a01aa447ea7c33231bd501eb73d6ab6f6c774629e6e82f693e2cfad3f159f"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceCentralTopBarComposeTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "8274edadc1a5796c3d4e2a539da46e61119ed14cb87c2278a5158fe88244739f"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "5a7f7f876d79f1f2bc4f20d2ac44e7255ee966260228bf27f8274be1b9899522"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceChangesTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9fc181ced9bbefddb4b4b2b3c8a0ce9841f4b4b6e570297be6ad10b36ac08df1"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "0ec4ad182f6edca5d58def297d5429f5975b134bfb5576079db8af06eedcf1fd"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceControlStopOwnershipTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "ed393f72883ac77134f6f148e936b91196718573aebd93df0c078b861969ca24"
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a70e1b734196e099b88a32e5ad8df480ee54f8b605fd7d4941c63660fa0593c6"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceCoordinatorIntegrationTest",
+      "full": {
+        "tests": 25,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "2eeb09258464253c98f1b9a93d9d9d239d56afcfbac737bb2f27b5bb6a4c2099"
+      },
+      "play": {
+        "tests": 25,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "9cc2863a325df39bca16bbbf1e0ce92e9380046c0da44f1019ec22239894b3df"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceMutationContextTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "c89a6f554dd48adbc1b528599458b1177a4b591b47baad90c81a3ecde67d5f7d"
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "e03f227916dbadfa1e653dd71edad21f3fba16307a69ff9832f44c493c523087"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceMutationSourceTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "a727a6a26956504f561fdceabb3258cfb5803c765621ecdc2eeb8462585f1098"
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "7f54494ef6e9e46aeeaefb5141b5592d989873ceec1e44bc1f6db4676ca92aa5"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspacePendingProjectionQueryTest",
+      "full": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "468ed0cb30563c2478eec40421b8c71ee03323113804bd654c0a72dd0fd7027a"
+      },
+      "play": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "f59caee06c72b8a4698d89c09c72a921f2c9b499d3cfcc89f6814566f1899d35"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceRegistryTest",
+      "full": {
+        "tests": 32,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "519795c166abbb8e65bad64959413a314923630ffaa7be1e46e275cf141d966b"
+      },
+      "play": {
+        "tests": 32,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "edcf6de5f08e4974cfa5373328fc7e6e96d9f9b23921797f4d25940664a7273e"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceResultNoticeComposeTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "1cfc691093014eb9c5803fa2f978ecdbbad2f6443a6f5643dd6fc31db5f95b8b"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "cefee0d28f100d1390fe19966327e43e75be2e18eb9bda204387ad7df117470e"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceTreeEvidenceStoreTest",
+      "full": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "8baafd3eb0cefe451d0edb0d6f097ce20d093fcb797ae229b8ac84f4c6d16861"
+      },
+      "play": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "96aa15f695099bfa766c206d7a34465a0d5d699811bcbcae59b3f32c45dd2033"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceTreeSchemaCompatibilityTest",
+      "full": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "61bb414d97fcb0bb8f253c420e3d7bcd75d0b8ac5317a7f35715e2fd59dc895c"
+      },
+      "play": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "3aebf73953d59288d83de8278b87daf8474b2d06134a23e6571956bd290a7824"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.workspaces.WorkspaceTreeStoreTest",
+      "full": {
+        "tests": 26,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "560ede6b158e2cd076f47094b6318e6ea48a3b1c2763b7bb32bec70de53fe9fe"
+      },
+      "play": {
+        "tests": 26,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "c3325992ad69dcda9b263e7f7049036c8bd471ac9f995051411132c50b3c58a6"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.crew.CrewTreeMessageRoutingTest",
+      "full": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "bb78feeec56608c791627bc3017b5ee7a3a749b786fc090cbf4754c43be4fb2f"
+      },
+      "play": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "6548fd828c8ccd795d5027c2caa98d665f493914e968be219148082534d00c2f"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.chatdb.RoomTreeProvenanceCompatibilityTest",
+      "full": {
+        "tests": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "d663752acc7cb2d936e16059610bb84d3ddad12f3f99a8146bf32f4d236865c1"
+      },
+      "play": {
+        "tests": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "8997ccb329a843a2abb82e78076b8184eba1075db212e6594e9542b883005041"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.chatdb.CrewSnapshotProvenanceConservationTest",
+      "full": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "8eec8e83a0b3ec6a1e56a5a9dca3e9b3f79c3809e6709856ddd60809c819b527"
+      },
+      "play": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "08350c123b9bfcd464f22ff6bbbba5eb07e74b306ae26d2e59463ad31d6776df"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.CentralStopFreshUserTest",
+      "full": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "2fd5a8cc2df3195c4e2d4a5c5b059ed95594faba2214ab4a3e98de3ac667ff01"
+      },
+      "play": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "85a23e789835ce43276c5dd5043bbfce373c2765a1659298578d8daedecedc0a"
+      }
+    },
+    {
+      "class": "com.jarvys.agent.AtomicStopInputCohortTest",
+      "full": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "214d69d0b36dcfa48ffdf8457de030296f0b813b963cadde25a5caa87592a85c"
+      },
+      "play": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlSha256": "3a00481514315b1d17f87f702ea8766b08ba10f02100779b64aa9a4fca0a21d0"
+      }
+    }
+  ],
+  "separateFullSupplement": {
+    "class": "com.jarvys.agent.linux.ProotLauncherProbeTest",
+    "counts": {
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "terminalSha256": "12f31021b8bfe62603a65afbb51a0d7deb1bfeca46950cdeca2e998ae5848914",
+    "xmlSha256": "921e56e03b1db07ca57398187a5458cd4671a86332147610f8f361c40b65cc7f"
+  },
+  "limitations": [
+    "Only declared121-class paired host cohort and separate5-case supplement; not entire repository test suite.",
+    "Earlier unclassified P2 15-second fixture-readiness failure remains FAIL/unclassified; no timing reliability or environmental-cause claim.",
+    "No physical device/live provider/model choice/power-loss/exhaustive concurrency validation.",
+    "Guard covers standard JVM networking/subprocess execution, not an OS/native-network sandbox.",
+    "No deliverable APK/signing/device installation performed; internal unsigned factory template was a test build prerequisite.",
+    "Old-binary downgrade after new writes remains unsupported; no legacy import/reset/data deletion."
+  ],
+  "independentReview": {
+    "verdict": "PASS \u2014 bounded Phase A host/source",
+    "reportSha256": "79823061c7bbd00995f491fe22745dc98b54d9a8be9d94cd0b65bc19ce41b064",
+    "originalR1": "FAIL retained",
+    "supplementIncludedInReview": false
+  }
+}
