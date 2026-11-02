@@ -19,6 +19,8 @@ public final class CentralTreeAdmission implements AutoCloseable {
     private final Thread ownerThread=Thread.currentThread();
     private final AtomicBoolean closed=new AtomicBoolean();
     private final boolean freshDelegation;
+    private final String operationOriginKind;
+    private SuspensionClaim suspensionOwner;
     private String rootId;
     private MainChatTranscriptStore.TreeExitReceipt exitReceipt;
     private Runnable unregisterStop=()->{};
@@ -28,8 +30,14 @@ public final class CentralTreeAdmission implements AutoCloseable {
         IncomingOwner(CoreAgentLoop.IncomingMessage message,String digest) { this.message=message;this.digest=digest; }
     }
     private CentralTreeAdmission(LocalRunStore store,CentralUserRootCheckpoint origin,CancellationToken token,boolean fresh) {
+        this(store,origin,token,fresh?CentralOperationLineage.USER:CentralOperationLineage.INTERNAL);
+    }
+    private CentralTreeAdmission(LocalRunStore store,CentralUserRootCheckpoint origin,CancellationToken token,String operationKind) {
         this.store=Objects.requireNonNull(store);this.origin=Objects.requireNonNull(origin);
-        this.token=Objects.requireNonNull(token);this.freshDelegation=fresh;requireCurrent(token);
+        if(!Arrays.asList(CentralOperationLineage.USER,CentralOperationLineage.INTERNAL,CentralOperationLineage.LEGACY).contains(operationKind))
+            throw new IllegalArgumentException("Unknown native operation origin");
+        this.token=Objects.requireNonNull(token);this.operationOriginKind=operationKind;
+        this.freshDelegation=CentralOperationLineage.USER.equals(operationKind);requireCurrent(token);
     }
     static CentralTreeAdmission captureUser(LocalRunStore store,String session,String id,CancellationToken token) {
         return new CentralTreeAdmission(store,store.captureCentralUserRoot(session,id),token,true);
@@ -70,8 +78,15 @@ public final class CentralTreeAdmission implements AutoCloseable {
     }
     public void requireFreshDelegation(CancellationToken expected) {
         requireCurrent(expected);
+        if(suspensionOwner!=null)suspensionOwner.requireBound(expected);
         if(!freshDelegation || Thread.currentThread()!=ownerThread)
             throw new IllegalStateException("Fresh native USER execution is required for delegation");
+    }
+    org.json.JSONObject operationLineageForYield(CancellationToken expected) {
+        requireCurrent(expected);if(Thread.currentThread()!=ownerThread)throw new IllegalStateException("Operation lineage owner changed");
+        if(suspensionOwner!=null)suspensionOwner.requireBound(expected);
+        revalidateSource(expected);
+        return new CentralOperationLineage(operationOriginKind,rootId(),originUserMessageId(),originDigest()).toJson();
     }
     private void bindRoot(String id) {if(rootId!=null)throw new IllegalStateException("Root cannot be rebound");rootId=Objects.requireNonNull(id);}
     private void registerStop(Context context) {
@@ -324,6 +339,8 @@ public final class CentralTreeAdmission implements AutoCloseable {
         }catch(org.json.JSONException failure){throw new IllegalStateException("Recovery certificate malformed",failure);}
         if(!restored.rootId().equals(selected.row.getRootId()) || !restored.oldCycleId().equals(selected.getRootCycle()))
             throw new IllegalStateException("Recovery checkpoint ownership changed");
+        CentralOperationLineage retainedLineage=restored.operationLineage();
+        if(retainedLineage!=null)retainedLineage.requireSource(selected.row.getRootId(),source.getOriginUserMessageId(),source.getOriginDigest());
         ChatDatabaseBridge.getInstance(context).validateCentralYieldSourcesSync(source,restored.retainedCheckpoint().transcript);
         action.requireCurrent(selected.getSessionId(),selected.getResumeId(),selected.getRevision());
         java.util.concurrent.locks.ReentrantLock lock=source.getLifecycle().fenceIdentity();lock.lock();
@@ -349,6 +366,9 @@ public final class CentralTreeAdmission implements AutoCloseable {
         private SuspensionPermit(Context context,LocalRunStore store,CentralUserRootCheckpoint source,
                 MainChatTranscriptStore.ConfirmedCentralYield confirmed,CentralResumeRecord parked){
             this.context=context.getApplicationContext();this.store=store;this.source=source;this.confirmed=confirmed;this.parked=parked;
+            if(!confirmed.certificate().equals(parked.getCertificate()) || !confirmed.rootId().equals(parked.getRootId()))
+                throw new IllegalStateException("Suspension confirmed source differs from native park");
+            if(confirmed.operationLineage()!=null)confirmed.operationLineage().requireSource(parked.getRootId(),source.getOriginUserMessageId(),source.getOriginDigest());
         }
         public String getResumeId(){return parked.getResumeId();}
         public String getSourceDigest(){return parked.getSourceDigest();}
@@ -364,7 +384,7 @@ public final class CentralTreeAdmission implements AutoCloseable {
                 throw new IllegalStateException("Suspension source changed");
             try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){
                 WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);CentralResumeRecord actual=trees.getCentralResume(getResumeId());
-                if(actual==null || !"PREPARED".equals(actual.getState()) || actual.getRevision()!=parked.getRevision() || !actual.getSourceDigest().equals(getSourceDigest()))
+                if(actual==null || !actual.equals(parked) || !"PREPARED".equals(actual.getState()))
                     throw new IllegalStateException("Suspension is no longer unclaimed");
                 TreeRoot root=Objects.requireNonNull(trees.getRoot(parked.getRootId()));
                 if(root.getAdmissionsClosed() || root.getWakesClosed())throw new IllegalStateException("Suspension root closed");
@@ -511,6 +531,30 @@ public final class CentralTreeAdmission implements AutoCloseable {
         public Map<String,String> confirmedIncomingOwnerDigests(CancellationToken expected) {
             requireOwnerPure(expected);return successor.incomingOwnerDigests();
         }
+        /** Separate canonical operation source; never appended again as a model USER prompt. */
+        private void requireOperationSourceOwner(CancellationToken expected) {
+            requireCurrent(expected);
+            if(successor==null || Thread.currentThread()!=successor.ownerThread)throw new IllegalStateException("Operation source owner missing");
+            if(bound)requireBound(expected);else try(WorkspaceRegistry registry=new WorkspaceRegistry(permit.context)) {
+                WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);
+                TreeRoot root=Objects.requireNonNull(trees.getRoot(rootId()));TreeNode node=Objects.requireNonNull(trees.getNode(rootId(),rootId()));
+                if(!reservation.equals(trees.getCentralResume(resumeId())) || !"RESERVED".equals(reservation.getState()) ||
+                    root.getAdmissionsClosed() || root.getWakesClosed() || node.getAdmissionsClosed() || node.getWakesClosed() ||
+                    !reservation.getParentCycle().equals(node.getCycleId()) || reservation.getStopEpoch()!=node.getStopEpoch() ||
+                    node.getState()!=TreeNodeState.WAITING || !resumeId().equals(node.getControlIntent()) ||
+                    node.getRevision()!=reservation.getParentRevision()+1 ||
+                    !root.getOrigin().getStorageGeneration().equals(getStorageGeneration()) ||
+                    !root.getOrigin().getOriginUserMessageId().equals(getOriginalUserMessageId()) ||
+                    !root.getOrigin().getOriginDigest().equals(getOriginDigest()))
+                    throw new IllegalStateException("Operation source reservation revoked");
+            }
+        }
+        public String originalOperationRequest(CancellationToken expected) {
+            requireOperationSourceOwner(expected);
+            String request=ChatDatabaseBridge.getInstance(permit.context).readCentralOriginalOperationRequestSync(permit.source);
+            requireOperationSourceOwner(expected);
+            return request;
+        }
         public boolean isBound(){return bound && !invalid;}
         public void markUncertain(Context context,String reason){
             if(reason==null || reason.isEmpty())throw new IllegalArgumentException("Uncertainty reason required");
@@ -521,7 +565,11 @@ public final class CentralTreeAdmission implements AutoCloseable {
         }
         public CentralTreeAdmission attachSuccessorOwner(Context context,CancellationToken expected){
             requireCurrent(expected);if(successor!=null)throw new IllegalStateException("Successor owner already attached");
-            CentralTreeAdmission authority=new CentralTreeAdmission(permit.store,permit.source,token,false);
+            CentralOperationLineage lineage=permit.confirmed.operationLineage();
+            if(lineage!=null)lineage.requireSource(rootId(),getOriginalUserMessageId(),getOriginDigest());
+            CentralTreeAdmission authority=new CentralTreeAdmission(permit.store,permit.source,token,
+                lineage==null?CentralOperationLineage.LEGACY:lineage.kind);
+            authority.suspensionOwner=this;
             authority.bindRoot(rootId());authority.registerStop(context);
             try {authority.restoreYieldIncomingOwners(context,permit.confirmed,expected);successor=authority;return authority;}
             catch(RuntimeException failure){authority.close();throw failure;}
@@ -555,6 +603,9 @@ public final class CentralTreeAdmission implements AutoCloseable {
         if(!CentralAvailabilityPolicy.admissionEnabled() || Thread.currentThread()!=ownerThread || !cycleId().equals(receipt.oldCycleId()) || !rootId().equals(receipt.rootId()))
             throw new IllegalStateException("Yield owner changed");
         revalidateSource(token);receipt.request().requirePrepared();
+        CentralOperationLineage lineage=Objects.requireNonNull(receipt.operationLineage(),"New yield operation lineage required");
+        lineage.requireSource(rootId(),originUserMessageId(),originDigest());
+        if(!operationOriginKind.equals(lineage.kind))throw new IllegalStateException("Yield operation authority changed");
         try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){
             WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);TreeNode parent=Objects.requireNonNull(trees.getNode(rootId(),rootId()));
             CentralResumeRecord parked=withCurrentWorkspaceTransaction(token,()->trees.parkCentral(TreeNodeFence.Companion.of(parent),receipt.runId(),receipt.certificate()));

@@ -13,6 +13,7 @@ final class AgentResultPresentation {
             case DEADLINE: resource = R.string.agent_timeout_result; break;
             case NO_PROGRESS: resource = R.string.agent_loop_result; break;
             case PROVIDER_UNAVAILABLE: resource = R.string.agent_provider_partial; break;
+            case SUPERSEDED_BY_NEW_TURN: resource = R.string.agent_new_request_interrupted; break;
             default: return result;
         }
         return result.withText(AppLanguageRuntime.localizedContext(context).getString(resource));

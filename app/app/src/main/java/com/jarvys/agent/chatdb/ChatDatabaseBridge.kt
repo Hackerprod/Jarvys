@@ -1687,6 +1687,20 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         }
     }
 
+    /** Atomic exact original operation text; evidence only, never prompt replay or fresh authority. */
+    fun readCentralOriginalOperationRequestSync(source:CentralUserRootCheckpoint):String = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            check(anchor.accepts(source.lifecycle,repos.database))
+            runBlocking {repos.database.withChatReadTransaction {
+                check(captureCentralUserRootDigestInTransaction(repos.database,source.ownerCentralSessionId,source.originUserMessageId)==source.originDigest)
+                val row=requireNotNull(repos.reader.readMessage(source.ownerCentralSessionId,source.originUserMessageId))
+                check(row.role=="user" && row.hiddenKind==null && row.parts.none {it.kind==com.jarvys.agent.ConversationInput.PROVENANCE_PART_KIND})
+                row.text
+            }}
+        }
+    }
+
     /** A successful exact assistant commit, never inferred from response text. */
     fun confirmCentralTreeExitSync(conversationId:String,messageId:String,ownerId:String,runId:String):String = execute { repos ->
         repos.database.withChatReadTransaction {
@@ -2326,7 +2340,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
                 runBlocking {repos.database.withChatReadTransaction {
                     check(CentralTurnSubmissionRepository(repos.database).regenerationEvidence(receipt.sessionId,
                         receipt.userMessageId,receipt.assistantMessageId)==receipt.evidence)
-                    owner.requireCurrent(receipt.sessionId);receipt.consume()
+                    owner.requireCurrent(receipt.sessionId);receipt.consume(owner)
                 }}
             }
         } catch(failure:Throwable) {NativeRegenerationReceipt.invalidate(receipt);throw failure}

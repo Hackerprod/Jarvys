@@ -55,8 +55,22 @@ internal class CentralTurnSubmissionRepository(private val database: JarvysChatD
     }
     /** Exact committed native presentation marker; reading this data never mints a permit. */
     fun regenerationEvidence(sessionId:String,userId:String,assistantId:String):NativeRegenerationEvidence? {
-        val row=list(sessionId).singleOrNull {it.userMessageId==userId} ?: return null
-        check(confirmedCompleted(row)) {"Regeneration source is not canonically completed"}
+        val row=list(sessionId).singleOrNull {it.userMessageId==userId}
+        val sourceKind:String
+        val sourceGeneration:String
+        val sourceDigest:String
+        if(row!=null) {
+            check(confirmedCompleted(row)) {"Regeneration source is not canonically completed"}
+            sourceKind="POSITIVE";sourceGeneration=row.storageGeneration;sourceDigest=row.sourceSha256
+        } else {
+            if(!com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled())return null
+            requireAvailable()
+            // Deleted/corrupt positive admission must never be reclassified as retained history.
+            check(!sql.query("SELECT 1 FROM message_parts WHERE conversation_id=? AND message_id=? AND kind IN (?,?) LIMIT 1",
+                arrayOf(sessionId,userId,CentralSubmissionRequest.PART_KIND,com.jarvys.agent.ConversationInput.PROVENANCE_PART_KIND)).use {it.moveToFirst()})
+            sourceKind="RETAINED";sourceGeneration=generation()
+            sourceDigest=captureCentralUserRootDigestInTransaction(database,sessionId,userId)
+        }
         return sql.query("SELECT status,owner_user_message_id,run_id,hidden_kind,hidden_seq,seq FROM messages WHERE conversation_id=? AND message_id=? AND role='assistant'",arrayOf(sessionId,assistantId)).use { c ->
             check(c.moveToFirst() && c.getString(0)=="COMPLETED" && c.getString(1)==userId && !c.isNull(2) && c.getString(2).isNotBlank() &&
                 c.getString(3)=="assistant_regenerated" && c.getType(4)==Cursor.FIELD_TYPE_INTEGER && c.getLong(4)>c.getLong(5))
@@ -70,7 +84,7 @@ internal class CentralTurnSubmissionRepository(private val database: JarvysChatD
                 "(n.sort_seq=selected.sort_seq AND n.sort_sub=selected.sort_sub AND n.seq>selected.seq)) LIMIT 1",
                 arrayOf(c.getLong(5),sessionId)).use {it.moveToFirst()}) {"Native regeneration target was superseded"}
             check(!c.moveToNext())
-            NativeRegenerationEvidence(sessionId,userId,assistantId,seq,run,row.storageGeneration,row.sourceSha256)
+            NativeRegenerationEvidence(sessionId,userId,assistantId,seq,run,sourceGeneration,sourceDigest,sourceKind)
         }
     }
     private fun changed() {check(sql.query("SELECT changes()").use {it.moveToFirst() && it.getLong(0)==1L}) {"Central submission CAS conflict"}}

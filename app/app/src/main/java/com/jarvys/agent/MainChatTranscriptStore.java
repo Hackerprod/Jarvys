@@ -75,12 +75,14 @@ final class MainChatTranscriptStore {
         private final CoreAgentLoop.Checkpoint retained;
         private final String oldCycle, runId, owner, rootId, certificate, digest, reference, ownerChain;
         private final ConversationInput.Origin initialOwnerOrigin;
+        private final CentralOperationLineage operationLineage;
         private final CentralSubmissionAdmission.LivePermit request;
         private ConfirmedCentralYield(CrewCheckpointStore.ConfirmedCentralYieldSnapshot snapshot,
                 CoreAgentLoop.Checkpoint retained, CentralSubmissionAdmission.LivePermit request) {
             this.retained=retained;this.request=request;this.digest=snapshot.payloadSha256();this.reference=snapshot.referenceId();
             try {
                 JSONObject identity=snapshot.identity();
+                operationLineage=CentralOperationLineage.readOptional(identity);
                 ownerChain=identity.getJSONArray("incomingOwners").toString();
                 initialOwnerOrigin=ConversationInput.Origin.valueOf(identity.getString("initialOwnerOrigin"));
                 oldCycle=identity.getString("oldCycleId");runId=identity.getString("runId");
@@ -105,6 +107,7 @@ final class MainChatTranscriptStore {
         public String oldCycleId(){return oldCycle;}
         public String ownerMessageId(){return owner;}
         public String rootId(){return rootId;}
+        CentralOperationLineage operationLineage(){return operationLineage;}
         public JSONArray incomingOwners(){try{return new JSONArray(ownerChain);}catch(JSONException invalid){throw new IllegalStateException(invalid);}}
         public String finalOwnerMessageId(){JSONArray chain=incomingOwners();return chain.length()==0?owner:chain.optJSONObject(chain.length()-1).optString("messageId");}
         public ConversationInput.Origin finalOwnerOrigin(){JSONArray chain=incomingOwners();return chain.length()==0?initialOwnerOrigin:
@@ -139,7 +142,7 @@ final class MainChatTranscriptStore {
         public ConfirmedCentralYield original(){return original;}
     }
     ConfirmedCentralYield confirmYield(CoreAgentLoop.YieldCandidate candidate,String runId,String rootId,String oldCycle,
-            NativeCentralYieldBoundary boundary,CancellationToken token,JSONArray incomingOwners) {
+            NativeCentralYieldBoundary boundary,CancellationToken token,JSONArray incomingOwners,JSONObject operationLineage) {
         token.throwIfCancelled();boundary.requireCurrent(candidate.request);
         if(oldCycle==null || oldCycle.isEmpty())throw new IllegalStateException("Exact old tree cycle required");
         TreeExitReceipt receipt=confirmTreeExit(candidate.checkpoint,runId);
@@ -160,6 +163,8 @@ final class MainChatTranscriptStore {
             ConversationInput initialOwner=store.readConversationInput(sessionId,receipt.ownerMessageId);
             if(initialOwner==null)throw new IllegalStateException("Yield original transcript owner unavailable");
             identity.put("initialOwnerOrigin",initialOwner.origin.name());
+            identity.put(CentralOperationLineage.FIELD,operationLineage);
+            java.util.Objects.requireNonNull(CentralOperationLineage.readOptional(identity));
             CrewCheckpointStore.ConfirmedCentralYieldSnapshot saved=new CrewCheckpointStore(store.filesDirectory())
                 .saveCentralYieldConfirmed(sessionId,identity,candidate.checkpoint);
             token.throwIfCancelled();boundary.requireCurrent(request);

@@ -227,7 +227,7 @@ public final class CoreAgentLoop {
         }
     }
 
-    public enum InterruptionReason { NONE, DEADLINE, NO_PROGRESS, PROVIDER_UNAVAILABLE }
+    public enum InterruptionReason { NONE, DEADLINE, NO_PROGRESS, PROVIDER_UNAVAILABLE, SUPERSEDED_BY_NEW_TURN }
 
     public static final class Result {
         public final String runId;
@@ -237,6 +237,21 @@ public final class CoreAgentLoop {
         public final long durationMs;
         public final InterruptionReason interruptionReason;
         private YieldCandidate nativeYield;
+        private YieldCandidate ordinaryInterruption;
+        private CoreAgentRuntime.ConfirmedOrdinaryInterruption confirmedOrdinaryInterruption;
+        public boolean isOrdinaryInterrupted() { return ordinaryInterruption != null; }
+        public CoreAgentRuntime.ConfirmedOrdinaryInterruption ordinaryInterruptionReceipt() {
+            if (ordinaryInterruption == null || confirmedOrdinaryInterruption == null)
+                throw new IllegalStateException("Ordinary interruption checkpoint is not confirmed");
+            return confirmedOrdinaryInterruption;
+        }
+        YieldCandidate ordinaryInterruptionCandidate() { return ordinaryInterruption; }
+        Result withConfirmedOrdinaryInterruption(CoreAgentRuntime.ConfirmedOrdinaryInterruption receipt) {
+            if (ordinaryInterruption == null || receipt.request() != ordinaryInterruption.request)
+                throw new IllegalStateException("Ordinary interruption source changed");
+            confirmedOrdinaryInterruption = java.util.Objects.requireNonNull(receipt);
+            return this;
+        }
         private MainChatTranscriptStore.ConfirmedCentralYield confirmedYield;
         public boolean isYielded() { return nativeYield != null; }
         public MainChatTranscriptStore.ConfirmedCentralYield yieldReceipt() {
@@ -279,6 +294,8 @@ public final class CoreAgentLoop {
         public Result withText(String replacement) {
             Result copy = new Result(runId, replacement, turns, outcome, durationMs, interruptionReason, providerInterruptionCause);
             copy.nativeYield = nativeYield; copy.confirmedYield = confirmedYield;
+            copy.ordinaryInterruption = ordinaryInterruption;
+            copy.confirmedOrdinaryInterruption = confirmedOrdinaryInterruption;
             return copy;
         }
 
@@ -619,6 +636,12 @@ public final class CoreAgentLoop {
         nativeYieldBoundary.requireCurrent(request);
         if (checkpoint.appliedIncomingIds.contains(request.getUserMessageId()))
             throw new IllegalStateException("New turn was incorporated into the old execution");
+        if (nativeYieldBoundary.ordinaryRegeneration()) {
+            Result interrupted = new Result(runId, "Interrupted by a newer request.", turns, "PARTIAL",
+                    Math.max(0L, System.currentTimeMillis()-startedAtMs), InterruptionReason.SUPERSEDED_BY_NEW_TURN);
+            interrupted.ordinaryInterruption = new YieldCandidate(request, checkpoint);
+            return interrupted;
+        }
         Result yielded = new Result(runId, "", turns, "YIELDED", Math.max(0L, System.currentTimeMillis()-startedAtMs));
         yielded.nativeYield = new YieldCandidate(request, checkpoint);
         return yielded;

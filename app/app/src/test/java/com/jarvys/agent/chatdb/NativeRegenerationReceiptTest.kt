@@ -65,4 +65,14 @@ class NativeRegenerationReceiptTest {
         assertThrows(IllegalStateException::class.java) {ChatDatabaseBridge.getInstance(context).validateNativeRegenerationReceiptSync(next)}
         NativeRegenerationReceipt.invalidate(next)
     }
+    @Test fun removedPositiveAdmissionCannotFallBackToRetainedHistory() {
+        val receipt=issue("removed-positive")
+        assertEquals("POSITIVE",receipt.sourceKind)
+        val db=JarvysChatDatabaseProvider.getInstance(context)
+        db.testChatSql.execSQL("DELETE FROM central_turn_submissions WHERE conversation_id=? AND user_message_id=?",arrayOf(session,receipt.userMessageId))
+        assertThrows(IllegalStateException::class.java) {ChatDatabaseBridge.getInstance(context).validateNativeRegenerationReceiptSync(receipt)}
+        assertEquals("POSITIVE",receipt.sourceKind)
+        NativeRegenerationReceipt.invalidate(receipt)
+    }
+
 }

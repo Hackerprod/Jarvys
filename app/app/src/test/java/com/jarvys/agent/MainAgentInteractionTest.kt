@@ -1276,7 +1276,7 @@ class MainAgentInteractionTest {
             }
             assertEquals(original,prompt.userMessageId)
             assertTrue(chatTestStore.onDatabaseWorker { store.handledConversationMessageIds(session,listOf(original)).contains(original) })
-            AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),session,prompt.userMessageId,prompt.resumeReceipt)
+            AgentForegroundService.startRegenerateAssistant(context,prompt.text,arrayListOf(),session,prompt.userMessageId,prompt.resumeReceipt,prompt.nativeRegenerationReceipt)
             deliverStartedServices(context)
             assertTrue(awaitServiceCallback(regenerationEntered,5))
             assertEquals(2,owners.size);assertEquals(2,binds.get())

@@ -51,6 +51,59 @@ public class CentralYieldCheckpointStoreTest {
         assertEquals("run",reopened.identity().getString("runId"));
         assertEquals(saved.referenceId(),store.saveCentralYieldConfirmed(SESSION,identity(),loop).referenceId());
     }
+    @Test public void oldIdentityRemainsByteCompatibleAndCannotInferDelegationFromUserRole() throws Exception {
+        File root=root();CrewCheckpointStore store=new CrewCheckpointStore(root);
+        CrewCheckpointStore.ConfirmedCentralYieldSnapshot saved=store.saveCentralYieldConfirmed(SESSION,identity(),loop());
+        byte[] original=Files.readAllBytes(target(root,saved.referenceId()).toPath());
+        CrewCheckpointStore.ConfirmedCentralYieldSnapshot opened=new CrewCheckpointStore(root).readCentralYieldConfirmed(SESSION,saved.referenceId(),saved.payloadSha256());
+        assertEquals("USER",opened.identity().getString("initialOwnerOrigin"));
+        assertNull(CentralOperationLineage.readOptional(opened.identity()));
+        assertArrayEquals(original,Files.readAllBytes(target(root,saved.referenceId()).toPath()));
+    }
+    @Test public void typedOriginalInternalAndRestrictedLineageRoundTripExactUtf16WithoutAuthorityMint() throws Exception {
+        File root=root();CrewCheckpointStore store=new CrewCheckpointStore(root);
+        for(String kind:Arrays.asList(CentralOperationLineage.USER,CentralOperationLineage.INTERNAL,CentralOperationLineage.LEGACY)) {
+            String user="original-\u0000\ud800-\ud83d\ude80";
+            JSONObject typed=identity().put(CentralOperationLineage.FIELD,new CentralOperationLineage(kind,"root",user,String.join("",Collections.nCopies(64,"c"))).toJson());
+            CrewCheckpointStore.ConfirmedCentralYieldSnapshot saved=store.saveCentralYieldConfirmed(SESSION,typed,loop());
+            CrewCheckpointStore.ConfirmedCentralYieldSnapshot reopened=new CrewCheckpointStore(root).readCentralYieldConfirmed(SESSION,saved.referenceId(),saved.payloadSha256());
+            CentralOperationLineage lineage=CentralOperationLineage.readOptional(reopened.identity());
+            assertNotNull(lineage);assertEquals(kind,lineage.kind);assertEquals(user,lineage.userId);
+            assertEquals(CentralYieldCheckpointCodec.canonical(typed),CentralYieldCheckpointCodec.canonical(reopened.identity()));
+            assertEquals(saved.payloadSha256(),store.saveCentralYieldConfirmed(SESSION,reopened.identity(),reopened.checkpoint()).payloadSha256());
+            // Data does not grant execution; even source binding is independently exact.
+            assertThrows(IllegalStateException.class,()->lineage.requireSource("other-root",user,lineage.originDigest));
+            assertThrows(IllegalStateException.class,()->lineage.requireSource("root","other-user",lineage.originDigest));
+            assertThrows(IllegalStateException.class,()->lineage.requireSource("root",user,String.join("",Collections.nCopies(64,"d"))));
+        }
+    }
+    @Test public void malformedPresentLineageNeverFallsBackToHistoricalRestrictedRead() throws Exception {
+        File root=root();CrewCheckpointStore store=new CrewCheckpointStore(root);
+        CrewCheckpointStore.ConfirmedCentralYieldSnapshot old=store.saveCentralYieldConfirmed(SESSION,identity(),loop());
+        byte[] original=Files.readAllBytes(target(root,old.referenceId()).toPath());
+        for(String mutation:Arrays.asList("version","numericType","unknownKind","extra","missing","crossRoot","null","boolean")) {
+            JSONObject typed=identity();JSONObject lineage=new CentralOperationLineage(CentralOperationLineage.USER,"root","original-user",String.join("",Collections.nCopies(64,"c"))).toJson();
+            if(mutation.equals("version"))lineage.put("version",2);
+            if(mutation.equals("numericType"))lineage.put("version",1.0);
+            if(mutation.equals("unknownKind"))lineage.put("kind","CHIEF");
+            if(mutation.equals("extra"))lineage.put("grant",true);
+            if(mutation.equals("missing"))lineage.remove("originDigest");
+            if(mutation.equals("crossRoot"))lineage.put("rootId","foreign");
+            typed.put(CentralOperationLineage.FIELD,mutation.equals("null")?JSONObject.NULL:mutation.equals("boolean")?Boolean.TRUE:lineage);
+            assertThrows(IllegalStateException.class,()->store.saveCentralYieldConfirmed(SESSION,typed,loop()));
+            assertArrayEquals(original,Files.readAllBytes(target(root,old.referenceId()).toPath()));
+        }
+    }
+    @Test public void lineageMutationChangesImmutableHashAndCannotUseOriginalReference() throws Exception {
+        File root=root();CrewCheckpointStore store=new CrewCheckpointStore(root);
+        JSONObject typed=identity().put(CentralOperationLineage.FIELD,new CentralOperationLineage(CentralOperationLineage.USER,"root","original-user",String.join("",Collections.nCopies(64,"c"))).toJson());
+        CrewCheckpointStore.ConfirmedCentralYieldSnapshot user=store.saveCentralYieldConfirmed(SESSION,typed,loop());
+        typed.getJSONObject(CentralOperationLineage.FIELD).put("kind",CentralOperationLineage.INTERNAL);
+        CrewCheckpointStore.ConfirmedCentralYieldSnapshot internal=store.saveCentralYieldConfirmed(SESSION,typed,loop());
+        assertNotEquals(user.payloadSha256(),internal.payloadSha256());
+        assertThrows(IllegalStateException.class,()->store.readCentralYieldConfirmed(SESSION,internal.referenceId(),user.payloadSha256()));
+        assertEquals(CentralOperationLineage.USER,CentralOperationLineage.readOptional(store.readCentralYieldConfirmed(SESSION,user.referenceId(),user.payloadSha256()).identity()).kind);
+    }
     @Test public void renameBeforeDirectorySyncFailureNeverReturnsConfirmation() throws Exception {
         File root=root();AtomicBoolean fail=new AtomicBoolean(true);
         CrewCheckpointStore store=new CrewCheckpointStore(root,directory->{

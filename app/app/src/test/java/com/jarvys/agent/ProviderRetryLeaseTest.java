@@ -136,6 +136,52 @@ public class ProviderRetryLeaseTest {
         }
     }
 
+    @Test public void committedReplyCannotBeRetroactivelySuperseded() {
+        CancellationToken token = CancellationToken.cancellable();
+        try (ProviderAttemptLease current = lease(token)) {
+            current.beginInference();
+            current.transportReturned();
+            assertTrue(current.tryCommitReply());
+            current.requestYield();
+            current.requireOwnerCurrent();
+            assertEquals(ProviderAttemptLease.Stage.COMMITTING, current.stage());
+            assertFalse(current.transportToken().isCancellationRequested());
+            assertFalse(current.acceptsDelta());
+            assertFalse(token.isCancellationRequested());
+        }
+    }
+
+    @Test public void supersededAttemptRejectsLateDeltaAndReplyAdmission() {
+        CancellationToken token = CancellationToken.cancellable();
+        try (ProviderAttemptLease current = lease(token)) {
+            current.beginInference();
+            assertTrue(current.acceptsDelta());
+            current.requestYield();
+            assertFalse(current.acceptsDelta());
+            try { current.requireCurrent(); fail("Late callback retained authority"); }
+            catch (ProviderAttemptLease.YieldRequested expected) { }
+            try { current.tryCommitReply(); fail("Late reply retained authority"); }
+            catch (ProviderAttemptLease.YieldRequested expected) { }
+            assertFalse(token.isCancellationRequested());
+        }
+    }
+
+    @Test public void actualStopDominatesPendingYieldAndDoesNotBecomeRegeneration() {
+        StopController controller = new StopController();
+        CancellationToken token = controller.beginRun();
+        try (ProviderAttemptLease current = lease(token)) {
+            current.beginInference();
+            current.requestYield();
+            assertTrue(controller.stopRunAsync());
+            assertTrue(token.wasStoppedByUser());
+            try { current.requireOwnerCurrent(); fail("STOP was ignored"); }
+            catch (CancellationException expected) { }
+            try { current.transportReturned(); fail("STOP became transport return"); }
+            catch (CancellationException expected) { }
+            assertFalse(current.acceptsDelta());
+        }
+    }
+
     @Test public void backoffRejectsInferenceStageWithoutReclassifyingIt() {
         CancellationToken token = CancellationToken.cancellable();
         try (ProviderAttemptLease current = lease(token)) {

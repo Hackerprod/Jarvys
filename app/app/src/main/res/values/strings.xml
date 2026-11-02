@@ -2002,4 +2002,5 @@ Confirmed retired sources:
     <string name="central_request_cancelled">Cancelled</string>
     <string name="central_request_failed">Failed</string>
     <string name="central_request_uncertain">Uncertain — not retried automatically</string>
+    <string name="agent_new_request_interrupted">Interrupted by your newer request. Previous completed actions were not repeated.</string>
 </resources>

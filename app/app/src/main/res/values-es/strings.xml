@@ -2004,4 +2004,5 @@ Fuentes retiradas confirmadas:
     <string name="central_request_cancelled">Cancelada</string>
     <string name="central_request_failed">Fallida</string>
     <string name="central_request_uncertain">Estado incierto — no se reintenta automáticamente</string>
+    <string name="agent_new_request_interrupted">Interrumpido por tu nueva solicitud. No se repitieron las acciones ya completadas.</string>
 </resources>

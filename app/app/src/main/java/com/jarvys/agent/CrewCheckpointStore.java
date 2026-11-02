@@ -170,8 +170,9 @@ public final class CrewCheckpointStore {
             || !selected.getString("sourceSha256").matches("[0-9a-f]{64}")
             || !identity.getString("confirmedReceiptDigest").matches("[0-9a-f]{64}")
             || !(selected.get("revision") instanceof Integer || selected.get("revision") instanceof Long)
-            || selected.getLong("revision")<0 || identity.length()!=9 || selected.length()!=6)
+            || selected.getLong("revision")<0 || identity.length()!=(identity.has(CentralOperationLineage.FIELD)?10:9) || selected.length()!=6)
             throw new IOException("Invalid native yield immutable identity");
+        CentralOperationLineage.readOptional(identity);
         ConversationInput.Origin.valueOf(required(identity,"initialOwnerOrigin"));
         JSONArray chain=identity.getJSONArray("incomingOwners");Set<String> seen=new LinkedHashSet<>();
         for(int i=0;i<chain.length();i++) {

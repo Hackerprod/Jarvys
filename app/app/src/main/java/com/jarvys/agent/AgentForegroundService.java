@@ -173,6 +173,7 @@ public final class AgentForegroundService extends Service {
     final String runId = "central-host-" + java.util.UUID.randomUUID();
     volatile Future<?> future;
     volatile NativeCentralBoundary yieldBoundary;
+    volatile NativeRegenerationReceipt.ConsumedOwner nativeRegenerationOwner;
     volatile boolean handoffNudgeEligible = true;
     volatile String nativeSourceUserId;
     volatile CentralTreeAdmission.SuspensionClaim nativeSuspensionClaim;
@@ -195,6 +196,10 @@ public final class AgentForegroundService extends Service {
     public long getTokenGeneration(){return active.generation;}
     public void requireTerminalEvidence(CentralTreeAdmission.TerminalEvidence evidence) {
       requireCurrent(active.sessionId);evidence.requireCurrent(active.token);
+    }
+    public void requireCurrent(String session, CancellationToken token) {
+      if (active.token != token) throw new IllegalStateException("Regeneration token changed");
+      requireCurrent(session);
     }
     public void requireCurrent(String session) {
       active.token.throwIfCancelled();
@@ -1005,6 +1010,11 @@ public final class AgentForegroundService extends Service {
       owner.token.throwIfCancelled();
       if(activeRuns.get(owner.sessionId)!=owner || owner.yieldBoundary!=this)
         throw new IllegalStateException("Central yield owner changed");
+    }
+    @Override public boolean ordinaryRegeneration() {
+      requireOwner();
+      if(owner.nativeRegenerationOwner==null)return false;
+      owner.nativeRegenerationOwner.requireCurrent(owner.token);return true;
     }
     @Override public CentralSubmissionAdmission.LivePermit pendingNewTurn() {
       synchronized(interruptAdmissionLock(owner.sessionId)) {
@@ -1903,7 +1913,12 @@ public final class AgentForegroundService extends Service {
               }
             }
         }
-        if (nativeRegeneration != null && !positiveRegenerationSource.get()) return false;
+        if (CentralAvailabilityPolicy.admissionEnabled() && regeneration) {
+          if (nativeRegeneration==null || !chatSessionId.equals(nativeRegeneration.getSessionId())
+              || !existingUserMessageId.equals(nativeRegeneration.getUserMessageId())
+              || !com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this)
+                  .validateNativeRegenerationReceiptSync(nativeRegeneration)) return false;
+        }
         // This admission runs at physical lane dequeue, before allocating a token/UI generation.
         // A predecessor can hot-incorporate the exact USER while its direct intent is queued.
         // Explicit regeneration retains its separate native authority and is not a duplicate.
@@ -1966,14 +1981,14 @@ public final class AgentForegroundService extends Service {
         stopServiceIfIdle();
       } : null;
       Runnable rejectedSubmission = realAgent ? () -> {
-        if (nativeRegeneration != null || positiveRegenerationSource.get()) {
+        if (nativeRegeneration != null || positiveRegenerationSource.get() || regeneration && CentralAvailabilityPolicy.admissionEnabled()) {
           NativeRegenerationReceipt.invalidate(nativeRegeneration);
           if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
         } else resolveRejectedStoredSubmission(chatSessionId, chatDisplayGoal, userMessageAlreadyRecorded,
             existingUserMessageId, followUpRequestId, false, releaseInternalInputClaim);
       } : null;
       Runnable stoppedSubmission = realAgent ? () -> {
-        if (nativeRegeneration != null || positiveRegenerationSource.get()) NativeRegenerationReceipt.invalidate(nativeRegeneration);
+        if (nativeRegeneration != null || positiveRegenerationSource.get() || regeneration && CentralAvailabilityPolicy.admissionEnabled()) NativeRegenerationReceipt.invalidate(nativeRegeneration);
         else resolveRejectedStoredSubmission(chatSessionId, chatDisplayGoal, userMessageAlreadyRecorded,
             existingUserMessageId, followUpRequestId, true, null);
       } : null;
@@ -1984,8 +1999,8 @@ public final class AgentForegroundService extends Service {
         try {
           if (compactConversation) runManualConversationCompaction(active.token, chatSessionId);
           else {
-            if (positiveRegenerationSource.get()) {
-              com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this)
+            if (nativeRegeneration!=null) {
+              active.nativeRegenerationOwner=com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this)
                   .consumeNativeRegenerationReceiptSync(nativeRegeneration, new CentralSubmissionOwner(this, active));
             }
             MemoryResumeAdmission memoryResume = null;
@@ -2000,13 +2015,13 @@ public final class AgentForegroundService extends Service {
               }
             }
             // Positive regeneration's prompt comes from the canonical actual USER, never Intent text.
-            runRealAgent(active.token, positiveRegenerationSource.get() ? "" : chatAgentGoal, runSkillIds,
-                chatSessionId, positiveRegenerationSource.get() ? "" : chatDisplayGoal,
+            runRealAgent(active.token, nativeRegeneration!=null ? "" : chatAgentGoal, runSkillIds,
+                chatSessionId, nativeRegeneration!=null ? "" : chatDisplayGoal,
                 userMessageAlreadyRecorded, regeneration,
                 internalInputSubmission ? internalRunInputId : existingUserMessageId, memoryResume);
           }
         } catch (RuntimeException earlyFailure) {
-          if (positiveRegenerationSource.get()) {
+          if (nativeRegeneration!=null || positiveRegenerationSource.get()) {
             LocalDiagnostics.recoverable(this, LocalDiagnostics.Origin.SERVICE, earlyFailure);
             AgentRunUiState.completeGeneration(chatSessionId, active.generation, "failed-start", "FAILED",
                 getString(R.string.chat_interrupt_start_failed), "", 0L);
@@ -2311,14 +2326,21 @@ public final class AgentForegroundService extends Service {
       else if(treeAdmission!=null)runtime.bindCentralTreeAdmission(treeAdmission,token);
       if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance))
         runtime.bindClaimedContinuation(storedInput, token);
+      ActiveRun regenerationRun=activeRuns.get(sessionId);
+      NativeRegenerationReceipt.ConsumedOwner ordinaryRegenerationOwner=regeneration && regenerationRun!=null
+          && regenerationRun.token==token ? regenerationRun.nativeRegenerationOwner : null;
+      if(ordinaryRegenerationOwner!=null) {
+        ordinaryRegenerationOwner.requireCurrent(token);
+        runtime.bindNativeRegenerationOwner(ordinaryRegenerationOwner,token);
+      }
       runtime.withMemorySessionRegeneration(regeneration, memoryResumeAdmission);
       runtime.setMainChatSteeringCursor(userMessageId == null ? "" : userMessageId);
       runtime.setCurrentUserMessageId(internalInput ? "" : userMessageId);
       runtime.setCurrentTurnOwnerMessageId(userMessageId);
       steeringProvider = runtime.mainChatSteeringProvider();
       if (steeringProvider != null) registerMainChatSteeringProvider(sessionId, steeringProvider);
-      if(CentralAvailabilityPolicy.admissionEnabled() && treeAdmission!=null) {
-        CentralAvailabilityPolicy.requireRegistrySchemaReady(this);
+      if(CentralAvailabilityPolicy.admissionEnabled() && (treeAdmission!=null || ordinaryRegenerationOwner!=null)) {
+        if(treeAdmission!=null)CentralAvailabilityPolicy.requireRegistrySchemaReady(this);
         if(!conversationStore.centralSubmissionSchemaReady())throw new IllegalStateException("Central submission schema is not ready");
         ActiveRun owner=activeRuns.get(sessionId);
         if(owner==null || owner.token!=token)throw new IllegalStateException("Central yield has no physical service owner");
@@ -2504,6 +2526,12 @@ public final class AgentForegroundService extends Service {
           };
       CoreAgentLoop.Result result =
           mainChatRunner.run(runtime, goal.trim(), conversationHistory, attachments, token, progress);
+      if(result.isOrdinaryInterrupted()) {
+        if(ordinaryRegenerationOwner==null || treeAdmission!=null || !"PARTIAL".equals(result.outcome))
+          throw new IllegalStateException("Ordinary interruption has no exact regeneration owner");
+        ordinaryRegenerationOwner.requireCurrent(token);
+        result.ordinaryInterruptionReceipt().requireCurrent(ordinaryRegenerationOwner,token);
+      }
       if(result.isYielded()) {
         if(treeAdmission==null)throw new IllegalStateException("Typed yield has no original root authority");
         CentralTreeAdmission.SuspensionPermit parked=treeAdmission.park(this,result.yieldReceipt());
@@ -2587,7 +2615,7 @@ public final class AgentForegroundService extends Service {
             this, proactiveThreadKey, assistantMessageId);
       }
       finishCoreRun(token, chatMessage);
-      if (!token.wasStoppedByUser() && steeringProvider != null && steeringRemainsUnconsumed)
+      if (!result.isOrdinaryInterrupted() && !token.wasStoppedByUser() && steeringProvider != null && steeringRemainsUnconsumed)
         enqueueStoredMessageFollowUp(sessionId, steeringProvider.latestUnincorporatedSteeringMessageId());
       if (!assistantOwnerInternal.get() && !timedOut && "COMPLETED".equals(result.outcome)) {
         enqueueAutomaticReflection(sessionId, assistantMessageId);
