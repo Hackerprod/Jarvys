@@ -1,3 +1,7 @@
+## Estado vigente — reparación v99 fase B: par host R2 completo, revisión pendiente — 02-11-2026
+
+Fuente `b40a7f49`: **Full y Play 148 clases / 1.358 pruebas cada uno**, cero fallos/errores/omisiones, bindings invariantes. Corregidas las rutas de disponibilidad de regeneración/AGENT/STEER, conservación de autoridad original y lectura P1, y limpieza de claims rechazados. R1 FAIL y diagnósticos quedan preservados. **Revisión independiente R2 pendiente; no PASS B ni APK nuevo.** [Candidato exacto, evidencias y límites](docs/V99_CENTRAL_IMPLEMENTATION_CANDIDATE_R2.md). Sin garantía temporal universal ni causa del teléfono confirmada; menú/datos/Engram conservados. Estados inferiores históricos.
+
 ## Estado vigente — reparación v99 fase B: aceptación nativa en curso — 02-11-2026
 
 Fase A conserva **PASS independiente acotado**. **Fase B: revisión independiente R1 FAIL** sobre6bcdc1c4: regeneración bloquea un USER nuevo mientras espera al proveedor; la suspensión pierde contexto/autoridad del USER original para delegar. Ambos defectos reproducidos en Full y Play, aunque la cohorte amplia del autor1.291 por sabor pasaba. Se corrigen con regresiones nativas, sin árbol ficticio, replay incierto ni permisos heredados. **No PASS B ni APK nuevo.** [Hallazgos y reparación](docs/V99_CENTRAL_AVAILABILITY_PROGRESS.md), [candidato histórico y límites](docs/V99_CENTRAL_IMPLEMENTATION_CANDIDATE.md). Menú, datos, agentes generales y Engram conservados; sin causa del teléfono confirmada. Los estados inferiores son históricos.
