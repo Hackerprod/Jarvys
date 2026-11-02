@@ -1,0 +1,151 @@
+{
+  "status": "FAIL-retained-not-acceptance",
+  "sourceCommit": "eddae7d79ad7289063f9306fb4c22d73a66ef5ab",
+  "admissionEnabled": true,
+  "terminal": {
+    "exit": 1,
+    "sourceUnchanged": true,
+    "artifactsUnchanged": true,
+    "xmlFiles": 10,
+    "counts": {
+      "tests": 131,
+      "failures": 8,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "terminalSha256": "96ddc97cc5719fc3521d4f1f6962247fbeea69c9145ea8f1f6e98d70ecd8319a",
+  "sourceBindingSha256": "b59d4ce4077edfc4627c5b60d2b2ddb34748aa2c4afd8f4cb5e95848211ad21e",
+  "artifactManifestSha256": "e2cedd71959182a2a9d743207ee0131111e688d579e36b85711f8fa86f7abaf8",
+  "selectorSha256": "5fb23bdb20f5f1cf5d513ec75b38101d20dd386335843d522a7fffc1b6323fbb",
+  "classes": [
+    {
+      "className": "com.jarvys.agent.CentralAvailabilityBoundaryAcceptanceTest",
+      "counts": {
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "ad0e2c6ee7563e2de29870150f83457143a5944a0e741fd00263c2ddc58e9ba7"
+    },
+    {
+      "className": "com.jarvys.agent.CentralAvailabilityServiceTest",
+      "counts": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "e268513c8910d7a89c0796605f242e8c680ac1d83fd843caa121e2d91ee4ca5f"
+    },
+    {
+      "className": "com.jarvys.agent.CentralTreeServiceAcceptanceTest",
+      "counts": {
+        "tests": 26,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "67865c5b48de9b05d4743a717f99eddd6e3ae492fce9b74977c3935ba4dea7ef"
+    },
+    {
+      "className": "com.jarvys.agent.InternalContinuationSuspensionAuthorityTest",
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "suspendedActualInternalContinuationKeepsOperationContextButCannotDelegate"
+      ],
+      "xmlSha256": "846ebd59662410abc2a77961990ff030beefa74fc0f698f05984b283fb2e0cfa"
+    },
+    {
+      "className": "com.jarvys.agent.LateSteerAvailabilityAcceptanceTest",
+      "counts": {
+        "tests": 3,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "nativeLateSteerFollowUpYieldsHeldInferenceToFreshSend",
+        "preAckLateSteerRemainsPendingUntilExistingRecoveryRunsAfterFreshUser"
+      ],
+      "xmlSha256": "445c7e78fcd1304b52f2b8daac059cfe83b5662f22818405ab4ead581a15fb3e"
+    },
+    {
+      "className": "com.jarvys.agent.MainAgentInteractionTest",
+      "counts": {
+        "tests": 54,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "6f1904283939553355b364639195d5b50f4e465db76ef2d85a508f5eac8389e4"
+    },
+    {
+      "className": "com.jarvys.agent.OrdinaryAgentAvailabilityAcceptanceTest",
+      "counts": {
+        "tests": 5,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "nativeNonOptedResultYieldsToFreshUserWithoutChangingItsAck"
+      ],
+      "xmlSha256": "5d5821efa18f4ba2c04b916c31e2649a1b9d427debb3f12f960e10f3b6244da9"
+    },
+    {
+      "className": "com.jarvys.agent.OrdinaryRegenerationAvailabilityTest",
+      "counts": {
+        "tests": 7,
+        "failures": 3,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "retainedUnspecifiedLegacyStatusRegeneratesWithoutInferringCompletionOrRootAuthority",
+        "retainedFailedPositionalManualRegenerationKeepsOrdinaryInterruptionWithoutInventedAuthority",
+        "actualStopOfRegenerationIsNotOrdinaryInterruption"
+      ],
+      "xmlSha256": "0b1838bf5933b76ebd833021861d1e1d06aa78101975502deb62a39aae50acee"
+    },
+    {
+      "className": "com.jarvys.agent.OriginalUserSuspensionAuthorityTest",
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "bd12a4e36510ef754117dc057e0be1f1f5543448a8559069eaa8ba9dccb638fd"
+    },
+    {
+      "className": "com.jarvys.agent.chatdb.LegacyRegenerationGenerationTest",
+      "counts": {
+        "tests": 12,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "missingPositiveGenerationNeverBecomesRetainedBootstrap"
+      ],
+      "xmlSha256": "77a7e04a270f23123ca1470f91d5bf4dd13ddc8dc9d373ed1ad6299f4bf6b83c"
+    }
+  ],
+  "followOnUnionAndPlay": "not run after failure",
+  "limitations": [
+    "Host-only declared10-class cohort; no live-provider/device validation.",
+    "Later admission OFF/source edits do not change this retained enabled-candidate evidence."
+  ]
+}
