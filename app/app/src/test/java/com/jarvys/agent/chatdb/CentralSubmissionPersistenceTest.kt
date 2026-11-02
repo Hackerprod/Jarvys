@@ -229,6 +229,39 @@ class CentralSubmissionPersistenceTest {
         val changed=reader.loadConversationContext(session)
         rejected {db.withChatReadTransaction {CentralSuspensionSourceScope.select(db,session,original.messageId,"successor-run",retained,emptyMap(),emptySet(),changed)}}
     }
+    @Test fun witnessedSuccessorOutputRequiresExactRetainedIncorporatedInitialP1Owner()=work {
+        val repo=ConversationRepository(db);val reader=ConversationReader(db);val model=ModelTranscriptRepository(db)
+        val original=(repo.appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","Original USER")))) as ChatDbResult.Success).value
+        val provenance=com.jarvys.agent.ConversationInput.Provenance("workspace-source","workspace","assignment","bot","source-message",
+            com.jarvys.agent.ConversationInput.Kind.RESULT,com.jarvys.agent.ConversationInput.Provenance.PrincipalRole.SUBORDINATE,
+            "central-continuation:initial-source","workspace-coordination-"+"a".repeat(64),"b".repeat(64),1L,"request","mission","cycle")
+        val input=com.jarvys.agent.ConversationInput(session,"source-message","Exact P1 result",com.jarvys.agent.ConversationInput.Origin.AGENT,provenance)
+        val internal=(repo.appendMessage(AppendMessageInput(session,"agent",listOf(MessagePartInput("text",input.content),input.provenancePart()))) as ChatDbResult.Success).value
+        repo.markInputState(session,listOf(internal.messageId),"incorporated")
+        val initial=com.jarvys.agent.ConversationTurn.internalInput(input.content,-1,
+            com.jarvys.agent.ConversationTurn.IncomingMetadata.forInternalInput(provenance),internal.messageId)
+        initial.bindSource(com.jarvys.agent.ConversationTurn.Source(com.jarvys.agent.ConversationTurn.Source.Kind.MESSAGE,session,internal.messageId,""))
+        val retained=reader.loadConversationContext(session)+initial
+        assertTrue(model.appendToolBatch(ModelToolBatchInput(session,"successor-batch",internal.messageId,0,"",calls=listOf(ModelCallInput("call","read","{}")))) is ChatDbResult.Success)
+        val unrelated=(repo.appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","Unrelated current USER")))) as ChatDbResult.Success).value
+        assertTrue(model.appendToolBatch(ModelToolBatchInput(session,"unrelated-batch",unrelated.messageId,0,"",calls=listOf(ModelCallInput("other-call","read","{}")))) is ChatDbResult.Success)
+        val visible=reader.loadConversationContext(session)+initial
+        val batch=com.jarvys.agent.ConversationTurn.Source(com.jarvys.agent.ConversationTurn.Source.Kind.BATCH,session,"successor-batch","")
+        val otherBatch=com.jarvys.agent.ConversationTurn.Source(com.jarvys.agent.ConversationTurn.Source.Kind.BATCH,session,"unrelated-batch","")
+        fun select(owner:String,witness:Set<com.jarvys.agent.ConversationTurn.Source>,current:List<com.jarvys.agent.ConversationTurn> = visible)=
+            CentralSuspensionSourceScope.select(db,session,original.messageId,"successor-run",retained,emptyMap(),witness,current,owner)
+        val scoped=db.withChatReadTransaction {select(internal.messageId,setOf(batch,otherBatch))}
+        assertTrue(scoped.any {it.source()==batch});assertFalse(scoped.any {it.source()==otherBatch})
+        assertFalse(db.withChatReadTransaction {select(internal.messageId,emptySet())}.any {it.source()==batch})
+        rejected {db.withChatReadTransaction {select(unrelated.messageId,setOf(batch))}}
+        db.testChatSql.execSQL("UPDATE messages SET input_state=NULL,input_state_seq=NULL WHERE conversation_id=? AND message_id=?",arrayOf(session,internal.messageId))
+        rejected {db.withChatReadTransaction {select(internal.messageId,setOf(batch))}}
+        repo.markInputState(session,listOf(internal.messageId),"incorporated")
+        val changed=com.jarvys.agent.ConversationTurn.internalInput("Changed P1 source",-1,initial.incomingMetadata,internal.messageId)
+        changed.bindSource(initial.source())
+        rejected {db.withChatReadTransaction {select(internal.messageId,setOf(batch),visible.filterNot {it.source()==initial.source()}+changed)}}
+        assertTrue(CentralTurnSubmissionRepository(db).list(session).isEmpty()) // Data projection is not a claim.
+    }
     @Test fun nativeSteeringSelectorNeverConsumesPositiveNewTurnsInAnyRetainedState()=work {
         val repo=ConversationRepository(db)
         val anchor=(repo.appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","old run anchor")))) as ChatDbResult.Success).value

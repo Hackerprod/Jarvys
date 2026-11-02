@@ -250,7 +250,8 @@ internal class ConversationReader(
             com.jarvys.agent.chatdb.CentralSuspensionSourceScope.select(database,conversationId,
                 suspensionClaim.originalUserMessageId,suspensionClaim.runId,
                 suspensionClaim.confirmedYield().retainedCheckpoint().transcript,
-                suspensionClaim.confirmedIncomingOwnerDigests(token),suspensionClaim.currentCheckpointSources(token),context)
+                suspensionClaim.confirmedIncomingOwnerDigests(token),suspensionClaim.currentCheckpointSources(token),context,
+                suspensionClaim.confirmedYield().ownerMessageId())
         }
     }
 

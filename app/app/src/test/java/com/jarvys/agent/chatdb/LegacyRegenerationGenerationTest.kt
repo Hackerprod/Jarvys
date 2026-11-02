@@ -57,7 +57,7 @@ class LegacyRegenerationGenerationTest {
         val before=bridge.readMessageSync(session,assistant.messageId)
         val source=bridge.readMessageSync(session,assistant.ownerUserMessageId!!)
         val result=bridge.regenerateIfLatestAssistantSync(session,assistant.messageId)
-        assertTrue(result is ChatDbResult.Invalid)
+        assertTrue("Exact native regeneration returned $result; before=$before; original=$assistant; source=$source",result is ChatDbResult.Invalid)
         assertEquals("Queued or uncertain Central submission cannot be regenerated",(result as ChatDbResult.Invalid).reason)
         assertEquals(before,bridge.readMessageSync(session,assistant.messageId))
         assertEquals(source,bridge.readMessageSync(session,assistant.ownerUserMessageId!!))

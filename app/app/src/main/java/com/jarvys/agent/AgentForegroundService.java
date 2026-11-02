@@ -1542,6 +1542,10 @@ public final class AgentForegroundService extends Service {
   }
 
   private void resolveStoppedInputCohort(StoppedInputCohort cohort) {
+    // Absence means this exact capture finished its confirmed persistence path below. A fresh
+    // STOP re-adds it before capture; failures never remove it. In particular, cancelled-owner
+    // cleanup must not repeat a confirmed Room write on an already interrupted worker.
+    if (!unresolvedStoppedInputCohorts.contains(cohort)) return;
     // No discovery here: uncertain captures never expand to requests admitted after STOP.
     try {
       // Exact-ID atomic adapter over the existing native stopped-submission writer.

@@ -1,0 +1,145 @@
+{
+  "status": "FAIL-retained-STOP-red-diagnostic-not-acceptance",
+  "sourceCommit": "52d744c0615d1a0ec50ea3734f2889a9765176b7",
+  "admissionEnabled": true,
+  "stopGuardPresent": false,
+  "terminal": {
+    "exit": 1,
+    "sourceUnchanged": true,
+    "artifactsUnchanged": true,
+    "xmlFiles": 10,
+    "counts": {
+      "tests": 132,
+      "failures": 3,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "terminalSha256": "d088d62f1fdf32cd4be56148889fe0302a4123f571e6bd9921ed9ff0203cd89b",
+  "sourceBindingSha256": "d7bea0eaaf354d6b4b91a1d8ded19df42b1515f22e485bf725f3d99bbae30038",
+  "artifactManifestSha256": "bfc0ae923d6b8dfdad023580a80b124f3b6819712ffd51e5e8506bb0d6d0317b",
+  "classes": [
+    {
+      "className": "com.jarvys.agent.CentralAvailabilityBoundaryAcceptanceTest",
+      "counts": {
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "a0918102576ce6c1c1b393038b9542267869dad80f86291fe61753c936eeda51"
+    },
+    {
+      "className": "com.jarvys.agent.CentralAvailabilityServiceTest",
+      "counts": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "dad8a5daf9d84c458765c74ffccc4a598acf548072f73b58a839070e09819fa6"
+    },
+    {
+      "className": "com.jarvys.agent.CentralTreeServiceAcceptanceTest",
+      "counts": {
+        "tests": 26,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "f9ee0230f1de4602c25824bcd00d5cab10aea8afb9e9d60956f5f1522418fb28"
+    },
+    {
+      "className": "com.jarvys.agent.InternalContinuationSuspensionAuthorityTest",
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "suspendedActualInternalContinuationKeepsOperationContextButCannotDelegate"
+      ],
+      "xmlSha256": "cf3466d1edd6d8a92a31dc35e4eeae561f7b0f9766a6cce00b6cc3af970eb9d8"
+    },
+    {
+      "className": "com.jarvys.agent.LateSteerAvailabilityAcceptanceTest",
+      "counts": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "489f4391e5da6e2cf47b824714673ba179ea41a670424c303a50f23dbb7671be"
+    },
+    {
+      "className": "com.jarvys.agent.MainAgentInteractionTest",
+      "counts": {
+        "tests": 54,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "3f29265421be0c9eb69e529c07b42acdd1a4280aabeb27c386f2c2a3a6539631"
+    },
+    {
+      "className": "com.jarvys.agent.OrdinaryAgentAvailabilityAcceptanceTest",
+      "counts": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "b963fc22e10d7bbf1c7d623958eca04bda81a16fda9f06e6d0a3ab5a0409e4cd"
+    },
+    {
+      "className": "com.jarvys.agent.OrdinaryRegenerationAvailabilityTest",
+      "counts": {
+        "tests": 7,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "actualStopOfRegenerationIsNotOrdinaryInterruption"
+      ],
+      "xmlSha256": "7f8ad6a2cc63fa121b702f47a2c8f495c89e3db14b2a56e4b927c475f14320ca"
+    },
+    {
+      "className": "com.jarvys.agent.OriginalUserSuspensionAuthorityTest",
+      "counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [],
+      "xmlSha256": "b7e456da2309a1281ac31f59344660d4d181294f29770167783896bee2c9c95a"
+    },
+    {
+      "className": "com.jarvys.agent.chatdb.LegacyRegenerationGenerationTest",
+      "counts": {
+        "tests": 12,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failedMethods": [
+        "missingPositiveGenerationNeverBecomesRetainedBootstrap"
+      ],
+      "xmlSha256": "ad0c36101fc2df180defc979b140a5bdb3c55eb5b9d1bdabca4a10a7bdc0e7ab"
+    }
+  ],
+  "diagnosticSummary": [
+    "Actual STOP cleanup after physical provider release reaches interrupted database wait and quarantined exact cohort; no unresolved input remained, but cleanup failed.",
+    "Internal continuation failed protected payload validation.",
+    "Missing positive generation negative-case fixture failed its assertion."
+  ],
+  "followOnUnionAndPlay": "not run after failure"
+}

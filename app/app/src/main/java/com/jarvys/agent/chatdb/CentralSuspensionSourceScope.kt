@@ -5,10 +5,23 @@ import com.jarvys.agent.ConversationTurn
 /** Internal projection only. Production caller supplies the actual bound claim, never a reconstructed permit. */
 internal object CentralSuspensionSourceScope {
     fun select(database:JarvysChatDatabase,session:String,original:String,run:String,
-        retained:List<ConversationTurn>,incomingOwners:Map<String,String>,currentCheckpointSources:Set<ConversationTurn.Source>,current:List<ConversationTurn>):List<ConversationTurn> {
+        retained:List<ConversationTurn>,incomingOwners:Map<String,String>,currentCheckpointSources:Set<ConversationTurn.Source>,current:List<ConversationTurn>,initialOwner:String=original):List<ConversationTurn> {
         val baseline=retained.mapNotNull {it.source()}.toSet()
         check(baseline.all {it.conversationId==session})
-        val owners=incomingOwners.keys+original
+        // The initial P1 owner is not a later STEER owner and is not the original USER.
+        // Its ID comes only from the actual claim's hash-linked confirmed yield receipt.
+        if(initialOwner!=original) {
+            val source=ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE,session,initialOwner,"")
+            val retainedOwner=retained.singleOrNull {it.source()==source} ?: error("Suspension initial owner is not retained")
+            val metadata=checkNotNull(retainedOwner.incomingMetadata)
+            check(metadata.origin==com.jarvys.agent.ConversationInput.Origin.AGENT &&
+                com.jarvys.agent.WorkspaceContinuationDelivery.isProtocol(metadata.provenance)) {"Suspension initial owner is not exact P1 input"}
+            database.chatSql.query("SELECT role,hidden_kind,input_state FROM messages WHERE conversation_id=? AND message_id=?",arrayOf(session,initialOwner)).use {c ->
+                check(c.moveToFirst() && c.getString(0)=="agent" && c.isNull(1) && c.getString(2)=="incorporated" && !c.moveToNext()) {"Suspension initial owner is not incorporated"}
+            }
+            check(current.any {it.source()==source && it.incomingMetadata?.provenance?.toJson()?.toString()==metadata.provenance.toJson().toString()}) {"Suspension initial owner provenance changed"}
+        }
+        val owners=incomingOwners.keys+original+initialOwner
         for((id,expected) in incomingOwners) {
             database.chatSql.query("SELECT role,hidden_kind,input_state FROM messages WHERE conversation_id=? AND message_id=?",arrayOf(session,id)).use {c ->
                 check(c.moveToFirst() && c.isNull(1) && c.getString(2)=="incorporated") {"Suspension incoming owner missing"}
