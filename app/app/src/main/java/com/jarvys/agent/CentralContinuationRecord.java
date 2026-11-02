@@ -255,7 +255,7 @@ public final class CentralContinuationRecord {
     private static void oneOf(String s,String...values) {require(Arrays.asList(values).contains(s),"Invalid state: "+s);}
     private static void require(boolean condition,String message) { if(!condition)throw invalid(message); }
     private static IllegalArgumentException invalid(String message) {return new IllegalArgumentException(message);}
-    static boolean equal(Object a,Object b) {
+    public static boolean equal(Object a,Object b) {
         if(a==b)return true;if(a==null||b==null)return false;
         if(a instanceof JSONObject&&b instanceof JSONObject) {
             JSONObject x=(JSONObject)a,y=(JSONObject)b;if(x.length()!=y.length())return false;

@@ -49,3 +49,7 @@ Checkpoint fixtures now retain nonempty incorporation/provider-output/compaction
 Read-only source review found two concrete integration gaps before the next compilation: incorporated STEER attribution was process-local and would be lost after suspension restore; the suspension context validator required unrelated newer completed USER sources from global protection. The bounded correction conserves ordered, canonically revalidated incoming-owner evidence without ACK/replay and scopes only the exact suspension reader to retained/native-successor sources. Generic readers and original root/budget authority remain unchanged. These are source-traced defects, not executed red reproductions or a phone-cause claim. Native regression fixtures must validate final-owner attribution, unrelated-root exclusion, and changed/missing-source refusal.
 
 The prepared3448e540 compatibility candidate was backed up but no compile/test was started before these findings. No new runtime result supersedes diagnostic2. All flags remain OFF.
+
+## Pre-write compile3 retained FAIL
+
+Exact180bf6c3 source remained unchanged. Production Kotlin compilation failed before tests because CentralYieldSourceEvidence imported CentralContinuationRecord from the wrong package. The import now targets the existing native class; its existing pure structural comparator is public without changing behavior. No tests or Play ran, and no compatibility PASS resulted. The correction will be validated by a fresh serialized attempt.

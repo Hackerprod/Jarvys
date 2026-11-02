@@ -2,7 +2,7 @@ package com.jarvys.agent.chatdb
 
 import com.jarvys.agent.ConversationTurn
 import com.jarvys.agent.CrewContextArtifacts
-import com.jarvys.agent.crew.CentralContinuationRecord
+import com.jarvys.agent.CentralContinuationRecord
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
