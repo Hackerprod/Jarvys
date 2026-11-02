@@ -53,3 +53,9 @@ The prepared3448e540 compatibility candidate was backed up but no compile/test w
 ## Pre-write compile3 retained FAIL
 
 Exact180bf6c3 source remained unchanged. Production Kotlin compilation failed before tests because CentralYieldSourceEvidence imported CentralContinuationRecord from the wrong package. The import now targets the existing native class; its existing pure structural comparator is public without changing behavior. No tests or Play ran, and no compatibility PASS resulted. The correction will be validated by a fresh serialized attempt.
+
+## Pre-write attempt4 retained results
+
+Exacte4d722e9 Full compilation passed with unchanged source. The guarded12-class/125-test OFF cohort then finished with2 failures,0 errors/skips and unchanged source/artifacts; Play was not started. One assertion compared JSON object insertion order instead of canonical structural equality. The other exact-source fixture was rejected for unresolved tool effects; its native batch-completion contract is being checked, without relaxing the uncertainty guard. These results are not a compatibility PASS.
+
+Source tracing established that the unresolved-effects failure was a verifier defect, not a missing fixture batch-terminal event. ModelTranscriptRepository retains call STARTED and a separate RESULT receipt; InteractionProtection uses this native pair. The verifier now accepts only STARTED/RESULT or NEVER_LAUNCHED/NEVER_LAUNCHED with exact tool name and strictly ordered integer lifecycle/result sequences. Missing, uncertain, mismatched and restarted effects remain rejected. The original long-payload positive fixture is retained, with pre-result denial and a new native lifecycle matrix. The next pre-write selector has126 tests.

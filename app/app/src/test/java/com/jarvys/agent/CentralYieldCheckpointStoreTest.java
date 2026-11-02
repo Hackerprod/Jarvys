@@ -231,7 +231,8 @@ public class CentralYieldCheckpointStoreTest {
         CoreAgentLoop.Checkpoint withOwners=new CoreAgentLoop.Checkpoint(original.transcript,
             new LinkedHashSet<>(Arrays.asList("steer-first","agent-last")),original.toolLifecycle,original.genuineUserIndex);
         CrewCheckpointStore.ConfirmedCentralYieldSnapshot saved=store.saveCentralYieldConfirmed(SESSION,id,withOwners);
-        assertEquals(chain.toString(),saved.identity().getJSONArray("incomingOwners").toString());
+        assertEquals(CentralYieldCheckpointCodec.canonical(new JSONObject().put("chain",chain)),
+            CentralYieldCheckpointCodec.canonical(new JSONObject().put("chain",saved.identity().getJSONArray("incomingOwners"))));
         JSONObject selected=id.getJSONObject("selectedSubmission");
         String certificate=CentralYieldCheckpointCodec.canonical(new JSONObject().put("version",1).put("kind","CENTRAL_YIELD")
             .put("runId","run").put("oldCycleId","old-cycle").put("ownerMessageId","original-user").put("rootId","root")

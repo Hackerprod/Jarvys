@@ -82,9 +82,19 @@ internal class CentralYieldSourceEvidence private constructor(
             val sources=retained.mapNotNull {it.source()}.toSet()
             val candidates=context.filter {it.source() in sources}.groupBy {checkNotNull(it.source())}
             for(batch in sources.filter {it.kind in setOf(ConversationTurn.Source.Kind.BATCH,ConversationTurn.Source.Kind.BATCH_RESULT)}.map {it.sourceId}.toSet()) {
-                database.chatSql.query("SELECT c.call_id,c.lifecycle,r.lifecycle FROM tool_calls c LEFT JOIN tool_results r ON r.conversation_id=c.conversation_id AND r.batch_id=c.batch_id AND r.call_id=c.call_id WHERE c.conversation_id=? AND c.batch_id=?",arrayOf(origin.ownerCentralSessionId,batch)).use { c ->
+                database.chatSql.query("SELECT c.call_id,c.lifecycle,r.lifecycle,c.name,r.tool_name,c.lifecycle_seq,r.seq FROM tool_calls c LEFT JOIN tool_results r ON r.conversation_id=c.conversation_id AND r.batch_id=c.batch_id AND r.call_id=c.call_id WHERE c.conversation_id=? AND c.batch_id=?",arrayOf(origin.ownerCentralSessionId,batch)).use { c ->
                     var found=false
-                    while(c.moveToNext()) {found=true;check(c.getString(1) in setOf("RESULT","NEVER_LAUNCHED") && !c.isNull(2) && c.getString(1)==c.getString(2)) {"Yield source has unresolved tool effects"}}
+                    while(c.moveToNext()) {
+                        found=true
+                        // Native call rows retain dispatch state; terminal receipts live in tool_results.
+                        val terminalPair=(c.getString(1)=="STARTED" && c.getString(2)=="RESULT") ||
+                            (c.getString(1)=="NEVER_LAUNCHED" && c.getString(2)=="NEVER_LAUNCHED")
+                        check(terminalPair && c.getString(3)==c.getString(4) &&
+                            c.getType(5)==android.database.Cursor.FIELD_TYPE_INTEGER &&
+                            c.getType(6)==android.database.Cursor.FIELD_TYPE_INTEGER && c.getLong(5)<c.getLong(6)) {
+                            "Yield source has unresolved tool effects"
+                        }
+                    }
                     check(found) {"Yield tool batch missing"}
                 }
             }
