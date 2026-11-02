@@ -3,6 +3,7 @@ package com.jarvys.agent
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
+import com.jarvys.agent.chatdb.testChatSql
 import com.jarvys.agent.crew.*
 import com.jarvys.agent.workspaces.*
 import org.json.JSONArray
