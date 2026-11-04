@@ -1,3 +1,5 @@
+> Continuación 2026-11-04: P4A está en diseño/revisión de aceptación durable; véase [contrato y límites](BOT_PORTABILITY_P4A_HANDOFF_DESIGN.md). Las restricciones históricas de autorización se leen con la petición vigente de continuar por fases. No se declara P4 completo ni se activan políticas numéricas nuevas.
+
 > **Actualización de ejecución 31-10-2026:** D1 fue autorizado por el usuario; D2 se resuelve para este slice mediante semántica/defaults verificados de upstream, no cuotas inventadas ni presupuesto monetario obligatorio. El contrato reconstruido conserva D3 y la revisión independiente antes de entrega. [Diseño vigente](BOT_PORTABILITY_P2_RECONSTRUCTION_DESIGN.md) · [candidato y límites](BOT_PORTABILITY_P2_CANDIDATE.md). El cuerpo aprobado original se conserva como historia; no autoriza P4 nuevo ni elimina sus gates.
 
 # Roadmap de portabilidad selectiva de bots para Jarvys

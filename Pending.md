@@ -1,3 +1,7 @@
+## Estado vigente — P4A: diseño de aceptación durable, sin activación — 04-11-2026
+
+Se retoma el roadmap desde v100 verificada. El análisis identifica límites separados entre consumir una sugerencia, persistir USER y arrancar Central; la reproducción determinista y la revisión independiente están pendientes. [Contrato acotado y gates](docs/BOT_PORTABILITY_P4A_HANDOFF_DESIGN.md). No nuevos topes, quiet-hours, fatiga, menú ni APK; no se afirma P4 PASS. La ocultación durable de evidencia queda en la siguiente parte del primer bloque P4. Se conservan los PASS y FAIL históricos y los límites de teléfono/proveedor real.
+
 ## Estado vigente — v100: PASS host y packaging independiente; envío aceptado — 02-11-2026
 
 APK FullARM64 v100 `8401f07de04af9eca9f8e573d697cce4642529b748d21b9f7b6a4a105bd7da57`, firma DEBUG original/testOnlyfalse. Full/Play **1.358 pruebas cada uno** y revisión independiente de implementación/packaging PASS acotado; rebuildforzado y firma repetida idénticos. Tres partes ZIP subidas y recuperadas/verificadas; **envío aceptado el02-11-2026 a16:35:36UTC**, no descarga/instalación confirmada. [Checkpoint, hashes, instrucciones y límites](docs/V100_DELIVERY_CHECKPOINT.md). Menú/datos/Engram conservados; no garantía temporal universal ni causa del teléfono demostrada. Los FAIL históricos permanecen.
