@@ -1,0 +1,321 @@
+{
+  "commit": "f5d7ab95dc633229dea987f734d2cef855f42a7e",
+  "scope": "Matching Full and Play guarded host P4A prewrite OFF D3. Not final ON implementation, APK, device or provider acceptance.",
+  "gateOff": true,
+  "sourceBindingSha256": "510defa978522a08382111af6f260b9315d0117371f51723481fdc022878f173",
+  "identicalMethodNames": true,
+  "variants": [
+    {
+      "variant": "Full",
+      "counts": {
+        "tests": 39,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "primaryTests": 28,
+      "auxiliaryTests": 11,
+      "sourceUnchanged": true,
+      "artifactsUnchanged": true,
+      "runtimeBindingSha256": "d5055dfd1b5e56c755c4ce1a511d3bcf68fd4f2f898420e6b568d92093010c4c",
+      "terminalSummarySha256": "a42a599e8a0ccafd4063c2a23804157025d6ce90f21fd32f7956646f830b1bd5",
+      "classes": [
+        {
+          "className": "com.jarvys.agent.chatdb.ProactiveReplyAcceptancePersistenceTest",
+          "counts": {
+            "tests": 18,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "optionDuplicateIsDataOnlyAndConflictingOrdinalCannotCreateSecondUser",
+            "selfConsistentProofAndTextTamperStillFailsCommittedRootAtContextReads",
+            "currentV100OrdinaryPreparedStartedAndConsumedRowsRetainExactSchemaAndBytes",
+            "physicalGenerationChangeFailsEvenWhenBootstrapFormatIsUnchanged",
+            "staleHiddenAndUnfinishedSourcesCannotAdmitButLaterHideDoesNotRevoke",
+            "coherentNoticeAndProofMutationCannotReplacePinnedContextWithoutStoredRoot",
+            "concurrentSameAndDifferentOptionsHaveOneCommittedAcceptance",
+            "eachCompositeFailureRollsBackUserConsumptionQueueSpineAndCounters",
+            "canonicalCodecRejectsDuplicateUnknownNullAndCoercedFieldsAndConservesUtf16",
+            "pinnedOneLevelReferentSurvivesCompactionAndRejectsPriorNoticeMutation",
+            "sourceUserFingerprintDoesNotRecursivelyInheritEarlierAuthority",
+            "changedUserThreadReplyToSourceOptionOrProofFailsEveryReadWithoutFallback",
+            "currentEligibleSourceExcludesInternalProvenanceAndStaleInline",
+            "inlineUsesExactOccurrenceAndAcceptedUserBecomesNextIdenticalReplyAnchor",
+            "pinnedPriorNoticeThreadCannotFallBackToEarlierNotice",
+            "oldConsumedNoticeIsNotBackfilled",
+            "deletedSubmissionCannotBeBackfilledFromTypedUserAndNullProofCannotBecomeOrdinary",
+            "legacyOrdinaryAndThreadHistoryRemainUnmodifiedWithNoPositiveBackfill"
+          ],
+          "xmlSha256": "3addf7a72a81fcc76dac327fe5a74c171aa847c5999960da2e18d748f82cc1a7"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.ProactiveReplyBootstrapGenerationTest",
+          "counts": {
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "retainedCurrentRowsAndSchemaStayExactExceptSingleMissingGeneration",
+            "actualFreshBootstrapMakesFirstNoticeReadableBeforeAnyUserOrConnector",
+            "existingPhysicalGenerationAndRowsSurviveRepeatedBootstrapAndRealReopen",
+            "separatePhysicalStoresWithSameBootstrapFormatHaveDifferentGeneration",
+            "failedGenerationInsertRollsBackCentralAndMetadataTogetherAndCanRetry",
+            "malformedExistingGenerationFailsAndRollsBackCentralWithoutRewritingRetainedRows",
+            "sourceDescriptorWithoutGenerationFailsReadOnlyRatherThanBootstrapping"
+          ],
+          "xmlSha256": "25aaf18ca18f4b6fd5e858cf8202c1ed33409a46ea88268b5ba9520f8933a5ca"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.ProactiveReplyPrewriteGateTest",
+          "counts": {
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "gateRemainsOffUntilIndependentD3Approval"
+          ],
+          "xmlSha256": "624177ddd5a5fb0b53be25b5da2423bbf32557eba4b2fe0405afc53733f103e8"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.ProactiveReplyIndependentD3DowngradeTest",
+          "counts": {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "coherentProofRemovalAndUserMetadataStrippingCannotDowngradeTypedReceiptToOrdinaryContext",
+            "historicalMissingLookupStaysNullWhileRootCaptureRequiresActualUser"
+          ],
+          "xmlSha256": "165aad02307c627bac555d8140e93e4fc90c5db9acf92b4c9fe8e2fd8035c286"
+        },
+        {
+          "className": "com.jarvys.agent.proactive.ProactiveActionReceiverTest",
+          "counts": {
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "receiverIsPrivateAndRejectsUnknownMessageAndThreadBeforeWritingOrLaunching"
+          ],
+          "xmlSha256": "e7a7469bb4f5877d3fbd2c4ee375a521eea2fcf4971633a1d60c9c0023681493"
+        },
+        {
+          "className": "com.jarvys.agent.proactive.ProactiveReplyNotificationIdentityTest",
+          "counts": {
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "explicitBindingRoundTripsFullThreadAndSeparatesOrdinalFromLogicalAcceptance",
+            "physicalGenerationSourceAndFullThreadKeepOldPendingIntentHandlesBound",
+            "missingOldOrMutatedUriAndExtrasCannotReplaceTheCanonicalBinding"
+          ],
+          "xmlSha256": "78877b57a6600ab334c531d4f344c0a976c45e634844f0bcc496b5a57b1ad840"
+        },
+        {
+          "className": "com.jarvys.agent.proactive.ProactiveNotifierCanonicalSourceTest",
+          "counts": {
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "callerOnlySourceCannotCreateAReplyAffordance",
+            "onlyRemoteInputIsMutableAndEveryActionHasExactSourceBinding",
+            "unchangedSourceKeepsIdentityAndRefreshUsesCanonicalUserInsteadOfCachedAssistant",
+            "latePublicationCannotOverwriteTheCanonicalReplyRefresh",
+            "preAndroidTwelveRemoteInputRemainsFillableWhileOpenAndChipsAreImmutable"
+          ],
+          "xmlSha256": "90e0673d9a0efa58ad6f4462be86afcd2cbb816a4c5cdeb865b0c4ad40c6c8f4"
+        },
+        {
+          "className": "com.jarvys.agent.ProactiveReplyUiSelectionTest",
+          "counts": {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "sameInstanceOptionListMutationCannotRetargetTheDisplayedSelection",
+            "onlyTheCurrentDisplayedInstanceAndValidUnusedOptionAreSelectable"
+          ],
+          "xmlSha256": "bcb766772e84b974984b24cffd2a27c94799eb5d33ac384ce9fd06fac4a9587a"
+        }
+      ]
+    },
+    {
+      "variant": "Play",
+      "counts": {
+        "tests": 39,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "primaryTests": 28,
+      "auxiliaryTests": 11,
+      "sourceUnchanged": true,
+      "artifactsUnchanged": true,
+      "runtimeBindingSha256": "9d418513e425a915fab5c92628096b6462f2b57cf848304f7308fc83c41d63fc",
+      "terminalSummarySha256": "ab205af386406cbe5140c40d9c86251ec5cc410370af7bda9f6d445ab348e6e6",
+      "classes": [
+        {
+          "className": "com.jarvys.agent.chatdb.ProactiveReplyAcceptancePersistenceTest",
+          "counts": {
+            "tests": 18,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "optionDuplicateIsDataOnlyAndConflictingOrdinalCannotCreateSecondUser",
+            "selfConsistentProofAndTextTamperStillFailsCommittedRootAtContextReads",
+            "currentV100OrdinaryPreparedStartedAndConsumedRowsRetainExactSchemaAndBytes",
+            "physicalGenerationChangeFailsEvenWhenBootstrapFormatIsUnchanged",
+            "staleHiddenAndUnfinishedSourcesCannotAdmitButLaterHideDoesNotRevoke",
+            "coherentNoticeAndProofMutationCannotReplacePinnedContextWithoutStoredRoot",
+            "concurrentSameAndDifferentOptionsHaveOneCommittedAcceptance",
+            "eachCompositeFailureRollsBackUserConsumptionQueueSpineAndCounters",
+            "canonicalCodecRejectsDuplicateUnknownNullAndCoercedFieldsAndConservesUtf16",
+            "pinnedOneLevelReferentSurvivesCompactionAndRejectsPriorNoticeMutation",
+            "sourceUserFingerprintDoesNotRecursivelyInheritEarlierAuthority",
+            "changedUserThreadReplyToSourceOptionOrProofFailsEveryReadWithoutFallback",
+            "currentEligibleSourceExcludesInternalProvenanceAndStaleInline",
+            "inlineUsesExactOccurrenceAndAcceptedUserBecomesNextIdenticalReplyAnchor",
+            "pinnedPriorNoticeThreadCannotFallBackToEarlierNotice",
+            "oldConsumedNoticeIsNotBackfilled",
+            "deletedSubmissionCannotBeBackfilledFromTypedUserAndNullProofCannotBecomeOrdinary",
+            "legacyOrdinaryAndThreadHistoryRemainUnmodifiedWithNoPositiveBackfill"
+          ],
+          "xmlSha256": "bfc9b0b7b2560598f3caa2aaec52ced440c4e5fcaf6ce4682ae2acd50cfc04f1"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.ProactiveReplyBootstrapGenerationTest",
+          "counts": {
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "retainedCurrentRowsAndSchemaStayExactExceptSingleMissingGeneration",
+            "actualFreshBootstrapMakesFirstNoticeReadableBeforeAnyUserOrConnector",
+            "existingPhysicalGenerationAndRowsSurviveRepeatedBootstrapAndRealReopen",
+            "separatePhysicalStoresWithSameBootstrapFormatHaveDifferentGeneration",
+            "failedGenerationInsertRollsBackCentralAndMetadataTogetherAndCanRetry",
+            "malformedExistingGenerationFailsAndRollsBackCentralWithoutRewritingRetainedRows",
+            "sourceDescriptorWithoutGenerationFailsReadOnlyRatherThanBootstrapping"
+          ],
+          "xmlSha256": "bb981bf7f810df4924c75dfe553aeb4ec1bf1701d20882349b75c16eb0db16db"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.ProactiveReplyPrewriteGateTest",
+          "counts": {
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "gateRemainsOffUntilIndependentD3Approval"
+          ],
+          "xmlSha256": "80dc4d5ba60597a0c7f8f507cf1ca930cb4ace4e7a1e5467d95c99f108e1937b"
+        },
+        {
+          "className": "com.jarvys.agent.chatdb.ProactiveReplyIndependentD3DowngradeTest",
+          "counts": {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "coherentProofRemovalAndUserMetadataStrippingCannotDowngradeTypedReceiptToOrdinaryContext",
+            "historicalMissingLookupStaysNullWhileRootCaptureRequiresActualUser"
+          ],
+          "xmlSha256": "3bbd234f36b37fdc4f637daddc22d099cbf4d3240679e173164d43e3c519a806"
+        },
+        {
+          "className": "com.jarvys.agent.proactive.ProactiveActionReceiverTest",
+          "counts": {
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "receiverIsPrivateAndRejectsUnknownMessageAndThreadBeforeWritingOrLaunching"
+          ],
+          "xmlSha256": "31260eb40903125552b1193642d7205319cc2bff901d2a32f55da4bed3e37725"
+        },
+        {
+          "className": "com.jarvys.agent.proactive.ProactiveReplyNotificationIdentityTest",
+          "counts": {
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "explicitBindingRoundTripsFullThreadAndSeparatesOrdinalFromLogicalAcceptance",
+            "physicalGenerationSourceAndFullThreadKeepOldPendingIntentHandlesBound",
+            "missingOldOrMutatedUriAndExtrasCannotReplaceTheCanonicalBinding"
+          ],
+          "xmlSha256": "f72db1e68af0a7ea03ce18b35d6b0c68bf1bfbc267f1a386fa05429b91ed3905"
+        },
+        {
+          "className": "com.jarvys.agent.proactive.ProactiveNotifierCanonicalSourceTest",
+          "counts": {
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "callerOnlySourceCannotCreateAReplyAffordance",
+            "onlyRemoteInputIsMutableAndEveryActionHasExactSourceBinding",
+            "unchangedSourceKeepsIdentityAndRefreshUsesCanonicalUserInsteadOfCachedAssistant",
+            "latePublicationCannotOverwriteTheCanonicalReplyRefresh",
+            "preAndroidTwelveRemoteInputRemainsFillableWhileOpenAndChipsAreImmutable"
+          ],
+          "xmlSha256": "a62063cbf0100be27c0b07dadf3698ea14b7f57116365ba3e2dfa7fa75562931"
+        },
+        {
+          "className": "com.jarvys.agent.ProactiveReplyUiSelectionTest",
+          "counts": {
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "methods": [
+            "sameInstanceOptionListMutationCannotRetargetTheDisplayedSelection",
+            "onlyTheCurrentDisplayedInstanceAndValidUnusedOptionAreSelectable"
+          ],
+          "xmlSha256": "05c622ccd519d54d1f6a20cb0be65d37ba187a4535d343c521f4854d813ba7ad"
+        }
+      ]
+    }
+  ],
+  "independentReview": {
+    "status": "PASS-prewrite-only",
+    "replayedMethodsPerVariant": 2,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "verdictSha256": "e495d4d4e0045cc2bdfdec5b61032d67364de2db55628a38180b4a4b1e8db690"
+  }
+}

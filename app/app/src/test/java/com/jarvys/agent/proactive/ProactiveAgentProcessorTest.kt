@@ -12,6 +12,9 @@ import androidx.work.testing.WorkManagerTestInitHelper
 import com.jarvys.agent.WorkManagerTestCleanup
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.ChatTestStore
+import com.jarvys.agent.ArtifactOsShadow
+import com.jarvys.agent.ProactiveNativeServiceFixture
+import com.jarvys.agent.TestSecretStoreRule
 import com.jarvys.agent.AppLanguageChoice
 import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.CoreAgentLoop
@@ -53,11 +56,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.LooperMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [ArtifactOsShadow::class])
 class ProactiveAgentProcessorTest {
     @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @get:Rule val testSecrets = TestSecretStoreRule()
     private lateinit var context: Application
     private val CENTRAL = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
 
@@ -282,6 +287,7 @@ class ProactiveAgentProcessorTest {
             assertEquals(ProactiveActionReceiver::class.java.name, actionIntent.component?.className)
         }
 
+        // Retained primitive compatibility only: an old consumed marker grants no typed receipt or run.
         val restartedStore = LocalRunStore(context)
         val claim = restartedStore.claimProactiveSuggestedReply(CENTRAL, persisted.messageId, 0)
         assertEquals("Yes, that was me", claim?.text)
@@ -293,86 +299,75 @@ class ProactiveAgentProcessorTest {
         assertNull(LocalRunStore(context).claimProactiveSuggestedReply(CENTRAL, persisted.messageId, 0))
     }
 
-    @Test fun inlineReplyBecomesUserMessageRunsNormalFakeLoopAndUpdatesTheSameThreadNotification() {
+    @Test
+    @LooperMode(LooperMode.Mode.PAUSED)
+    fun inlineReplyBecomesUserMessageRunsNativeServiceAndUpdatesTheSameThreadNotification() {
         shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val threadKey = "account-update"
         val sourceDetail = "private-source-event-detail"
         val store = LocalRunStore(context)
-        val noticeText = "A new account update needs review: $sourceDetail"
-        val noticeId = store.appendProactiveAssistantMessageIfAbsent(
-            CENTRAL, "notice-decision", noticeText,
-            listOf(ProactiveSuggestedReply("Summarize", "Summarize this update"),
-                ProactiveSuggestedReply("Draft", "Draft a reply")), threadKey,
-        )
-        val initialTimeline = store.readConversationTimeline(CENTRAL)
-        ProactiveNotifier.post(context, threadKey, noticeId, noticeText, "normal",
-            initialTimeline.map { ProactiveThreadMessage(it.text, it.timestampMillis, it.kind == "assistant") },
-            noticeId, initialTimeline.single().proactiveReplies, false)
-        assertNull(ProactiveInteractionDispatcher.prepareInlineReply(context, noticeId, "not-a-thread", "Summarize"))
+        ProactiveNativeServiceFixture(context, chatTestStore).use { native ->
+            val noticeText = "A new account update needs review: $sourceDetail"
+            val noticeId = store.appendProactiveAssistantMessageIfAbsent(
+                CENTRAL, "notice-decision", noticeText,
+                listOf(ProactiveSuggestedReply("Summarize", "Summarize this update"),
+                    ProactiveSuggestedReply("Draft", "Draft a reply")), threadKey,
+            )
+            val initialTimeline = store.readConversationTimeline(CENTRAL)
+            assertTrue(ProactiveNotifier.post(context, threadKey, noticeId, noticeText, "normal",
+                initialTimeline.map { ProactiveThreadMessage(it.text, it.timestampMillis, it.kind == "assistant") },
+                noticeId, initialTimeline.single().proactiveReplies, false))
+            assertNull(ProactiveInteractionDispatcher.prepareInlineReply(context, noticeId, "not-a-thread", "Summarize"))
 
-        val prepared = requireNotNull(ProactiveInteractionDispatcher.prepareInlineReply(
-            context, noticeId, ProactiveThreadKey.fingerprint(threadKey), "Summarize this update",
-        ))
-        val timeline = store.readConversationTimeline(CENTRAL)
-        assertEquals("user", timeline.last().kind)
-        assertEquals(prepared.text, timeline.last().text)
-        assertEquals(threadKey, timeline.last().proactiveThreadKey)
-        val serviceIntent = com.jarvys.agent.AgentForegroundService.storedChatMessageIntent(
-            context, CENTRAL, prepared.userMessageId,
-        )
-        assertNull(serviceIntent.getStringExtra("agent_goal"))
-        assertNull(serviceIntent.getStringExtra(Intent.EXTRA_TEXT))
-        assertEquals(prepared.userMessageId, serviceIntent.getStringExtra("chat_user_message_id"))
+            val initialNotification = proactiveNotifications().single().notification
+            val inline = native.inlineIntent(initialNotification, "Summarize this update")
+            native.assertNoAcceptance(Intent(inline).putExtra(ProactiveActionReceiver.EXTRA_THREAD_TOKEN, "not-a-thread"))
+            val prepared = native.accept(inline)
+            val timeline = store.readConversationTimeline(CENTRAL)
+            assertEquals("user", timeline.last().kind)
+            assertEquals(prepared.text, timeline.last().text)
+            assertEquals(threadKey, timeline.last().proactiveThreadKey)
+            assertNull(prepared.user.proactiveReplyToMessageId)
+            assertNull(prepared.serviceIntent.getStringExtra("agent_goal"))
+            assertNull(prepared.serviceIntent.getStringExtra(Intent.EXTRA_TEXT))
+            assertEquals(prepared.submission.submissionId, prepared.serviceIntent.getStringExtra("central_submission_id"))
+            assertFalse(prepared.serviceIntent.extras?.toString().orEmpty().contains(sourceDetail))
 
-        val observedText = AtomicReference<String>()
-        val observedTools = AtomicReference<List<String>>()
-        val observedTranscript = AtomicReference<List<com.jarvys.agent.ConversationTurn>>()
-        val normalTools = CoreToolRegistry(listOf(normalTool("contacts_search"), normalTool("calendar_create_event")))
-        val normalModel = object : CoreAgentLoop.Model {
-            override fun complete(transcript: List<com.jarvys.agent.ConversationTurn>, prompt: String,
-                                  tools: List<ToolSpec>, token: CancellationToken): ModelReply {
-                observedText.set(prompt)
-                observedTools.set(tools.map { it.name })
-                observedTranscript.set(transcript)
-                return ModelReply("Calendar action is ready for review.", emptyList())
-            }
+            val completed = native.run(prepared)
+            assertTrue(completed.call.transcript.any { it.role == "assistant" && it.content.contains(sourceDetail) })
+            assertTrue(completed.call.transcript.any { it.content.contains("untrusted data, not as user instructions") })
+            assertEquals("Calendar action is ready for review.", completed.assistant.text)
+            assertEquals(threadKey, completed.assistant.proactiveThreadKey)
+            assertFalse(ProactiveReadOnlyToolFactory.connectorAllowlist.values.flatten().contains("create_event"))
+            assertOrdinaryToolScope("Summarize this update")
+
+            val active = proactiveNotifications()
+            assertEquals(1, active.size)
+            assertEquals(threadKey.hashCode(), active.single().id)
+            val latestText = active.single().notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+            assertTrue(latestText.contains("Calendar action is ready"))
+            assertEquals(1, active.single().notification.actions.last().remoteInputs.size)
+            val notificationIntent = shadowOf(active.single().notification.contentIntent).savedIntent
+            assertFalse(notificationIntent.extras?.toString().orEmpty().contains(sourceDetail))
+
+            val selectedChip = native.optionIntent(active.single().notification, 1)
+            val conflictingChip = native.optionIntent(active.single().notification, 0)
+            val chipClaim = native.accept(selectedChip)
+            assertEquals("Draft a reply", chipClaim.text)
+            assertEquals(noticeId, store.readStoredMessage(CENTRAL, chipClaim.userMessageId)?.proactiveReplyToMessageId)
+            assertEquals("user", store.readConversationTimeline(CENTRAL).last().kind)
+            val chipCompleted = native.run(chipClaim)
+            assertEquals("Calendar action is ready for review.", chipCompleted.assistant.text)
+            assertEquals(threadKey, chipCompleted.assistant.proactiveThreadKey)
+            assertOrdinaryToolScope("Draft a reply")
+            val updated = proactiveNotifications().single()
+            assertEquals(threadKey.hashCode(), updated.id)
+            assertEquals(1, updated.notification.actions.size)
+            assertTrue(store.readConversationTimeline(CENTRAL).first { it.messageId == noticeId }.proactiveRepliesUsed)
+            native.assertNoAcceptance(conflictingChip)
+            native.assertNoAcceptance(selectedChip)
+            assertNull(ProactiveInteractionDispatcher.prepareSuggestedReply(context, noticeId, 0))
         }
-        val normalLoop = CoreAgentLoop(normalModel, normalTools, "", CENTRAL)
-        val priorTurns = store.loadConversationContext(CENTRAL).dropLast(1)
-        val result = normalLoop.run(prepared.text, priorTurns, CancellationToken.cancellable(), null)
-        assertEquals("Summarize this update", observedText.get())
-        assertEquals(setOf("contacts_search", "calendar_create_event"), observedTools.get().toSet())
-        assertTrue(observedTranscript.get().any { it.role == "assistant" && it.content.contains(sourceDetail) })
-        assertFalse(ProactiveReadOnlyToolFactory.connectorAllowlist.values.flatten().contains("create_event"))
-
-        val assistantId = store.appendConversationMessage(CENTRAL, "assistant", result.text,
-            result.durationMs, result.runId, prepared.userMessageId, "COMPLETED", threadKey)
-        ProactiveInteractionDispatcher.refreshNotification(context, threadKey, assistantId)
-        val active = context.getSystemService(NotificationManager::class.java)?.activeNotifications.orEmpty()
-        assertEquals(1, active.size)
-        assertEquals(threadKey.hashCode(), active.single().id)
-        val latestText = active.single().notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
-        assertTrue(latestText.contains("Calendar action is ready"))
-        assertEquals(1, active.single().notification.actions.last().remoteInputs.size)
-        val notificationIntent = org.robolectric.Shadows.shadowOf(active.single().notification.contentIntent).savedIntent
-        assertFalse(notificationIntent.extras?.toString().orEmpty().contains(sourceDetail))
-
-        val chipClaim = requireNotNull(ProactiveInteractionDispatcher.prepareSuggestedReply(context, noticeId, 1))
-        assertEquals("Draft a reply", chipClaim.text)
-        assertEquals(noticeId, store.readStoredMessage(CENTRAL, chipClaim.userMessageId)?.proactiveReplyToMessageId)
-        assertEquals("user", store.readConversationTimeline(CENTRAL).last().kind)
-        val chipLoop = CoreAgentLoop(normalModel, normalTools, "", CENTRAL)
-        val chipHistory = store.loadConversationContext(CENTRAL).dropLast(1)
-        val chipResult = chipLoop.run(chipClaim.text, chipHistory, CancellationToken.cancellable(), null)
-        assertEquals("Draft a reply", observedText.get())
-        val chipAssistantId = store.appendConversationMessage(CENTRAL, "assistant", chipResult.text,
-            chipResult.durationMs, chipResult.runId, chipClaim.userMessageId, "COMPLETED", threadKey)
-        ProactiveInteractionDispatcher.refreshNotification(context, threadKey, chipAssistantId)
-        val updated = context.getSystemService(NotificationManager::class.java)?.activeNotifications.orEmpty().single()
-        assertEquals(threadKey.hashCode(), updated.id)
-        assertEquals(1, updated.notification.actions.size)
-        assertTrue(store.readConversationTimeline(CENTRAL).first { it.messageId == noticeId }.proactiveRepliesUsed)
-        assertNull(ProactiveInteractionDispatcher.prepareSuggestedReply(context, noticeId, 0))
     }
 
     @Test fun proactiveRespondValidatesBatchEventIdsAndCarriesThreadKeyWithoutReplySuggestions() {
@@ -451,69 +446,81 @@ class ProactiveAgentProcessorTest {
         assertFalse(visibleText.contains("Source:"))
     }
 
-    @Test fun inlineRemoteReplyPreparesUserTurnWithNormalToolsAndRefreshesOneThreadNotification() {
+    @Test
+    @LooperMode(LooperMode.Mode.PAUSED)
+    fun inlineRemoteReplyPreparesUserTurnWithNormalToolsAndRefreshesOneThreadNotification() {
         shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val threadKey = "billing-question"
         val sourceDetail = "private-billing-event-detail"
         val store = LocalRunStore(context)
-        val noticeId = store.appendProactiveAssistantMessageIfAbsent(
-            CENTRAL, "billing-notice", "A payment needs your review: $sourceDetail", emptyList(), threadKey,
-        )
-        val initial = store.readConversationTimeline(CENTRAL)
-        ProactiveNotifier.post(context, threadKey, noticeId, initial.single().text, "normal",
-            initial.map { ProactiveThreadMessage(it.text, it.timestampMillis, it.kind == "assistant") },
-            noticeId, emptyList(), false)
-        val notificationId = threadKey.hashCode()
-        assertEquals(notificationId, context.getSystemService(NotificationManager::class.java)?.activeNotifications?.single()?.id)
+        ProactiveNativeServiceFixture(context, chatTestStore).use { native ->
+            val noticeId = store.appendProactiveAssistantMessageIfAbsent(
+                CENTRAL, "billing-notice", "A payment needs your review: $sourceDetail", emptyList(), threadKey,
+            )
+            val initial = store.readConversationTimeline(CENTRAL)
+            assertTrue(ProactiveNotifier.post(context, threadKey, noticeId, initial.single().text, "normal",
+                initial.map { ProactiveThreadMessage(it.text, it.timestampMillis, it.kind == "assistant") },
+                noticeId, emptyList(), false))
+            val notificationId = threadKey.hashCode()
+            assertEquals(notificationId, proactiveNotifications().single().id)
 
-        val replyAction = context.getSystemService(NotificationManager::class.java)?.activeNotifications?.single()
-            ?.notification?.actions?.last() ?: error("inline reply action is missing")
-        val remoteInput = replyAction.remoteInputs.single()
-        assertEquals(ProactiveActionReceiver.EXTRA_INLINE_REPLY, remoteInput.resultKey)
-        val replyIntent = org.robolectric.Shadows.shadowOf(replyAction.actionIntent).savedIntent
-        assertEquals(ProactiveThreadKey.fingerprint(threadKey), replyIntent.getStringExtra(ProactiveActionReceiver.EXTRA_THREAD_TOKEN))
-        assertFalse(replyIntent.extras?.toString().orEmpty().contains(sourceDetail))
-        val fillIn = Intent()
-        android.app.RemoteInput.addResultsToIntent(arrayOf(remoteInput), fillIn,
-            Bundle().apply { putCharSequence(remoteInput.resultKey, "Summarize the payment notice") })
-        val remoteText = android.app.RemoteInput.getResultsFromIntent(fillIn)?.getCharSequence(remoteInput.resultKey)?.toString().orEmpty()
-        assertEquals(noticeId, replyIntent.getStringExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID))
-        val prepared = requireNotNull(ProactiveInteractionDispatcher.prepareInlineReply(
-            context, noticeId, ProactiveThreadKey.fingerprint(threadKey), remoteText,
-        ))
-        assertEquals("user", store.readConversationTimeline(CENTRAL).last().kind)
-        assertEquals(threadKey, store.proactiveThreadKeyForUserMessage(CENTRAL, prepared.userMessageId))
+            val replyAction = proactiveNotifications().single().notification.actions.last()
+            val remoteInput = replyAction.remoteInputs.single()
+            assertEquals(ProactiveActionReceiver.EXTRA_INLINE_REPLY, remoteInput.resultKey)
+            val replyIntent = Intent(shadowOf(replyAction.actionIntent).savedIntent)
+            assertEquals(ProactiveThreadKey.fingerprint(threadKey), replyIntent.getStringExtra(ProactiveActionReceiver.EXTRA_THREAD_TOKEN))
+            assertFalse(replyIntent.extras?.toString().orEmpty().contains(sourceDetail))
+            android.app.RemoteInput.addResultsToIntent(arrayOf(remoteInput), replyIntent,
+                Bundle().apply { putCharSequence(remoteInput.resultKey, "Summarize the payment notice") })
+            val remoteText = android.app.RemoteInput.getResultsFromIntent(replyIntent)?.getCharSequence(remoteInput.resultKey)?.toString().orEmpty()
+            assertEquals("Summarize the payment notice", remoteText)
+            assertEquals(noticeId, replyIntent.getStringExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID))
+            val prepared = native.accept(replyIntent)
+            assertEquals("user", store.readConversationTimeline(CENTRAL).last().kind)
+            assertEquals(threadKey, store.proactiveThreadKeyForUserMessage(CENTRAL, prepared.userMessageId))
+            assertEquals(remoteText, prepared.text)
+            assertNull(prepared.user.proactiveReplyToMessageId)
 
+            val completed = native.run(prepared)
+            assertEquals("Calendar action is ready for review.", completed.assistant.text)
+            assertEquals(threadKey, completed.assistant.proactiveThreadKey)
+            assertOrdinaryToolScope(remoteText)
+            val active = proactiveNotifications()
+            assertEquals(1, active.size)
+            assertEquals(notificationId, active.single().id)
+            assertTrue(active.single().notification.extras.getCharSequence(Notification.EXTRA_TEXT)
+                .toString().contains("Calendar action is ready"))
+            val deepLink = shadowOf(active.single().notification.contentIntent).savedIntent
+            assertFalse(deepLink.extras?.toString().orEmpty().contains("payment notice"))
+            assertNull(ProactiveInteractionDispatcher.prepareInlineReply(context, completed.assistant.messageId, "invalid-thread-token", "hello"))
+            val newInline = native.inlineIntent(active.single().notification, "hello")
+            native.assertNoAcceptance(Intent(newInline).putExtra(ProactiveActionReceiver.EXTRA_THREAD_TOKEN, "invalid-thread-token"))
+        }
+    }
+
+    /** Equal two-tool behavior remains a pure unit check, never a replay of an accepted USER. */
+    private fun assertOrdinaryToolScope(text: String) {
         val observedPrompt = AtomicReference<String>()
         val observedTools = AtomicReference<List<String>>()
         val ordinaryTools = CoreToolRegistry(listOf(normalTool("contacts_search"), normalTool("calendar_create_event")))
         val provider = object : CoreAgentLoop.Model {
             override fun complete(transcript: List<com.jarvys.agent.ConversationTurn>, prompt: String,
-                                  tools: List<ToolSpec>, token: CancellationToken): ModelReply {
+                tools: List<ToolSpec>, token: CancellationToken): ModelReply {
                 observedPrompt.set(prompt)
                 observedTools.set(tools.map { it.name })
                 return ModelReply("Calendar action is ready for review.", emptyList())
             }
         }
-        val normalLoop = CoreAgentLoop(provider, ordinaryTools, "", CENTRAL)
-        val result = normalLoop.run(prepared.text, store.loadConversationContext(CENTRAL).dropLast(1),
-            CancellationToken.cancellable(), null)
-        assertEquals("Summarize the payment notice", observedPrompt.get())
+        val result = CoreAgentLoop(provider, ordinaryTools, "", "pure-proactive-tools-fixture")
+            .run(text, emptyList(), CancellationToken.cancellable(), null)
+        assertEquals(text, observedPrompt.get())
         assertEquals(setOf("contacts_search", "calendar_create_event"), observedTools.get().toSet())
         assertEquals("Calendar action is ready for review.", result.text)
-        val assistantId = store.appendConversationMessage(CENTRAL, "assistant", result.text,
-            result.durationMs, result.runId, prepared.userMessageId, "COMPLETED", threadKey)
-
-        ProactiveInteractionDispatcher.refreshNotification(context, threadKey, assistantId)
-        val active = context.getSystemService(NotificationManager::class.java)?.activeNotifications.orEmpty()
-        assertEquals(1, active.size)
-        assertEquals(notificationId, active.single().id)
-        assertTrue(active.single().notification.extras.getCharSequence(Notification.EXTRA_TEXT)
-            .toString().contains("Calendar action is ready"))
-        val deepLink = org.robolectric.Shadows.shadowOf(active.single().notification.contentIntent).savedIntent
-        assertFalse(deepLink.extras?.toString().orEmpty().contains("payment notice"))
-        assertNull(ProactiveInteractionDispatcher.prepareInlineReply(context, assistantId, "invalid-thread-token", "hello"))
     }
+
+    /** A real service also posts its foreground notification; count the same proactive family as before. */
+    private fun proactiveNotifications() = context.getSystemService(NotificationManager::class.java)
+        .activeNotifications.filter { it.tag?.startsWith("jarvys_proactive_thread:") == true }
 
     @Test fun foregroundAppStoresNoticeInCentralWithoutPostingAndroidNotification() {
         shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)

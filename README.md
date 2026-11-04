@@ -1,3 +1,7 @@
+## Estado vigente — P4A: PASS D3; aceptación nativa pendiente — 04-11-2026
+
+Full y Play pasaron 39 pruebas cada uno en f5d7ab95; revisión independiente verificó los bindings y repitió sus dos casos por sabor. Gate habilitado sólo para validar el candidato funcional: UI, receiver, STOP, recuperación y regresión completa siguen pendientes. [Evidencia D3](docs/BOT_PORTABILITY_P4A_D3_RESULTS.json) y [plan de aceptación](docs/BOT_PORTABILITY_P4A_ON_ACCEPTANCE_PLAN.json). No PASS de implementación, APK ni validación física/proveedor. Menú, datos y permisos conservados; ocultación de evidencia y fatiga no terminadas.
+
 ## Estado vigente — P4A: dos fallos reproducidos, candidato OFF pendiente de D3 — 04-11-2026
 
 Diseño con PASS independiente; Full confirmó consumo perdido tras fallo de USER e inline sin PREPARED al reabrir. La calibración falló por fixture lstat y conserva su evidencia; reparación de test pendiente de ejecución. [Progreso, límites y cohorte preregistrada](docs/BOT_PORTABILITY_P4A_PROGRESS.md). Fix integrado con gate OFF; no implementación PASS ni APK nuevo. Se preservan Central, menú, datos y permisos. Ocultación de evidencia y fatiga no se declaran terminadas.
