@@ -1,0 +1,642 @@
+{
+  "status": "PAUSED_INCOMPLETE_NO_FUNCTIONAL_PASS",
+  "sourceCommit": "eb10269afc473d1c9537b45e0f5e6a9f61b8358d",
+  "scope": "P4A native acceptance/handoff and bounded protected context; host only",
+  "sourceBindingSha256": "dd87304ed7f3bb48d071a03eb311f9572384b167842d889004b91a96004babc2",
+  "gateOn": true,
+  "fullFocused": {
+    "classes": [
+      {
+        "className": "com.jarvys.agent.AgentMessagingPipelineTest",
+        "counts": {
+          "tests": 14,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "cf59c00a7f628a301f981f3eb59fb4cb44dc650fbe9e1209b373a66eb89aba52",
+        "methods": [
+          "chiefReplyIsSteeredIntoRunningWorkerAndDurableIncorporationIsAcknowledged",
+          "blockerStartsCentralWithoutWaitingForAnotherUserMessage",
+          "workerResultWhileCentralIsIdleStartsTurnWithContentAndStaysOffScreen",
+          "twoWorkersDeliverConcurrentResultsOnceInConversationSequenceOrder",
+          "blockerArrivingDuringCentralRunIsSteeredIntoTheNextModelStep",
+          "chiefReplyReopensDoneWorkerAndDurableIncorporationIsAcknowledged",
+          "peerWorkerMessageUsesRecipientInputWithoutEnteringCentralConversation",
+          "initialWorkspaceTaskIsAnAttributedAgentInputWithAssignmentProvenance",
+          "agentRequestToApproveDoesNotBecomeAUserAuthorization",
+          "everyContentMessageTypeToChiefReachesCentralAsAnAttributedInput",
+          "workerLoopTakesChiefInputWhileRunningAndReopensAfterDoneWithAnExactAck",
+          "askChiefQuestionEntersCentralAsAnInternalInput",
+          "resultArrivingWhileStoppedCentralRunIsStillInFlightStartsAfterStopCleanup",
+          "pendingCentralAgentInputIsRecoveredOnceAfterServiceRestart"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.CentralAvailabilityBoundaryAcceptanceTest",
+        "counts": {
+          "tests": 16,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "85c9465905f142f55bbc6789a4fc7f18b42d8ceb90eb40f2d2522ead03dcbeee",
+        "methods": [
+          "nativeP1ResultLosesToLiveSuspensionAndFreshUserWithoutConsumingEitherTwice",
+          "actualReservedClaimRejectsDurableOwnerAndRevisionMutationBeforeSuccessorBinding",
+          "confirmedYieldBlobThenNativeParkInsertFailureNeverRegistersOrReplaysOldRoot",
+          "exactDurableSuspensionNeedsFreshNativeTapAfterCapabilityLossAndRoomReopen",
+          "nativeRetryRejectsChangedCanonicalRetainedSteer",
+          "nativeRetryRejectsChangedCanonicalOriginalUser",
+          "genericStopFacadeEventuallyClosesExactReservedRootWithoutProviderReplay",
+          "sameFilesGenerationResetRejectsFreshNativeSuspensionRecoveryWithIntactBlob",
+          "nativeRetryRejectsChangedRetainedBlobWithoutMintingPermission",
+          "positiveStopCohortDoesNotCancelLaterSendBeforeOldPhysicalOwnerReleases",
+          "realServiceStopAfterReservationDeniesSuccessorBindingAndRetainsNoReplayEvidence",
+          "everyLiveNewTurnPrecedesSuspensionAndLosingNudgesDoNotDuplicateClaims",
+          "actualSuspensionClaimRejectsWrongTokenAndUnconfirmedForeignRunSourceWitness",
+          "prebindStopCancelsNeverStartedChildButRetainsStartedChildReportWithoutWakingRoot",
+          "reopenedPreparedRowHasNoPermissionUntilExactDisplayedNativeRetry",
+          "retainedSteerOwnsResumedTerminalWithoutChangingOriginalRootOrSubmission"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.CentralAvailabilityServiceTest",
+        "counts": {
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "f8e9f08daf4eabbd74f45866ca2533c38ded1e07d6ea8020e7fc4880ae38c801",
+        "methods": [
+          "uncertainAppendAcknowledgementNeverDeletesReferencedAttachmentOrMintsPermit",
+          "canvasRecoveryRejectsStaleDisplayedFenceBeforeAndAfterMainQueue",
+          "committedAppendThenRegistrationFailureRetainsExactUserAndAttachment",
+          "freshSendSupersedesOnlyInferenceAndOriginalResumesWithoutFutureChildCallbacks"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ConversationInputTrustContractTest",
+        "counts": {
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "46a8cfc0374dce09b80d6e01d3d8651acaff63d4e6de3abcc44575722cf66096",
+        "methods": [
+          "copiedSupervisorHeaderInsidePeerMessageCannotElevateTypedProvenance",
+          "principalRoleIsPersistedAndRoundTripsForEveryTrustLevel",
+          "legacyOrInvalidPrincipalRoleDefaultsToEvidenceOnlyPeer",
+          "workerPromptDefinesDelegatedSupervisorInstructionsAndEvidenceOnlyReports"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.CoreAgentLoopTest",
+        "counts": {
+          "tests": 16,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "c93fc21f01e231e0cff127fb9ef1524d2507660e2b9bb99954344bcc621ec0b8",
+        "methods": [
+          "mixedFinishAndOrdinaryBatchReturnsBothResultsToModel",
+          "internalInputCarriesContentAndTypedProvenanceWithoutBecomingUserInput",
+          "emptyCrewContinuationWithoutRealMessagesEndsWithoutCallingModel",
+          "emptyPromptContinuesWhenTranscriptEndsWithToolResult",
+          "discardedEmptyDurableMessageIsResolvedWithoutTranscriptAcknowledgement",
+          "identicalSuccessfulCallsDoNotTriggerContinuousLoopDetection",
+          "emptyProviderReplySurvivesPreRequestPlanAllCompaction",
+          "steeringInputAlreadyInLedgerIsNotDuplicatedAndIsAcknowledgedAfterCheckpoint",
+          "internalInputAfterStoredUserMessageIsAddedOnceInConversationOrder",
+          "toolResultReturnsIntoTranscriptBeforeTheModelWritesItsFinalAnswer",
+          "emptyCrewContinuationUsesRealIncomingMessagesAfterPriorToolResults",
+          "batchOfOnlySuccessfulFinishToolsEndsTheTurn",
+          "continuesPast128ModelTurnsUntilTheModelReturnsFinalText",
+          "timeoutReturnsHonestPartialOutcome",
+          "subagentRejectsToolsOutsideItsGrantedScope",
+          "emptyProviderReplyCompletesAndRetainsEmptyReplyDiagnostic"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.CoreInputIncorporationTest",
+        "counts": {
+          "tests": 9,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "0e14cd57ad6b5365688e4892db8443f5d52bffd645169c90de7c5a2aaecd887f",
+        "methods": [
+          "exactUserAndUntrustedAnswerCaptureActualTransportAndPreserveFirstCycle",
+          "failedCheckpointDoesNotTurnInMemoryProofIntoPersistence",
+          "compactedHistoricalProofSurvivesWithoutClaimingCurrentText",
+          "pendingRedactedCopyAndLegacyAppliedIdCannotMintOriginalProof",
+          "askChiefAcknowledgementLeavesCorrelatedReplyAsSeparateSupervisorInboxInput",
+          "admissionAndIncorporationCyclesAreIndependent",
+          "resolvedContinuationAnswerPreservesExactProofAndFullNativeProvenance",
+          "resolvedInputCannotAttachProofToDifferentPayloadOrRedactedDelivery",
+          "genericInputAndAbsentCrewScopeHaveNoProof"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ProactiveCentralTest",
+        "counts": {
+          "tests": 11,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "5fa5132c221bbea8ab979e7627dc8736959a220e5a17aace4af02b4c1a4ceeb3",
+        "methods": [
+          "B8_aReplyThatArrivesWhileTheRunIsActiveIsRecoveredAtTheNextCheckpoint",
+          "B8_theLoopShowsTheRecoveredNoticeToTheModelBeforeItsFirstTurn",
+          "B8_noticeNotificationOpensCentralAtTheNoticeAnchor",
+          "B8_aReplyToAnAnchorlessRowIsNotAThreadReply",
+          "B8_aTaskResultIsRecoveredWithTheTaskAndOccurrenceAsSource",
+          "B8_threadConsultsUseTheThreadIndexAndStayFlatAsCentralGrows",
+          "B8_replyToACompactedNoticeBringsTheNoticeAndItsSourceIntoTheTurnOnce",
+          "B8_aNoticeStillInTheLiveContextIsNeverRepeated",
+          "B8_taskReplyActionStoresAThreadReplyInCentralPointingAtTheResult",
+          "B8_everyReplyTurnWarnsThatNoticeDetailsAreUntrustedWhetherOrNotTheNoticeIsLive",
+          "B8_aReplyOnlyRecoversItsOwnExchangeNotTheNextNoticeOfTheThread"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ProactiveNativeReplyContextCompatibilityTest",
+        "counts": {
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "933eb8e09ca5aeefe4c66aaa23dbe83b5396adb9c351d58287dfe8b78eb3cf3f",
+        "methods": [
+          "nativeOptionRetainsItsCompactedNoticeAndWarningInTheActualProviderRequest",
+          "nativeInlineRetainsItsCompactedPriorNoticeAndWarningInTheActualProviderRequest"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ProactiveReplyIndependentOwnerRaceTest",
+        "counts": {
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "235918859698f855a66b729b92aa3e7e98e30838e334e2c139a23eac26fba608",
+        "methods": [
+          "nativeStopRejectsAlreadyReceivedReplyStillQueuedBeforeCapture",
+          "visibleRouteRoundTripCannotRevivePreviouslyCapturedInteraction"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ProactiveReplyIndependentRuntimeContextTest",
+        "counts": {
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "a1159b4c0b4a5bb6b0532312b41e1571dd4fa997f89cfaa52df5d2f8433b6bcb",
+        "methods": [
+          "actualNativeWarningCrossesCheckpointWithoutInventingDurableSourceAndForgedSourceStillFails"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ProactiveReplyNativeAcceptanceTest",
+        "counts": {
+          "tests": 12,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "535e2a1fd689f0a9b4912f2bbf24aa12fefc05fb69b302326942eea06f88d40d",
+        "methods": [
+          "registrationThenReopenKeepsExactPreparedUserWithoutAutomaticDispatch",
+          "inlineDuplicateConflictsAndFreshCanonicalSourcePermitsIntentionalSameText",
+          "reopenedTypedReplyRunsOnceOnlyThroughFreshDisplayedViewModelRecovery",
+          "sourceHiddenBeforeAdmissionRejectsButHiddenAfterAcceptanceDoesNotRevokeRecovery",
+          "notificationPublicationFailureRetainsAcceptanceAndLaterCanonicalReplyRemainsIndependent",
+          "actualOptionDeliveriesConserveFirstReceiptAndConflictingOrdinalCannotDispatch",
+          "typedStartedReplyAfterAbruptPhysicalRunnerExitIsUncertainAndCannotReplay",
+          "realReceiverRejectsChangedUriOrExtrasBeforeWriting",
+          "nativeStopBeforeClaimCancelsHiddenSourceAndDuplicateCannotReviveIt",
+          "sameFormatPhysicalGenerationChangeRejectsOldNativeAffordance",
+          "duplicateActualServiceIntentClaimsAndStartsSyntheticProviderOnlyOnce",
+          "acceptedThreadedUserIsExcludedFromPredecessorSteeringAndCorruptionCannotFallback"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ProactiveReplyNativeBoundaryComposeTest",
+        "counts": {
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "a4bdadad6d31ff614bc543eb68d3e1ffa020abb3a4da8e9a8ce632e1ade13b15",
+        "methods": [
+          "actualActivityStopAfterRegistrationDoesNotCancelAcceptedUserOrPermit",
+          "actualNativeConsumptionMarkerFailureRollsBackWholeAcceptance",
+          "stopIngressRetiresRegisteredPermitAfterOwnerClosedWithoutCatchingLaterClick",
+          "actualNativeUserInsertFailureRollsBackWholeAcceptance",
+          "actualActivityStopBeforeCommitRevokesCapturedActionWithoutMutation",
+          "stopIngressAfterCommitBeforeRegistrationRejectsOldOwnerButNotLaterNativeClick",
+          "actualDisplayedActionCommitBeforeRegistrationRetainsExactRecoveryAfterReopen",
+          "retainedDisplayedSelectionCannotAdmitAfterLeavingVisibleCentral",
+          "actualNativeSubmissionInsertFailureRollsBackWholeAcceptance",
+          "actualOwnerClosedAfterCommitCannotRegisterButCommittedUserSurvives"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ProactiveReplyNativeCombinationTest",
+        "counts": {
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "7730a21c29e443c3ce1b11c1b3bac6dad2dbc2a4dd80719a500651a7a05b8017",
+        "methods": [
+          "threadedReplyQueuesBehindRealPredecessorAndResumesOnlyItsProvenSafeCheckpoint",
+          "simultaneousRenderedChipAndActualReceiverConserveOneAcceptanceAndPhysicalClaim"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ProactiveReplyUiSelectionTest",
+        "counts": {
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "e11ec21270db12239940ede281eea9fe7d606f6ea93c54f6c7106b761ddd0352",
+        "methods": [
+          "sameInstanceOptionListMutationCannotRetargetTheDisplayedSelection",
+          "onlyTheCurrentDisplayedInstanceAndValidUnusedOptionAreSelectable"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ProactiveSuggestedRepliesComposeTest",
+        "counts": {
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "04b8caf80f0688269c3806a3f8b231864dc0e3f60260612b01049d460de7ed2e",
+        "methods": [
+          "proactiveReplyChipsWrapInEnglishAndSpanishAtFontScaleOneAndTwoAndConsumeOnce"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ProactiveTypedRenderedRecoveryTest",
+        "counts": {
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "43ef7f66a16d72581583fc25978d2200dee7ac8c32d2ea067813b66a3f05275b",
+        "methods": [
+          "typedPreparedComposeRetryRejectsStaleDisplayAndRecoversTheSameUserExactlyOnce",
+          "typedPreparedCanvasRetryRejectsStaleDisplayAndFenceThenRecoversTheSameUserExactlyOnce"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.canvas.ChatCanvasContractTest",
+        "counts": {
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "0ed2bf25a7c41dee966ceee2fa891135624eddce599ca547db911446b9ec0bb8",
+        "methods": [
+          "hostActionAllowlistRejectsUnknownStaleAndOutOfScopeActions",
+          "javascriptPatchModelUpdatesBySeqAndEscapesModelHtml",
+          "canvasResponsePolicyDisablesNetworkAndActiveEmbedding",
+          "transientAssistantStreamUsesCanvasAssistantPresentationAndCopyPolicy",
+          "internalSkillActivityDetailsAreScrubbedForLiveAndReopenedEventsWhilePublicSkillDetailsRemain",
+          "serializerPreservesReaderOrderAndUsesSeqAsStableUiIdentity"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.canvas.ChatCanvasResourceResolutionTest",
+        "counts": {
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "169d09ebff959fa7b179695830c077b173d3732d969418776eb0360a834e88ea",
+        "methods": [
+          "proactiveRespondUsesTheActualRenderedAssistantAndRejectsSameSeqRetargeting",
+          "resourceResolverDeniesOutOfScopeReferencesAndBridgeRevalidatesOnMainThread"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.chatdb.CentralSubmissionPersistenceTest",
+        "counts": {
+          "tests": 22,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "17903e93acf1159cf2b34d790f728af142763d8e72a0a9981caf0d810bea1056",
+        "methods": [
+          "reflectionExcludesQueuedAndUncertainSourcesButRetainsConfirmedAndOrdinaryHistory",
+          "queuedAndUncertainSourcesStayVisibleInUiButOutOfHistorySteeringAndCompaction",
+          "capturedStopDoesNotTouchLaterSendOrSteerAndDuplicateIsIdempotent",
+          "witnessedSuccessorOutputRequiresExactRetainedIncorporatedInitialP1Owner",
+          "exactNativeRegenerationConservesCompletedSubmissionAndOrdinaryUserHistory",
+          "requestCodecRejectsNullDuplicatesUnknownShapeAndVersion",
+          "concurrentExactCasHasOneWinnerAndNoStartedReplayOnReopen",
+          "onlyEligibleLiveCatalogIdsParticipateInPriorityWithoutMintingMissingPermission",
+          "failedSubmissionInsertRollsBackUserAttachmentsSpineAndFileReferences",
+          "genericMarkThroughAndFailureCannotAcknowledgeProtectedSubmissions",
+          "atomicUserAttachmentsAndPositiveSubmissionRoundTripWithoutBackfill",
+          "revisionAndStateChangesInvalidateProtectionFingerprintAndMalformedRowsFailClosed",
+          "regenerationEvidenceRejectsWrongTargetChangedSourceAndUncertainOwners",
+          "selectedSkillRequestIsExactImmutableEvidenceAcrossRecoveryAndReopen",
+          "retainedSuspensionProjectionExcludesFreshCompletedRootButRequiresOriginalProtectedSource",
+          "preparedRecoveryCasConservesOriginalSourceAndCannotResetStarted",
+          "nativeSubmissionForeignKeyRejectsOrphanAndCascadesInsideRollbackWithoutDeletingHistory",
+          "claimCasRejectsStaleRepeatProcessMismatchAndLaterEligibleSource",
+          "changedPartOrAttachmentFailsExactSourceCasWithoutReset",
+          "nativeSteeringSelectorNeverConsumesPositiveNewTurnsInAnyRetainedState",
+          "secondHalfStopFailureRollsBackExactSteerAndSubmissionTogether",
+          "missingForeignDeletedAndCorruptRegenerationMarkersDoNotCertifyCompletedHistory"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest",
+        "counts": {
+          "tests": 11,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "d700dbac6749cccb50fa47cb13ab07381cf4a7c787704fecf91e3104f2a456c2",
+        "methods": [
+          "laterBeforeInsertionKeepsNativeNoticeAtItsActualShiftedSortPosition",
+          "exactHiddenConsumedAndTranslationMarkersRemainProtectedAndBadMarkersFail",
+          "aValidNoticeNeverMasksAnOrdinaryOwnerlessAssistant",
+          "exactNoticeComponentKeepsNulAndUnpairedUtf16Distinct",
+          "discriminatorBodyAndOptionChangesInvalidateTheExactProtectionFingerprint",
+          "extraProtocolPartsAttachmentsAndMalformedOptionsRemainUnsafeIncludingMissionCards",
+          "currentProactiveAndTaskNoticesKeepOwnProtectedPositionsAndContextAcrossReopen",
+          "malformedDiscriminatorOwnershipAndSpineNeverBecomeSafeHumanOrNoticeGroups",
+          "acceptedReplyStaysContextValidAfterNativeHideAndExactSourceMutationStillFailsRoot",
+          "legacyNullEmptyAndWhitespaceThreadNoticesStayReadableWithoutAnyP4ReplyAuthorityOrWrites",
+          "nonCentralStandaloneAndMissionCardAccountingAndFingerprintStayUnchanged"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.chatdb.ProactiveReplyAcceptancePersistenceTest",
+        "counts": {
+          "tests": 18,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "1368f7884726cd6ad574f09845db662abf8af2c5326610a7c3fa56235fdb95c7",
+        "methods": [
+          "optionDuplicateIsDataOnlyAndConflictingOrdinalCannotCreateSecondUser",
+          "selfConsistentProofAndTextTamperStillFailsCommittedRootAtContextReads",
+          "currentV100OrdinaryPreparedStartedAndConsumedRowsRetainExactSchemaAndBytes",
+          "physicalGenerationChangeFailsEvenWhenBootstrapFormatIsUnchanged",
+          "staleHiddenAndUnfinishedSourcesCannotAdmitButLaterHideDoesNotRevoke",
+          "coherentNoticeAndProofMutationCannotReplacePinnedContextWithoutStoredRoot",
+          "concurrentSameAndDifferentOptionsHaveOneCommittedAcceptance",
+          "eachCompositeFailureRollsBackUserConsumptionQueueSpineAndCounters",
+          "canonicalCodecRejectsDuplicateUnknownNullAndCoercedFieldsAndConservesUtf16",
+          "pinnedOneLevelReferentSurvivesCompactionAndRejectsPriorNoticeMutation",
+          "sourceUserFingerprintDoesNotRecursivelyInheritEarlierAuthority",
+          "changedUserThreadReplyToSourceOptionOrProofFailsEveryReadWithoutFallback",
+          "currentEligibleSourceExcludesInternalProvenanceAndStaleInline",
+          "inlineUsesExactOccurrenceAndAcceptedUserBecomesNextIdenticalReplyAnchor",
+          "pinnedPriorNoticeThreadCannotFallBackToEarlierNotice",
+          "oldConsumedNoticeIsNotBackfilled",
+          "deletedSubmissionCannotBeBackfilledFromTypedUserAndNullProofCannotBecomeOrdinary",
+          "legacyOrdinaryAndThreadHistoryRemainUnmodifiedWithNoPositiveBackfill"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.chatdb.ProactiveReplyBootstrapGenerationTest",
+        "counts": {
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "76855e2597ec2cb9b0abcb56b00d00949411dfaf1eec3a54c2dc90d0aea331c2",
+        "methods": [
+          "retainedCurrentRowsAndSchemaStayExactExceptSingleMissingGeneration",
+          "actualFreshBootstrapMakesFirstNoticeReadableBeforeAnyUserOrConnector",
+          "existingPhysicalGenerationAndRowsSurviveRepeatedBootstrapAndRealReopen",
+          "separatePhysicalStoresWithSameBootstrapFormatHaveDifferentGeneration",
+          "failedGenerationInsertRollsBackCentralAndMetadataTogetherAndCanRetry",
+          "malformedExistingGenerationFailsAndRollsBackCentralWithoutRewritingRetainedRows",
+          "sourceDescriptorWithoutGenerationFailsReadOnlyRatherThanBootstrapping"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.chatdb.ProactiveReplyIndependentD3DowngradeTest",
+        "counts": {
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "3e63ecefe2c82c16c553138dd9afd2a9b456aec72ffd9d88969538c36077993b",
+        "methods": [
+          "coherentProofRemovalAndUserMetadataStrippingCannotDowngradeTypedReceiptToOrdinaryContext",
+          "historicalMissingLookupStaysNullWhileRootCaptureRequiresActualUser"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.proactive.ProactiveActionReceiverTest",
+        "counts": {
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "e5de0efebb2314214601125b6adb0a689f53ab61f7158607aee6a35f6bd25ca3",
+        "methods": [
+          "receiverIsPrivateAndRejectsUnknownMessageAndThreadBeforeWritingOrLaunching"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.proactive.ProactiveAgentProcessorTest",
+        "counts": {
+          "tests": 13,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "22af86e65db6cafec2c37b2dd89c6608595902337016a1c6f79f2f3adacb5017",
+        "methods": [
+          "irrelevantAndInjectionTextStayDataNotifyFalseProcessesAndExposesOnlyReadWhitelist",
+          "proactiveTextSanitizerRemovesMarkdownCodeAndInternalOrExternalLinks",
+          "proactiveRespondValidatesBatchEventIdsAndCarriesThreadKeyWithoutReplySuggestions",
+          "suggestedRepliesAreSanitizedPersistedSingleUseAndNotificationActionsStayWithinPlatformMaximum",
+          "cancellationLeavesCandidatePendingAndStatusToolReturnsReviewState",
+          "foregroundAppStoresNoticeInCentralWithoutPostingAndroidNotification",
+          "inlineRemoteReplyPreparesUserTurnWithNormalToolsAndRefreshesOneThreadNotification",
+          "missingProvider429NetworkAndMissingRespondRetryWithoutProcessing",
+          "inlineReplyBecomesUserMessageRunsNativeServiceAndUpdatesTheSameThreadNotification",
+          "sameThreadUpdatesOneMessagingNotificationAndSanitizesChatAndPushText",
+          "silentSystemPromptTracksEnglishAndSpanishAppResourceLocales",
+          "notificationPermissionDeniedStillSavesTheNotifyDecisionInCentral",
+          "importantDecisionPostsCleanNotificationAndRestorableCentralMessage"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.proactive.ProactiveNotifierCanonicalSourceTest",
+        "counts": {
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "6ff4f4403278caf4d301374b009475b591e5e9ce13bc8a185af3b22b57196a96",
+        "methods": [
+          "callerOnlySourceCannotCreateAReplyAffordance",
+          "onlyRemoteInputIsMutableAndEveryActionHasExactSourceBinding",
+          "unchangedSourceKeepsIdentityAndRefreshUsesCanonicalUserInsteadOfCachedAssistant",
+          "latePublicationCannotOverwriteTheCanonicalReplyRefresh",
+          "preAndroidTwelveRemoteInputRemainsFillableWhileOpenAndChipsAreImmutable"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.proactive.ProactiveReplyNotificationIdentityTest",
+        "counts": {
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "a4832c07fcfd7e8f5e3714148bd93b083efef2c79691fea44619e69277a2326d",
+        "methods": [
+          "explicitBindingRoundTripsFullThreadAndSeparatesOrdinalFromLogicalAcceptance",
+          "physicalGenerationSourceAndFullThreadKeepOldPendingIntentHandlesBound",
+          "missingOldOrMutatedUriAndExtrasCannotReplaceTheCanonicalBinding"
+        ]
+      },
+      {
+        "className": "com.jarvys.agent.ui.chat.AssistantTextSelectionTest",
+        "counts": {
+          "tests": 14,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "xmlSha256": "406cb7448eb09b152df3d3b957ccd64010dd01107cd7e33230f9fb7785f6530e",
+        "methods": [
+          "suggestedReplyRemainsOutsideSelectionAndKeepsItsTapAction",
+          "darkLargeMessageSelection",
+          "draggingASelectionHandleExtendsTheCopiedRange",
+          "userAttachmentsAndReactionAreOutsideAssistantSelectAll",
+          "lightMessageSelection",
+          "lightLargeMessageSelection",
+          "darkMessageSelection",
+          "horizontalCodeScrollAndPointerCopyBothWork",
+          "longAnswerScrollSelectionAndComposerFocusInLight",
+          "codeAndMultipleMarkdownBlocksShareOnlyTheirMessageSelection",
+          "errorAndStreamingBodiesRemainSelectableWithNoActionFooter",
+          "translationSelectionExcludesItsHeadingHideActionAndOriginalResponse",
+          "linkTapAndLongPressTextRemainSeparate",
+          "longAnswerScrollSelectionAndComposerFocusInDarkLargeText"
+        ]
+      }
+    ],
+    "classCount": 28,
+    "counts": {
+      "tests": 212,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "sourceUnchanged": true,
+    "artifactsUnchanged": true,
+    "artifactBindingSha256": "fb27c9199036350386f29c0ceada0e04a885f63f691766b2541aa8c3cf763d59",
+    "terminalSummarySha256": "507ebdc0d95795c43f3bbab41d7e8c1b1cef79861c58e0811786cdbc58be0949"
+  },
+  "independentFullReplay": {
+    "counts": {
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "methods": [
+      "com.jarvys.agent.ProactiveReplyIndependentOwnerRaceTest#nativeStopRejectsAlreadyReceivedReplyStillQueuedBeforeCapture",
+      "com.jarvys.agent.ProactiveReplyIndependentOwnerRaceTest#visibleRouteRoundTripCannotRevivePreviouslyCapturedInteraction",
+      "com.jarvys.agent.ProactiveReplyIndependentRuntimeContextTest#actualNativeWarningCrossesCheckpointWithoutInventingDurableSourceAndForgedSourceStillFails",
+      "com.jarvys.agent.ProactiveTypedRenderedRecoveryTest#typedPreparedComposeRetryRejectsStaleDisplayAndRecoversTheSameUserExactlyOnce",
+      "com.jarvys.agent.ProactiveTypedRenderedRecoveryTest#typedPreparedCanvasRetryRejectsStaleDisplayAndFenceThenRecoversTheSameUserExactlyOnce",
+      "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest#laterBeforeInsertionKeepsNativeNoticeAtItsActualShiftedSortPosition",
+      "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest#exactHiddenConsumedAndTranslationMarkersRemainProtectedAndBadMarkersFail",
+      "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest#aValidNoticeNeverMasksAnOrdinaryOwnerlessAssistant",
+      "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest#exactNoticeComponentKeepsNulAndUnpairedUtf16Distinct",
+      "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest#discriminatorBodyAndOptionChangesInvalidateTheExactProtectionFingerprint",
+      "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest#extraProtocolPartsAttachmentsAndMalformedOptionsRemainUnsafeIncludingMissionCards",
+      "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest#currentProactiveAndTaskNoticesKeepOwnProtectedPositionsAndContextAcrossReopen",
+      "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest#malformedDiscriminatorOwnershipAndSpineNeverBecomeSafeHumanOrNoticeGroups",
+      "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest#acceptedReplyStaysContextValidAfterNativeHideAndExactSourceMutationStillFailsRoot",
+      "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest#legacyNullEmptyAndWhitespaceThreadNoticesStayReadableWithoutAnyP4ReplyAuthorityOrWrites",
+      "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest#nonCentralStandaloneAndMissionCardAccountingAndFingerprintStayUnchanged",
+      "com.jarvys.agent.chatdb.ProactiveReplyIndependentD3DowngradeTest#coherentProofRemovalAndUserMetadataStrippingCannotDowngradeTypedReceiptToOrdinaryContext",
+      "com.jarvys.agent.chatdb.ProactiveReplyIndependentD3DowngradeTest#historicalMissingLookupStaysNullWhileRootCaptureRequiresActualUser"
+    ],
+    "sourceAndArtifactsMatchAfter": true,
+    "evidenceSha256": "0ef03c7804e7cabe1620d7609f20f7e8cc4fd4f80237fdf8ecf9e11529c1407b",
+    "verdict": "Full replay only; paired functional acceptance PENDING"
+  },
+  "notExecuted": [
+    "Play focused on final source",
+    "Full broad 170-class union on final source",
+    "Play broad 170-class union on final source",
+    "Independent paired final acceptance",
+    "APK packaging or delivery",
+    "Physical device or live provider acceptance"
+  ],
+  "historicalFailuresRetained": [
+    {
+      "source": "90c7ee59",
+      "FullFocusedTests": 136,
+      "failures": 7
+    },
+    {
+      "source": "12eb268d",
+      "status": "test compilation failure; no tests ran"
+    },
+    {
+      "source": "d1b493ce",
+      "FullFocusedTests": 168,
+      "failures": 12
+    },
+    {
+      "source": "c287b0de",
+      "status": "first export inconclusive; no resulting export or test execution claimed"
+    },
+    {
+      "source": "c287b0de",
+      "FullFocusedTests": 212,
+      "failures": 1,
+      "diagnostic": "Canvas fixture could accept a patch of the old snapshot before asynchronous serialization of the fresh fence"
+    }
+  ],
+  "limits": [
+    "No paired implementation PASS",
+    "Full212 and independentFull18 overlap and must not be summed",
+    "No new APK, physical-device, live-provider or full-P4 completion claim",
+    "No scope expansion to exact-evidence hide, fatigue, later roadmap phases or UI redesign",
+    "Historical OFF D3 PASS remains tied to its own source"
+  ]
+}

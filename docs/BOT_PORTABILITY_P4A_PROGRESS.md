@@ -56,3 +56,19 @@ The classifier now recognizes only the retained native notice shape inside Centr
 Eleven projection tests cover these boundaries; all remain unrun. The final plan has 23 focused classes and a 168-class regression union, including every affected class. The source-specific historical OFF D3 PASS is retained; all 27 conservation methods must pass again on final ON bytes, along with native service/rendered acceptance and independent review. No new schema, write format, quota, menu or authority path is added by this read-only repair.
 
 The 12eb268d Full attempt compiled production but failed test compilation on an unnecessary top-level assertDoesNotExist import; the assertion is an existing SemanticsNodeInteraction member. No tests or Play ran. Removed only that import, preserving the rendered assertion and all semantics. The compile failure remains retained; a fresh bound run is required.
+
+## Native diagnostic after classifier correction
+
+The d1b493ce Full focused run completed 168 tests across 23 classes with 12 failures, no errors/skips; all 11 new classifier tests passed. Play/broad were held. Compaction fixtures still created ordinary ownerless assistant fillers, which the unchanged guard correctly rejected. Rendered recovery correctly invalidated the old permit, but incorrectly demanded eager removal from the process map. One UI fixture needed the same host lstat shadow already established earlier. These are corrected without weakening ownership or startup guards.
+
+The actual runtime payload rejection has a separate concrete cause: the loop wrapped nonpersisted untrusted context with a random ID advertised as durable, and checkpoint binding then treated it as a Room MESSAGE source. The narrow producer correction retains SYSTEM/legacy_context/untrusted metadata and transient deduplication but leaves this runtime enrichment source-less. Genuine persisted SYSTEM/AGENT inputs keep the existing durable path. Reader validation remains unchanged; forged bound sources must still reject. Independent native checkpoint/provider regression is being added before fresh validation.
+
+
+## Source-bound native validation after transient-context fix
+
+The c287b0de Full focused run completed 212 tests across 28 classes, with one failure and no errors/skips. All context/classifier cases and a separate independent Full16 replay passed. The sole remaining failure was rendered Canvas recovery: its test waited for any different JavaScript string, so a patch for the old snapshot could satisfy the wait before asynchronous serialization published the fresh recovery fence. The native bridge correctly rejected the stale fence. The test now observes the actual serialized seq/message/fence/canRetry tuple and checks every rendered button's emitted fence plus exactly one new fresh callback; stale-display and stale-DOM negatives remain unchanged. No production code or timeout change accompanies this correction. The failed run and inconclusive prior export are retained. Matching final Full/Play focused, broad and independent review remain required.
+
+
+## Paused checkpoint — 2026-11-04
+
+Work stopped on eb10269a after the new Full focused run completed all 212 tests in 28 classes with zero failures/errors/skips, unchanged bound source and artifacts. Independent replay of 18 tests also passed on these bytes, including both rendered recovery routes. These cohorts overlap and are not added. Play focused, both broad 170-class runs and independent paired acceptance were not executed before the pause. No final functional PASS, APK or next-phase work is claimed. The public checkpoint records only sanitized counts, names and hashes; private XML, logs and local exports remain excluded from publication.

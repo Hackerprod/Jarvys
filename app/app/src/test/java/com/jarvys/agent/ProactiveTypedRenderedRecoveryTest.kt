@@ -30,6 +30,8 @@ import com.jarvys.agent.proactive.ProactiveActionReceiver
 import com.jarvys.agent.proactive.ProactiveInteractionDispatcher
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import org.json.JSONArray
+import org.json.JSONObject
+import org.json.JSONTokener
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -144,7 +146,7 @@ class ProactiveTypedRenderedRecoveryTest {
 
         val firstDisplay = canonicalDisplay(original.userMessageId)
         installScreen(firstDisplay)
-        clickRenderedRetry()
+        clickRenderedRetry(firstDisplay)
         assertEquals(1, callbacks.size)
         assertSame(firstDisplay, callbacks.last().first)
         assertTrue(callbacks.last().second)
@@ -166,7 +168,7 @@ class ProactiveTypedRenderedRecoveryTest {
 
         // Keep the old button rendered while native timeline evidence has advanced to the real new revision.
         val beforeStale = submissions().single()
-        clickRenderedRetry()
+        clickRenderedRetry(firstDisplay)
         assertEquals(2, callbacks.size)
         assertSame(firstDisplay, callbacks.last().first)
         assertFalse("Actual rendered stale availability must not grant recovery", callbacks.last().second)
@@ -178,7 +180,7 @@ class ProactiveTypedRenderedRecoveryTest {
             // Update the native Canvas bridge but leave its old DOM button intact until the new JS patch runs.
             updateScreen(freshDisplay, executeCanvasPatch = false)
             val beforeFence = callbacks.size
-            clickRenderedRetry()
+            clickRenderedRetry(firstDisplay)
             assertEquals("Old rendered fence must fail before the current-event callback", beforeFence, callbacks.size)
             assertEquals(beforeStale, submissions().single())
             assertTrue(drainStarts().isEmpty())
@@ -186,7 +188,9 @@ class ProactiveTypedRenderedRecoveryTest {
         } else {
             updateScreen(freshDisplay)
         }
-        clickRenderedRetry()
+        val beforeFresh = callbacks.size
+        clickRenderedRetry(freshDisplay)
+        assertEquals("Fresh rendered action must invoke exactly one new callback", beforeFresh + 1, callbacks.size)
         assertSame(freshDisplay, callbacks.last().first)
         assertTrue("Fresh actual rendered event authorizes native PREPARED recovery", callbacks.last().second)
         val recovered = awaitRecovery(firstRecovery)
@@ -241,7 +245,10 @@ class ProactiveTypedRenderedRecoveryTest {
         reopen()
         assertThrows(IllegalStateException::class.java) { permit.requirePrepared() }
         assertEquals(accepted, submissions().single())
-        assertNull(CentralSubmissionAdmission.find(session, accepted.submissionId))
+        CentralSubmissionAdmission.find(session, accepted.submissionId)?.let { retained ->
+            assertSame("Reopen must never mint a replacement live permit", permit, retained)
+            assertThrows(IllegalStateException::class.java) { retained.requirePrepared() }
+        }
         assertTrue(drainStarts().isEmpty())
         return accepted
     }
@@ -268,7 +275,7 @@ class ProactiveTypedRenderedRecoveryTest {
             compose.onNodeWithTag("chat-canvas-webview").assertIsDisplayed()
             val web = canvasView()
             compose.runOnIdle { web.pageFinished() }
-            awaitCanvasScript(null)
+            awaitCanvasScript(null, event)
             canvasHost = RenderedCanvasHost(context).also { it.evaluate(requireNotNull(lastCanvasScript)) }
             assertEquals(1, requireNotNull(canvasHost).retryButtonCount())
         } else compose.onNodeWithTag("central-request-retry-${event.messageId}").assertIsDisplayed()
@@ -279,15 +286,17 @@ class ProactiveTypedRenderedRecoveryTest {
         compose.runOnIdle { displayed.value = event }
         compose.waitForIdle()
         if (canvas) {
-            awaitCanvasScript(previousScript)
+            awaitCanvasScript(previousScript, event)
             if (executeCanvasPatch) requireNotNull(canvasHost).evaluate(requireNotNull(lastCanvasScript))
         }
     }
 
-    private fun clickRenderedRetry() {
+    private fun clickRenderedRetry(expectedDisplay: AgentRunUiEvent) {
         if (canvas) {
             val emitted = requireNotNull(canvasHost).clickRetry()
             assertEquals("retry", emitted.getString(0))
+            assertEquals(expectedDisplay.id, emitted.getLong(1))
+            assertEquals(expectedDisplay.centralAvailability!!.recoveryFence(), emitted.getString(2))
             val web = canvasView()
             val installed = requireNotNull(Shadows.shadowOf(web).getJavascriptInterface("Android"))
             // Invoke only the real public @JavascriptInterface with values emitted by the bundled rendered button.
@@ -298,11 +307,29 @@ class ProactiveTypedRenderedRecoveryTest {
         compose.waitForIdle()
     }
 
-    private fun awaitCanvasScript(previous: String?) {
+    private fun awaitCanvasScript(previous: String?, expectedDisplay: AgentRunUiEvent) {
+        val canRetry = expectedDisplay.centralAvailability?.canRetry == true
+        val expectedFence = if (canRetry) expectedDisplay.centralAvailability!!.recoveryFence() else ""
+        // A bootstrap and a patch for the same old snapshot are different scripts. Wait for the
+        // actual serialized revision from produceState, rather than accepting that old patch.
         compose.waitUntil(timeoutMillis = 10_000) {
-            Shadows.shadowOf(canvasView()).lastEvaluatedJavascript?.let { it != previous } == true
+            val script = Shadows.shadowOf(canvasView()).lastEvaluatedJavascript
+            val matches = script != null && script != previous && runCatching {
+                val prefix = listOf("window.ChatCanvas.bootstrap(JSON.parse(",
+                    "window.ChatCanvas.applyDeltasToView(JSON.parse(").single { script.startsWith(it) }
+                check(script.endsWith("));"))
+                val json = JSONTokener(script.removePrefix(prefix).removeSuffix("));")).nextValue() as String
+                val events = JSONObject(json).getJSONArray("events")
+                (0 until events.length()).any { index ->
+                    val event = events.getJSONObject(index)
+                    event.getLong("seq") == expectedDisplay.id &&
+                        event.getString("messageId") == expectedDisplay.messageId &&
+                        event.getBoolean("canRetry") == canRetry && event.getString("recoveryFence") == expectedFence
+                }
+            }.getOrDefault(false)
+            if (matches) lastCanvasScript = script
+            matches
         }
-        lastCanvasScript = Shadows.shadowOf(canvasView()).lastEvaluatedJavascript
     }
 
     private fun canvasView(): ChatCanvasWebView {

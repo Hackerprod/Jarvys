@@ -46,8 +46,9 @@ class ProactiveNativeReplyContextCompatibilityTest {
                 val id = store.appendProactiveAssistantMessageIfAbsent(session, "native-compaction-$kind",
                     noticeText, listOf(ProactiveSuggestedReply("Explain", text)), thread)
                 repeat(4) {
-                    store.appendConversationMessage(session, "user", "filler question $it")
-                    store.appendConversationMessage(session, "assistant", "filler answer $it")
+                    val owner = store.appendConversationMessage(session, "user", "filler question $it")
+                    store.appendConversationMessage(session, "assistant", "filler answer $it", null,
+                        "native-compaction-filler-$it", owner, "COMPLETED", null)
                 }
                 store.appendCompaction(session, "summary of unrelated earlier turns", 5, "manual", "all", 5)
                 ProactiveInteractionDispatcher.refreshNotification(context, thread, id)

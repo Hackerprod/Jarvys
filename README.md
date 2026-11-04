@@ -1,3 +1,7 @@
+## Estado vigente — P4A pausado; validación incompleta — 04-11-2026
+
+Fuente `eb10269a`: **Full focal 212 pruebas/28 clases, cero fallos**, y replay independiente Full18 sin fallos, con fuentes/artefactos invariantes. **Play y regresión amplia de 170 clases por sabor no ejecutados en esta fuente; no PASS funcional pareado.** Se detiene el trabajo en este punto. [Checkpoint saneado y límites](docs/BOT_PORTABILITY_P4A_PAUSED_CHECKPOINT.json). No APK nuevo, validación física/proveedor ni fases posteriores. Los fallos e intentos previos permanecen conservados.
+
 ## Estado vigente — P4A: PASS D3; aceptación nativa pendiente — 04-11-2026
 
 Full y Play pasaron 39 pruebas cada uno en f5d7ab95; revisión independiente verificó los bindings y repitió sus dos casos por sabor. Gate habilitado sólo para validar el candidato funcional: UI, receiver, STOP, recuperación y regresión completa siguen pendientes. [Evidencia D3](docs/BOT_PORTABILITY_P4A_D3_RESULTS.json) y [plan de aceptación](docs/BOT_PORTABILITY_P4A_ON_ACCEPTANCE_PLAN.json). No PASS de implementación, APK ni validación física/proveedor. Menú, datos y permisos conservados; ocultación de evidencia y fatiga no terminadas.

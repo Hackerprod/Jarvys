@@ -1985,7 +1985,12 @@ public final class CoreAgentLoop {
             if (legacy == null || legacy.isEmpty()) continue;
             IncomingMessage message = new IncomingMessage(UUID.randomUUID().toString(), "legacy", legacy, false);
             appliedIncomingIds.add(message.id);
-            appendIncoming(transcript, message);
+            // Runtime enrichment has no Room input row. Retain its untrusted SYSTEM wrapper and
+            // transient dedup ID, but never advertise that ID as a durable message source.
+            ConversationTurn.IncomingMetadata metadata = new ConversationTurn.IncomingMetadata(
+                    message.origin, message.id, message.sourceKind, message.source, message.messageType,
+                    message.references, true, message.provenance);
+            transcript.add(new ConversationTurn("assistant", message.content, -1, metadata));
             appended = true;
         }
         if (appended || !incorporated.isEmpty()) updateTranscriptSnapshot(transcript);

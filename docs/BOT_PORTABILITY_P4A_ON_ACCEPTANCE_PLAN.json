@@ -9,11 +9,16 @@
   "nativeNewMethods": 26,
   "newCompatibilityMethods": 2,
   "focusedClasses": [
+    "com.jarvys.agent.AgentMessagingPipelineTest",
     "com.jarvys.agent.CentralAvailabilityBoundaryAcceptanceTest",
     "com.jarvys.agent.CentralAvailabilityServiceTest",
+    "com.jarvys.agent.ConversationInputTrustContractTest",
+    "com.jarvys.agent.CoreAgentLoopTest",
+    "com.jarvys.agent.CoreInputIncorporationTest",
     "com.jarvys.agent.ProactiveCentralTest",
     "com.jarvys.agent.ProactiveNativeReplyContextCompatibilityTest",
     "com.jarvys.agent.ProactiveReplyIndependentOwnerRaceTest",
+    "com.jarvys.agent.ProactiveReplyIndependentRuntimeContextTest",
     "com.jarvys.agent.ProactiveReplyNativeAcceptanceTest",
     "com.jarvys.agent.ProactiveReplyNativeBoundaryComposeTest",
     "com.jarvys.agent.ProactiveReplyNativeCombinationTest",
@@ -57,6 +62,7 @@
     "com.jarvys.agent.ContinuationGenerationReceiptTest",
     "com.jarvys.agent.ContinuationServiceRunTest",
     "com.jarvys.agent.ContinuousMissionServiceTest",
+    "com.jarvys.agent.ConversationInputTrustContractTest",
     "com.jarvys.agent.CoordinationRefEncodingCompatibilityTest",
     "com.jarvys.agent.CoreAgentLoopArchitectureTest",
     "com.jarvys.agent.CoreAgentLoopBatchSemanticsTest",
@@ -115,6 +121,7 @@
     "com.jarvys.agent.ProactiveCentralTest",
     "com.jarvys.agent.ProactiveNativeReplyContextCompatibilityTest",
     "com.jarvys.agent.ProactiveReplyIndependentOwnerRaceTest",
+    "com.jarvys.agent.ProactiveReplyIndependentRuntimeContextTest",
     "com.jarvys.agent.ProactiveReplyNativeAcceptanceTest",
     "com.jarvys.agent.ProactiveReplyNativeBoundaryComposeTest",
     "com.jarvys.agent.ProactiveReplyNativeCombinationTest",
@@ -207,5 +214,6 @@
   "historicalResultsNotReused": true,
   "typedRenderedRecoveryMethods": 2,
   "nativeNoticeProtectionMethods": 11,
-  "finalConservationRequirement": "Rerun all retained27 D3 methods on final ON bytes; historical OFF PASS is source-specific."
+  "finalConservationRequirement": "Rerun all retained27 D3 methods on final ON bytes; historical OFF PASS is source-specific.",
+  "independentRuntimeWarningMethods": 1
 }
