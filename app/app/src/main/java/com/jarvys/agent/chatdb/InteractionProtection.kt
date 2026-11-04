@@ -1,5 +1,6 @@
 package com.jarvys.agent.chatdb
 
+import android.database.Cursor
 import com.jarvys.agent.ConversationTurn
 import org.json.JSONArray
 import org.json.JSONObject
@@ -44,10 +45,13 @@ internal class InteractionProtection(private val database: JarvysChatDatabase) {
         var uncertain: Boolean = false)
     fun read(conversation: String): InteractionProtectionSnapshot {
         val evidence = JSONArray()
+        val central = conversation == com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
         fun rows(table: String): List<Map<String, String?>> {
             val columns = when(table) {
-                "conversation_items" -> "seq,sort_seq,sort_sub,item_kind,item_key"
-                "messages" -> "message_id,seq,message_index,role,status,run_id,owner_user_message_id,hidden_kind,hidden_seq,input_state,input_state_seq,updated_at"
+                "conversation_items" -> if (central) "seq,sort_seq,sort_sub,item_kind,item_key,turn_anchor_seq"
+                    else "seq,sort_seq,sort_sub,item_kind,item_key"
+                "messages" -> if (central) "message_id,stable_id,seq,message_index,role,status,run_id,owner_user_message_id,hidden_kind,hidden_seq,input_state,input_state_seq,updated_at,proactive_decision_id,proactive_thread_key,proactive_reply_to_message_id,interrupt_request_id,ack_required,duration_ms,before_message_id,suggested_replies_consumed_seq,translation_hidden_seq"
+                    else "message_id,seq,message_index,role,status,run_id,owner_user_message_id,hidden_kind,hidden_seq,input_state,input_state_seq,updated_at"
                 "tool_batches" -> "batch_id,seq,owner_user_message_id,message_index,last_activity_seq,calls_decode_error"
                 "tool_calls" -> "batch_id,call_id,ordinal,name,lifecycle,lifecycle_seq"
                 "tool_results" -> "batch_id,call_id,seq,tool_name,lifecycle,file_artifact_id"
@@ -86,7 +90,7 @@ internal class InteractionProtection(private val database: JarvysChatDatabase) {
                 evidence.put(JSONArray().put("mission_card_membership").put(c.getString(0)).put(c.getInt(1)).put(c.getString(2)))
             }
         } }
-        val messages = rows("messages").filterNot { it["role"] == "assistant" && it["message_id"] in missionCards }
+        val messages = rows("messages").filterNot { it["role"] == "assistant" && it["message_id"] in missionCards && (!central || it["proactive_decision_id"] == null) }
         val groups = linkedMapOf<String,Group>()
         var unsafe = false
         for (row in messages.filter { it["role"] in setOf("user", "agent", "system") }) {
@@ -136,11 +140,96 @@ internal class InteractionProtection(private val database: JarvysChatDatabase) {
                 .put(sourceDigest).put(JSONArray(targetPosition)).put(JSONArray(userPosition)))
             return Group(false,position(user["seq"]),uncertain=true)
         }
+        // Native notices/tasks are standalone assistant data, not missing USER interactions.
+        // Recognize only the exact existing writer shape. The group keeps its real position and
+        // remains nonhuman/uncertain/protected; this never grants P4 acceptance or execution.
+        fun nativeStandaloneNotice(row:Map<String,String?>):Group? {
+            if(!central || row["proactive_decision_id"]==null)return null
+            val id=row["message_id"] ?: return null
+            val args=arrayOf(conversation,id)
+            val exact=mutableListOf<String?>("jarvys-native-standalone-notice-protection-v1",conversation)
+            val metadata=sql.query("SELECT message_id,stable_id,seq,message_index,role,status,run_id,owner_user_message_id,duration_ms,before_message_id,"+
+                "proactive_thread_key,proactive_reply_to_message_id,proactive_decision_id,interrupt_request_id,ack_required,input_state,input_state_seq,"+
+                "hidden_kind,hidden_seq,suggested_replies_consumed_seq,translation_hidden_seq FROM messages WHERE conversation_id=? AND message_id=?",args).use { c ->
+                if(!c.moveToFirst())return null
+                if(listOf(0,1,4,5,12).any {c.getType(it)!=Cursor.FIELD_TYPE_STRING} ||
+                    listOf(2,3,14).any {c.getType(it)!=Cursor.FIELD_TYPE_INTEGER})return null
+                if(c.getString(0)!=id || c.getString(1)!=id ||
+                    !runCatching {java.util.UUID.fromString(id).toString()==id}.getOrDefault(false) ||
+                    c.getString(4)!="assistant" || c.getString(5)!="COMPLETED" || c.getString(12).isBlank() ||
+                    c.getLong(2)<=0 || c.getLong(3)<0 || c.getLong(14)!=0L)return null
+                if(listOf(6,7,8,9,11,13,15,16).any {!c.isNull(it)})return null
+                // Historical native writes allow every nullable String. P4 admission separately
+                // requires a nonblank thread; read classification does not mint that authority.
+                if(!c.isNull(10) && c.getType(10)!=Cursor.FIELD_TYPE_STRING)return null
+                if(!c.isNull(17) && c.getType(17)!=Cursor.FIELD_TYPE_STRING)return null
+                if(listOf(18,19,20).any {!c.isNull(it) && c.getType(it)!=Cursor.FIELD_TYPE_INTEGER})return null
+                val value=(0 until c.columnCount).map {if(c.isNull(it))null else c.getString(it)}
+                if(c.moveToNext())return null
+                exact.addAll(value);value
+            }
+            val seq=metadata[2]!!.toLong()
+            val ownPosition=sql.query("SELECT seq,sort_seq,sort_sub,item_kind,item_key,turn_anchor_seq FROM conversation_items WHERE conversation_id=? AND seq=?",
+                arrayOf(conversation,seq)).use { c ->
+                if(!c.moveToFirst() || listOf(0,1,2).any {c.getType(it)!=Cursor.FIELD_TYPE_INTEGER} ||
+                    listOf(3,4).any {c.getType(it)!=Cursor.FIELD_TYPE_STRING})return null
+                val sub=c.getLong(2)
+                if(c.getLong(0)!=seq || c.getLong(1)!=seq || sub<0 || sub>Int.MAX_VALUE ||
+                    c.getString(3)!="message" || c.getString(4)!=id ||
+                    !c.isNull(5) && c.getType(5)!=Cursor.FIELD_TYPE_INTEGER)return null
+                if(!c.isNull(5)) {
+                    val anchor=c.getLong(5)
+                    if(anchor<=0 || anchor>=seq || !sql.query("SELECT 1 FROM messages WHERE conversation_id=? AND seq=? AND role='user' AND interrupt_request_id IS NULL",
+                        arrayOf(conversation,anchor)).use {it.moveToFirst()})return null
+                }
+                exact.add("spine");for(i in 0 until c.columnCount)exact.add(if(c.isNull(i))null else c.getString(i))
+                if(c.moveToNext())return null
+                InteractionSourcePosition(seq,sub.toInt(),seq)
+            }
+            fun marker(value:String?,kind:String):Boolean {
+                if(value==null)return false
+                val markerSeq=value.toLongOrNull() ?: return false
+                if(markerSeq<=seq)return false
+                return sql.query("SELECT seq,sort_seq,sort_sub,item_kind,item_key FROM conversation_items WHERE conversation_id=? AND seq=?",
+                    arrayOf(conversation,markerSeq)).use { c ->
+                    c.moveToFirst() && listOf(0,1,2).all {c.getType(it)==Cursor.FIELD_TYPE_INTEGER} &&
+                        listOf(3,4).all {c.getType(it)==Cursor.FIELD_TYPE_STRING} && c.getLong(0)==markerSeq &&
+                        c.getLong(1)==markerSeq && c.getLong(2)==0L && c.getString(3)==kind && c.getString(4)==id && !c.moveToNext()
+                }
+            }
+            if(metadata[17]==null) {if(metadata[18]!=null)return null}
+            else if(metadata[17] !in setOf("assistant_deleted","assistant_regenerated") || !marker(metadata[18],metadata[17]!!))return null
+            if(metadata[19]!=null && !marker(metadata[19],"proactive_reply_used"))return null
+            if(metadata[20]!=null && !marker(metadata[20],"assistant_translation_hidden"))return null
+            sql.query("SELECT ordinal,kind,payload FROM message_parts WHERE conversation_id=? AND message_id=? ORDER BY ordinal",args).use { c ->
+                if(!c.moveToFirst() || c.getType(0)!=Cursor.FIELD_TYPE_INTEGER || c.getLong(0)!=0L ||
+                    c.getType(1)!=Cursor.FIELD_TYPE_STRING || c.getString(1)!=MessagePartKinds.TEXT || c.getType(2)!=Cursor.FIELD_TYPE_STRING)return null
+                exact.addAll(listOf("part",c.getLong(0).toString(),c.getString(1),c.getString(2)))
+                if(c.moveToNext())return null // No provenance, request, mission-card or other protocol part.
+            }
+            if(sql.query("SELECT 1 FROM message_attachments WHERE conversation_id=? AND message_id=? LIMIT 1",args).use {it.moveToFirst()})return null
+            sql.query("SELECT ordinal,label,text FROM proactive_suggested_replies WHERE conversation_id=? AND message_id=? ORDER BY ordinal",args).use { c ->
+                var ordinal=0L
+                while(c.moveToNext()) {
+                    if(c.getType(0)!=Cursor.FIELD_TYPE_INTEGER || c.getLong(0)!=ordinal ||
+                        c.getType(1)!=Cursor.FIELD_TYPE_STRING || c.getType(2)!=Cursor.FIELD_TYPE_STRING)return null
+                    exact.addAll(listOf("option",ordinal.toString(),c.getString(1),c.getString(2)));ordinal++
+                }
+            }
+            // Keep the existing outer projection format. Only this new evidence component uses
+            // exact UTF-16 framing, so NUL/unpaired surrogates cannot collapse through UTF-8.
+            evidence.put(JSONArray().put("native_standalone_notice").put(id)
+                .put(ProactiveReplyAcceptance.digestFields(*exact.toTypedArray())))
+            return Group(false,ownPosition,uncertain=true)
+        }
         for (row in messages) {
             val id = row["message_id"]
             if (id == null) { unsafe=true; continue }
             val role = row["role"]
-            val g = regeneratedOrphan(row)?.also { groups["regenerated:$id"]=it }
+            val notice=nativeStandaloneNotice(row)
+            if(central && row["proactive_decision_id"]!=null && notice==null)unsafe=true
+            val g = notice?.also {groups["native-notice:$id"]=it}
+                ?: regeneratedOrphan(row)?.also { groups["regenerated:$id"]=it }
                 ?: group(if(role in setOf("user","agent","system")) id else row["owner_user_message_id"])
             bind(g,ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE,conversation,id,null),row["seq"])
             if(role == "assistant") {

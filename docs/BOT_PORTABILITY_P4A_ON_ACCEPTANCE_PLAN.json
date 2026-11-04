@@ -23,6 +23,7 @@
     "com.jarvys.agent.canvas.ChatCanvasContractTest",
     "com.jarvys.agent.canvas.ChatCanvasResourceResolutionTest",
     "com.jarvys.agent.chatdb.CentralSubmissionPersistenceTest",
+    "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest",
     "com.jarvys.agent.chatdb.ProactiveReplyAcceptancePersistenceTest",
     "com.jarvys.agent.chatdb.ProactiveReplyBootstrapGenerationTest",
     "com.jarvys.agent.chatdb.ProactiveReplyIndependentD3DowngradeTest",
@@ -149,6 +150,7 @@
     "com.jarvys.agent.chatdb.LegacyRegenerationGenerationTest",
     "com.jarvys.agent.chatdb.NativeRegenerationReceiptTest",
     "com.jarvys.agent.chatdb.NativeRegenerationSourceCompatibilityTest",
+    "com.jarvys.agent.chatdb.NativeStandaloneNoticeProtectionTest",
     "com.jarvys.agent.chatdb.OrdinaryInterruptionWriterCompatibilityTest",
     "com.jarvys.agent.chatdb.ProactiveReplyAcceptancePersistenceTest",
     "com.jarvys.agent.chatdb.ProactiveReplyBootstrapGenerationTest",
@@ -203,5 +205,7 @@
   ],
   "historicalSelectorSource": "docs/V100_FINAL_VERSION_HOST_RESULTS.json",
   "historicalResultsNotReused": true,
-  "typedRenderedRecoveryMethods": 2
+  "typedRenderedRecoveryMethods": 2,
+  "nativeNoticeProtectionMethods": 11,
+  "finalConservationRequirement": "Rerun all retained27 D3 methods on final ON bytes; historical OFF PASS is source-specific."
 }
