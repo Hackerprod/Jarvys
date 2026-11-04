@@ -1,0 +1,857 @@
+--- a/app/app/src/main/assets/chat_canvas/canvas.js
++++ b/app/app/src/main/assets/chat_canvas/canvas.js
+@@ -210,7 +210,7 @@
+       addAction(actions, "Compartir", "share", event.seq);
+     }
+     if (event.replies && !event.repliesUsed) event.replies.forEach(function (reply, index) {
+-      addAction(actions, reply.label, "respond", event.seq, String(index));
++      addAction(actions, reply.label, "respond", event.seq, reply.selection || "");
+     });
+     if (actions.childNodes.length) article.appendChild(actions);
+     return article;
+--- a/app/app/src/main/java/com/jarvys/agent/AgentRunUiState.kt
++++ b/app/app/src/main/java/com/jarvys/agent/AgentRunUiState.kt
+@@ -98,6 +98,9 @@
+     /** Read-only exact row selection for native recovery; not part of model source or message parts. */
+     val centralAvailability:CentralAvailabilityDisplay? = null,
+  ) {
++    /** Process-local Canvas selection evidence, never persisted or used as model/admission authority. */
++    internal val proactiveSelectionToken: String by lazy { java.util.UUID.randomUUID().toString() }
++
+     /** Parsed once per immutable event instance; a data-class copy gets a fresh analysis. */
+     internal val visibilityDetailAnalysis: AgentRunUiEventVisibilityDetail by lazy {
+         AgentRunUiEventVisibilityDetail.parse(this)
+@@ -673,6 +676,14 @@
+             it.id==event.id && it.kind=="user" && event.kind=="user" && it.messageId==event.messageId
+                 && it.centralAvailability===event.centralAvailability
+         }
++    }
++
++    /** A reply callback owns this displayed event instance, not a caller-selected message ID. */
++    @JvmStatic
++    fun containsExactProactiveSelection(sessionId: String, event: AgentRunUiEvent, index: Int): Boolean = synchronized(lock) {
++        event.kind == "assistant" && event.messageId.isNotBlank() && !event.proactiveThreadKey.isNullOrBlank()
++            && !event.proactiveRepliesUsed && index in event.proactiveReplies.indices
++            && eventsForSession(sessionId).any { it === event }
+     }
+ 
+     @JvmStatic
+--- a/app/app/src/main/java/com/jarvys/agent/MainActivity.kt
++++ b/app/app/src/main/java/com/jarvys/agent/MainActivity.kt
+@@ -634,16 +634,28 @@
+                     onCancelTranslation = ::cancelAssistantTranslation,
+                     onHideTranslation = ::hideAssistantTranslation,
+                     onDeleteAssistant = ::deleteAssistantMessage,
+-                    onProactiveSuggestedReply = { messageId, index ->
+-                        lifecycleScope.launch {
+-                            val submittedResult = withContext(Dispatchers.IO) {
+-                                chatDatabaseResult {
+-                                    com.jarvys.agent.proactive.ProactiveInteractionDispatcher
+-                                        .submitSuggestedReply(this@MainActivity, messageId, index)
++                    onProactiveSuggestedReply = { event, index ->
++                        // Capture the actual displayed selection while this native callback is active.
++                        val interaction = com.jarvys.agent.ProactiveReplyAdmission
++                            .captureDisplayedOption(this@MainActivity, event, index)
++                        if (interaction == null) {
++                            toast(getString(R.string.proactive_suggested_reply_unavailable))
++                        } else {
++                            lifecycleScope.launch {
++                                try {
++                                    val submittedResult = withContext(Dispatchers.IO) {
++                                        chatDatabaseResult {
++                                            com.jarvys.agent.proactive.ProactiveInteractionDispatcher
++                                                .submitNativeReply(this@MainActivity, interaction)
++                                        }
++                                    }
++                                    if (!submittedResult.getOrDefault(false)) {
++                                        toast(getString(R.string.proactive_suggested_reply_unavailable))
++                                    }
++                                } finally {
++                                    interaction.close()
+                                 }
+-                            }
+-                            val submitted = submittedResult.getOrDefault(false)
+-                            if (!submitted) toast(getString(R.string.proactive_suggested_reply_unavailable))
++                            }.invokeOnCompletion { interaction.close() }
+                         }
+                     },
+                     onRegenerateAssistant = ::regenerateAssistantMessage,
+@@ -1581,7 +1593,7 @@
+     onCancelTranslation: (String) -> Unit,
+     onHideTranslation: (String) -> Unit,
+     onDeleteAssistant: (AgentRunUiEvent) -> Unit,
+-    onProactiveSuggestedReply: (String, Int) -> Unit,
++    onProactiveSuggestedReply: (AgentRunUiEvent, Int) -> Unit,
+     onRegenerateAssistant: (AgentRunUiEvent) -> Unit,
+     onSpeakAssistant: (String, String) -> Unit,
+     speakingMessageId: String?,
+@@ -2441,7 +2453,7 @@
+     onLoadOlderHistory: () -> Unit = {},
+     onRetryOlderHistory: () -> Unit = onLoadOlderHistory,
+     targetMessageId: String? = null,
+-    onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
++    onProactiveSuggestedReply: (AgentRunUiEvent, Int) -> Unit = { _, _ -> },
+     isRunning: Boolean,
+     emptyReport: String?,
+     connectorRegistry: ConnectorRegistry,
+--- a/app/app/src/main/java/com/jarvys/agent/canvas/ChatCanvasContract.kt
++++ b/app/app/src/main/java/com/jarvys/agent/canvas/ChatCanvasContract.kt
+@@ -91,8 +91,9 @@
+         }
+         value.put("decisionOptions", options)
+         val replies = JSONArray()
+-        if (allowProactiveReplies) event.proactiveReplies.forEach { reply ->
+-            replies.put(JSONObject().put("label", reply.label))
++        if (allowProactiveReplies) event.proactiveReplies.forEachIndexed { index, reply ->
++            replies.put(JSONObject().put("label", reply.label)
++                .put("selection", ChatCanvasProactiveReplySelection.encode(event, index).orEmpty()))
+         }
+         value.put("replies", replies)
+         return value
+@@ -152,8 +153,7 @@
+                 !event.generatedImagePath.isNullOrBlank() || event.attachments.isNotEmpty()
+             "resolve_decision" -> event.kind == "user_decision" && event.decisionStatus == "PENDING" &&
+                 (event.decisionOptions.any { it.id == value } || value == "dismiss" && event.decisionAllowDismiss)
+-            "respond" -> allowProactiveReplies && event.kind == "user" && !event.proactiveRepliesUsed &&
+-                value.toIntOrNull()?.let { it in event.proactiveReplies.indices } == true
++            "respond" -> allowProactiveReplies && ChatCanvasProactiveReplySelection.ordinal(event, value) != null
+             else -> false
+         }
+         return decision(allowed, "action is not allowed for this event")
+@@ -161,3 +161,21 @@
+ 
+     private fun decision(allowed: Boolean, reason: String) = ChatCanvasActionDecision(allowed, if (allowed) "allowed" else reason)
+ }
++
++/** Exact rendered option fence. A token or argument DTO alone never grants native admission. */
++internal object ChatCanvasProactiveReplySelection {
++    fun encode(event: AgentRunUiEvent, ordinal: Int): String? {
++        if (event.kind != "assistant" || event.messageId.isBlank() || event.proactiveThreadKey.isNullOrBlank()
++            || event.proactiveRepliesUsed || ordinal !in event.proactiveReplies.indices) return null
++        return "${event.proactiveSelectionToken}:$ordinal"
++    }
++
++    fun ordinal(event: AgentRunUiEvent, value: String): Int? {
++        val separator = value.lastIndexOf(':')
++        if (separator <= 0) return null
++        val rawOrdinal = value.substring(separator + 1)
++        val ordinal = rawOrdinal.toIntOrNull() ?: return null
++        if (rawOrdinal != ordinal.toString() || encode(event, ordinal) != value) return null
++        return ordinal
++    }
++}
+--- a/app/app/src/main/java/com/jarvys/agent/canvas/ChatCanvasWebView.kt
++++ b/app/app/src/main/java/com/jarvys/agent/canvas/ChatCanvasWebView.kt
+@@ -354,6 +354,7 @@
+         if (!decision.allowed) return
+         main.post {
+             val current = currentEvents().firstOrNull { it.id == seq } ?: return@post
++            if (action == "respond" && current !== event) return@post
+             val latest = currentEvents().lastOrNull { it.kind == "assistant" }?.messageId
+             if (!ChatCanvasActionPolicy.check(action, current, value, running(), latest, hasOlder(),
+                     allowRetry(), allowProactiveReplies()).allowed) return@post
+--- a/app/app/src/main/java/com/jarvys/agent/proactive/ProactiveNotifier.kt
++++ b/app/app/src/main/java/com/jarvys/agent/proactive/ProactiveNotifier.kt
+@@ -17,6 +17,11 @@
+ import androidx.core.graphics.drawable.IconCompat
+ import com.jarvys.agent.AppLanguageRuntime
+ import com.jarvys.agent.MainActivity
++import com.jarvys.agent.LocalRunStore
++import com.jarvys.agent.chatdb.ChatDatabaseBridge
++import com.jarvys.agent.chatdb.ProactiveReplyAcceptance
++import com.jarvys.agent.chatdb.StoredMessage
++import com.jarvys.agent.workspaces.WorkspaceIdentity
+ import com.jarvys.agent.R
+ 
+ object ProactiveNotificationPermission {
+@@ -34,6 +39,7 @@
+     private const val REMOTE_INPUT_KEY = ProactiveActionReceiver.EXTRA_INLINE_REPLY
+ 
+     /** Returns false when notification permission or app-level notifications are unavailable. */
++    @Suppress("UNUSED_PARAMETER") // Retained caller signature; action identity and content are re-read from Room below.
+     fun post(
+         context: Context,
+         threadKey: String,
+@@ -50,11 +56,15 @@
+             return false
+         }
+         return runCatching {
++            val bridge = ChatDatabaseBridge.getInstance(app)
++            val latest = bridge.captureLatestProactiveReplySourceSync(threadKey) ?: return false
++            val canonicalThread = LocalRunStore(app).readProactiveThreadMessages(WorkspaceIdentity.CENTRAL_SESSION, threadKey)
++            val notice = canonicalThread.lastOrNull { it.proactiveDecisionId != null }
+             ensureChannel(app, AppLanguageRuntime.localizedContext(app))
+             // The notice lives in Central: the intent only carries the anchor message to open it at.
+             val openChat = com.jarvys.agent.FreshStorageBootstrap.stamp(Intent(app, MainActivity::class.java))
+-                .putExtra(MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID, messageId)
+-                .setData(Uri.parse("jarvys://proactive/${ProactiveThreadKey.fingerprint(threadKey)}/${Uri.encode(messageId)}"))
++                .putExtra(MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID, latest.sourceMessageId)
++                .setData(Uri.parse("jarvys://proactive/${ProactiveThreadKey.fingerprint(threadKey)}/${Uri.encode(latest.sourceMessageId)}"))
+                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+             val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                 (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+@@ -71,7 +81,7 @@
+                 .setConversationTitle(app.getString(R.string.proactive_chat_title))
+                 .setGroupConversation(true)
+             val user = Person.Builder().setName(app.getString(R.string.proactive_user_person)).build()
+-            threadMessages.forEach { message ->
++            canonicalThread.map(StoredMessage::toThreadMessage).forEach { message ->
+                 val sender = if (message.fromAssistant) person else user
+                 style.addMessage(ProactiveTextSanitizer.sanitize(message.text), message.timestampMillis, sender)
+             }
+@@ -80,7 +90,7 @@
+             val builder = NotificationCompat.Builder(app, CHANNEL_ID)
+                 .setSmallIcon(android.R.drawable.ic_dialog_info)
+                 .setContentTitle(app.getString(R.string.proactive_chat_title))
+-                .setContentText(ProactiveTextSanitizer.sanitize(body))
++                .setContentText(ProactiveTextSanitizer.sanitize(latest.text))
+                 .setStyle(style)
+                 .setContentIntent(pendingIntent)
+                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+@@ -88,25 +98,26 @@
+                 .setAutoCancel(true)
+                 .setOnlyAlertOnce(true)
+             val actions = mutableListOf<NotificationCompat.Action>()
+-            if (!suggestedRepliesUsed && sourceMessageId.isNotBlank()) {
+-                suggestedReplies.take((MAX_PLATFORM_ACTION_BUTTONS - 1).coerceAtLeast(0)).forEachIndexed { index, reply ->
+-                    val actionIntent = com.jarvys.agent.FreshStorageBootstrap.stamp(Intent(app, ProactiveActionReceiver::class.java))
+-                        .setAction(ProactiveActionReceiver.ACTION_SUGGESTED_REPLY)
+-                        .putExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID, sourceMessageId)
+-                        .putExtra(ProactiveActionReceiver.EXTRA_REPLY_INDEX, index)
+-                        .setData(Uri.parse("jarvys://proactive/chip/${Uri.encode(sourceMessageId)}/$index"))
++            if (notice != null && notice.suggestedRepliesConsumedSeq == null) {
++                notice.suggestedReplies.take((MAX_PLATFORM_ACTION_BUTTONS - 1).coerceAtLeast(0)).forEachIndexed { index, _ ->
++                    val option = bridge.captureProactiveReplySourceSync(notice.messageId, "OPTION", index)
++                        ?: return@forEachIndexed
++                    val reply = option.suggestedReplies.getOrNull(index) ?: return@forEachIndexed
++                    val binding = ProactiveReplyNotificationIdentity.Binding(
++                        option.physicalGeneration, option.sourceMessageId, option.threadKey, "OPTION",
++                        ProactiveReplyAcceptance.actionId(option.physicalGeneration, WorkspaceIdentity.CENTRAL_SESSION,
++                            option.threadKey, option.sourceMessageId, "OPTION"), index, option.sourceFingerprint,
++                    )
+                     val actionPendingIntent = PendingIntent.getBroadcast(app, notificationId + index + 1,
+-                        actionIntent, pendingIntentFlags())
++                        ProactiveReplyNotificationIdentity.createIntent(app, binding), pendingIntentFlags())
+                     actions += NotificationCompat.Action.Builder(R.drawable.ic_jarvys, reply.label, actionPendingIntent).build()
+                 }
+             }
+-            val replyIntent = com.jarvys.agent.FreshStorageBootstrap.stamp(Intent(app, ProactiveActionReceiver::class.java))
+-                .setAction(ProactiveActionReceiver.ACTION_INLINE_REPLY)
+-                .putExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID, messageId)
+-                .putExtra(ProactiveActionReceiver.EXTRA_THREAD_TOKEN, ProactiveThreadKey.fingerprint(threadKey))
+-                .setData(Uri.parse("jarvys://proactive/reply/$notificationId"))
++            val inlineBinding = ProactiveReplyNotificationIdentity.Binding(
++                latest.physicalGeneration, latest.sourceMessageId, latest.threadKey, "INLINE", latest.inlineActionId, null, latest.sourceFingerprint,
++            )
+             val replyPendingIntent = PendingIntent.getBroadcast(app, notificationId,
+-                replyIntent, pendingIntentFlags())
++                ProactiveReplyNotificationIdentity.createIntent(app, inlineBinding), remoteInputPendingIntentFlags())
+             val remoteInput = RemoteInput.Builder(REMOTE_INPUT_KEY)
+                 .setLabel(app.getString(R.string.proactive_notification_reply_action)).build()
+             actions += NotificationCompat.Action.Builder(R.drawable.ic_jarvys,
+@@ -134,6 +145,10 @@
+     private fun pendingIntentFlags(): Int = PendingIntent.FLAG_UPDATE_CURRENT or
+         (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+ 
++    // RemoteInput must be fillable, but only this explicit broadcast PendingIntent is mutable.
++    private fun remoteInputPendingIntentFlags(): Int = PendingIntent.FLAG_UPDATE_CURRENT or
++        (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
++
+     private fun ensureChannel(context: Context, localizedContext: Context) {
+         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+         val manager = context.getSystemService(NotificationManager::class.java) ?: return
+--- /dev/null
++++ b/app/app/src/main/java/com/jarvys/agent/proactive/ProactiveReplyNotificationIdentity.kt
+@@ -0,0 +1,103 @@
++package com.jarvys.agent.proactive
++
++import android.content.ComponentName
++import android.content.Context
++import android.content.Intent
++import android.net.Uri
++import com.jarvys.agent.FreshStorageBootstrap
++import com.jarvys.agent.chatdb.ProactiveReplyAcceptance
++import com.jarvys.agent.workspaces.WorkspaceIdentity
++
++/** Data-only notification binding. Neither constructing nor decoding it grants native reply authority. */
++object ProactiveReplyNotificationIdentity {
++    const val EXTRA_PHYSICAL_GENERATION = "proactive_physical_generation"
++    const val EXTRA_THREAD_KEY = "proactive_thread_key"
++    const val EXTRA_ACTION_KIND = "proactive_action_kind"
++    const val EXTRA_ACTION_ID = "proactive_action_id"
++    const val EXTRA_SOURCE_FINGERPRINT = "proactive_source_fingerprint"
++
++    data class Binding(
++        val physicalGeneration: String,
++        val sourceMessageId: String,
++        val threadKey: String,
++        val actionKind: String,
++        val actionId: String,
++        val selectedOrdinal: Int?,
++        val sourceFingerprint: String,
++    )
++
++    fun createIntent(context: Context, binding: Binding): Intent {
++        require(validBinding(binding)) { "Invalid proactive notification binding" }
++        return FreshStorageBootstrap.stamp(Intent(context, ProactiveActionReceiver::class.java))
++            .setAction(actionFor(binding.actionKind))
++            .setData(dataUri(binding))
++            .putExtra(EXTRA_PHYSICAL_GENERATION, binding.physicalGeneration)
++            .putExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID, binding.sourceMessageId)
++            .putExtra(EXTRA_THREAD_KEY, binding.threadKey)
++            .putExtra(ProactiveActionReceiver.EXTRA_THREAD_TOKEN, ProactiveThreadKey.fingerprint(binding.threadKey))
++            .putExtra(EXTRA_ACTION_KIND, binding.actionKind)
++            .putExtra(EXTRA_ACTION_ID, binding.actionId)
++            .putExtra(EXTRA_SOURCE_FINGERPRINT, binding.sourceFingerprint)
++            .also { intent -> binding.selectedOrdinal?.let { intent.putExtra(ProactiveActionReceiver.EXTRA_REPLY_INDEX, it) } }
++    }
++
++    /** Current explicit URI and extras must agree exactly; canonical Room generation/source checks follow at admission. */
++    fun readValidated(context: Context, intent: Intent): Binding? = runCatching {
++        if (!FreshStorageBootstrap.isCurrent(intent)
++            || intent.component != ComponentName(context, ProactiveActionReceiver::class.java)) return null
++        val kind = intent.getStringExtra(EXTRA_ACTION_KIND) ?: return null
++        val ordinal = when (kind) {
++            "OPTION" -> {
++                if (!intent.hasExtra(ProactiveActionReceiver.EXTRA_REPLY_INDEX)) return null
++                intent.getIntExtra(ProactiveActionReceiver.EXTRA_REPLY_INDEX, -1)
++            }
++            "INLINE" -> {
++                if (intent.hasExtra(ProactiveActionReceiver.EXTRA_REPLY_INDEX)) return null
++                null
++            }
++            else -> return null
++        }
++        val binding = Binding(
++            physicalGeneration = intent.getStringExtra(EXTRA_PHYSICAL_GENERATION) ?: return null,
++            sourceMessageId = intent.getStringExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID) ?: return null,
++            threadKey = intent.getStringExtra(EXTRA_THREAD_KEY) ?: return null,
++            actionKind = kind,
++            actionId = intent.getStringExtra(EXTRA_ACTION_ID) ?: return null,
++            selectedOrdinal = ordinal,
++            sourceFingerprint = intent.getStringExtra(EXTRA_SOURCE_FINGERPRINT) ?: return null,
++        )
++        if (!validBinding(binding) || intent.action != actionFor(kind) || intent.data != dataUri(binding)
++            || intent.getStringExtra(ProactiveActionReceiver.EXTRA_THREAD_TOKEN) != ProactiveThreadKey.fingerprint(binding.threadKey)) {
++            return null
++        }
++        binding
++    }.getOrNull()
++
++    private fun validBinding(binding: Binding): Boolean =
++        binding.physicalGeneration.isNotBlank() && binding.sourceMessageId.isNotBlank() && binding.threadKey.isNotBlank()
++            && binding.sourceFingerprint.isNotBlank()
++            && when (binding.actionKind) {
++                "OPTION" -> binding.selectedOrdinal != null && binding.selectedOrdinal >= 0
++                "INLINE" -> binding.selectedOrdinal == null
++                else -> false
++            }
++            && binding.actionId == ProactiveReplyAcceptance.actionId(
++                binding.physicalGeneration, WorkspaceIdentity.CENTRAL_SESSION, binding.threadKey,
++                binding.sourceMessageId, binding.actionKind,
++            )
++
++    private fun actionFor(kind: String): String = when (kind) {
++        "OPTION" -> ProactiveActionReceiver.ACTION_SUGGESTED_REPLY
++        "INLINE" -> ProactiveActionReceiver.ACTION_INLINE_REPLY
++        else -> error("Unknown proactive notification action")
++    }
++
++    /** Full identity is in data, so FLAG_UPDATE_CURRENT cannot retarget an older source's handle. */
++    private fun dataUri(binding: Binding): Uri = Uri.Builder()
++        .scheme("jarvys").authority("proactive-native").appendPath("v1")
++        .appendPath(binding.physicalGeneration).appendPath(WorkspaceIdentity.CENTRAL_SESSION)
++        .appendPath(binding.threadKey).appendPath(binding.sourceMessageId)
++        .appendPath(binding.actionKind).appendPath(binding.actionId).appendPath(binding.sourceFingerprint)
++        .appendPath(binding.selectedOrdinal?.toString() ?: "inline")
++        .build()
++}
+--- a/app/app/src/main/java/com/jarvys/agent/ui/chat/ConversationTimeline.kt
++++ b/app/app/src/main/java/com/jarvys/agent/ui/chat/ConversationTimeline.kt
+@@ -160,7 +160,7 @@
+     onOpenPreview: (String) -> Unit,
+     onOpenSkillFile: (SkillFileLink) -> Unit,
+     targetMessageId: String? = null,
+-    onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
++    onProactiveSuggestedReply: (AgentRunUiEvent, Int) -> Unit = { _, _ -> },
+     onUndoMemoryRevision: (Long) -> Unit = {},
+     onUndoReflectionGroup: (String) -> Unit = {},
+     onTranslateAssistant: (AgentRunUiEvent, String) -> Unit = { _, _ -> },
+@@ -225,7 +225,8 @@
+                     }
+                     "download", "share" -> canvasTransfer(context, generatedImageSessionId, event, action == "share")
+                     "resolve_decision" -> resolveCanvasDecision(event, value)
+-                    "respond" -> value.toIntOrNull()?.let { index -> onProactiveSuggestedReply(event.messageId, index) }
++                    "respond" -> com.jarvys.agent.canvas.ChatCanvasProactiveReplySelection.ordinal(event, value)
++                        ?.let { index -> onProactiveSuggestedReply(event, index) }
+                 }
+             }, requestOlder = onLoadOlderHistory),
+             modifier = modifier.fillMaxSize(),
+@@ -467,7 +468,7 @@
+     onOpenScheduledTask: (com.jarvys.agent.ScheduledTaskArtifact) -> Unit = {},
+     onSaveGeneratedImage: (AgentRunUiEvent) -> Unit = {},
+     onShareGeneratedImage: (AgentRunUiEvent) -> Unit = {},
+-    onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
++    onProactiveSuggestedReply: (AgentRunUiEvent, Int) -> Unit = { _, _ -> },
+     animateEntry: Boolean = false,
+     isGeneratingAnswer: Boolean = false,
+     assistantReplyCapabilities: AssistantReplyCapabilities = AssistantReplyCapabilities(),
+@@ -613,7 +614,7 @@
+     translationErrorMessageId: String? = null,
+     translationError: String? = null,
+     streamActive: Boolean = false,
+-    onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
++    onProactiveSuggestedReply: (AgentRunUiEvent, Int) -> Unit = { _, _ -> },
+     isGeneratingAnswer: Boolean = streamActive,
+     capabilities: AssistantReplyCapabilities = AssistantReplyCapabilities(),
+     workspaceSenderLabel: String? = null,
+@@ -747,11 +748,11 @@
+ }
+ 
+ @Composable
+-private fun SuggestedReplyActions(event: AgentRunUiEvent, onSelect: (String, Int) -> Unit, enabled: Boolean) {
++private fun SuggestedReplyActions(event: AgentRunUiEvent, onSelect: (AgentRunUiEvent, Int) -> Unit, enabled: Boolean) {
+     FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(5.dp),
+         modifier = Modifier.fillMaxWidth().padding(top = 7.dp)) {
+         event.proactiveReplies.forEachIndexed { index, reply ->
+-            AssistChip(onClick = { if (!event.proactiveRepliesUsed && enabled) onSelect(event.messageId, index) },
++            AssistChip(onClick = { if (!event.proactiveRepliesUsed && enabled) onSelect(event, index) },
+                 enabled = !event.proactiveRepliesUsed && enabled,
+                 label = { Text(if (event.proactiveRepliesUsed) "${reply.label} · ${stringResource(R.string.proactive_suggested_reply_used)}" else reply.label) })
+         }
+--- a/app/app/src/test/java/com/jarvys/agent/ProactiveCentralTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/ProactiveCentralTest.kt
+@@ -136,14 +136,16 @@
+         org.robolectric.Shadows.shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+         val manager = context.getSystemService(android.app.NotificationManager::class.java)
+         manager.cancelAll()
+-        assertTrue(com.jarvys.agent.proactive.ProactiveNotifier.post(context, "anchor-thread", "notice-77", "Body", "normal",
+-            emptyList(), "notice-77", emptyList(), false))
++        val noticeId = LocalRunStore(context).appendProactiveAssistantMessageIfAbsent(
++            central, "anchor-notice", "Body", emptyList(), "anchor-thread")
++        assertTrue(com.jarvys.agent.proactive.ProactiveNotifier.post(context, "anchor-thread", noticeId, "Body", "normal",
++            emptyList(), noticeId, emptyList(), false))
+         val posted = org.robolectric.Shadows.shadowOf(manager).allNotifications.single()
+         val open = org.robolectric.Shadows.shadowOf(posted.contentIntent).savedIntent
+-        assertEquals("notice-77", open.getStringExtra(MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID))
++        assertEquals(noticeId, open.getStringExtra(MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID))
+         assertFalse(open.hasExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION))
+         val reply = org.robolectric.Shadows.shadowOf(posted.actions.last().actionIntent).savedIntent
+-        assertEquals("notice-77", reply.getStringExtra(com.jarvys.agent.proactive.ProactiveActionReceiver.EXTRA_MESSAGE_ID))
++        assertEquals(noticeId, reply.getStringExtra(com.jarvys.agent.proactive.ProactiveActionReceiver.EXTRA_MESSAGE_ID))
+     }
+ 
+     @Test fun B8_aTaskResultIsRecoveredWithTheTaskAndOccurrenceAsSource() {
+--- /dev/null
++++ b/app/app/src/test/java/com/jarvys/agent/ProactiveReplyUiSelectionTest.kt
+@@ -0,0 +1,39 @@
++package com.jarvys.agent
++
++import com.jarvys.agent.proactive.ProactiveSuggestedReply
++import com.jarvys.agent.workspaces.WorkspaceIdentity
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertTrue
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.annotation.Config
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [34])
++class ProactiveReplyUiSelectionTest {
++    @get:org.junit.Rule val chatTestStore = ChatTestStore()
++
++    @Test fun onlyTheCurrentDisplayedInstanceAndValidUnusedOptionAreSelectable() {
++        val session = WorkspaceIdentity.CENTRAL_SESSION
++        val displayed = AgentRunUiEvent.proactiveMessageEvent(1L, "assistant", "Notice", 1L,
++            "notice-id", "thread", listOf(ProactiveSuggestedReply("Yes", "Yes please")), false)
++        AgentRunUiState.restoreSession(session, listOf(displayed))
++        try {
++            assertTrue(AgentRunUiState.containsExactProactiveSelection(session, displayed, 0))
++            assertFalse(AgentRunUiState.containsExactProactiveSelection(session, displayed.copy(), 0))
++            assertFalse(AgentRunUiState.containsExactProactiveSelection(session, displayed, -1))
++            assertFalse(AgentRunUiState.containsExactProactiveSelection(session, displayed, 1))
++            assertFalse(AgentRunUiState.containsExactProactiveSelection("another-session", displayed, 0))
++            val replacement = displayed.copy(text = "New displayed revision")
++            AgentRunUiState.restoreSession(session, listOf(replacement))
++            assertFalse(AgentRunUiState.containsExactProactiveSelection(session, displayed, 0))
++            assertTrue(AgentRunUiState.containsExactProactiveSelection(session, replacement, 0))
++            val consumed = replacement.copy(proactiveRepliesUsed = true)
++            AgentRunUiState.restoreSession(session, listOf(consumed))
++            assertFalse(AgentRunUiState.containsExactProactiveSelection(session, consumed, 0))
++        } finally {
++            AgentRunUiState.resetSession(session)
++        }
++    }
++}
+--- a/app/app/src/test/java/com/jarvys/agent/ProactiveSuggestedRepliesComposeTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/ProactiveSuggestedRepliesComposeTest.kt
+@@ -25,6 +25,7 @@
+ import java.util.Locale
+ import org.junit.Assert.assertEquals
+ import org.junit.Assert.assertTrue
++import org.junit.Assert.assertSame
+ import org.junit.Rule
+ import org.junit.Test
+ import org.junit.runner.RunWith
+@@ -43,6 +44,7 @@
+         val scale = mutableStateOf(1f)
+         val message = mutableStateOf(event("en"))
+         var selected: Pair<String, Int>? = null
++        var selectedEvent: AgentRunUiEvent? = null
+         val registry = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+             override fun isConnected(id: String) = false
+             override fun setConnected(id: String, connected: Boolean) = Unit
+@@ -70,8 +72,9 @@
+                             connectorRegistry = registry,
+                             onOpenPreview = {},
+                             onOpenSkillFile = {},
+-                            onProactiveSuggestedReply = { id, index ->
+-                                selected = id to index
++                            onProactiveSuggestedReply = { displayed, index ->
++                                selectedEvent = displayed
++                                selected = displayed.messageId to index
+                                 message.value = message.value.copy(proactiveRepliesUsed = true)
+                             },
+                         )
+@@ -96,9 +99,11 @@
+                     assertTrue("chip bounds overlap at locale=$locale scale=$fontScale: $a / $b",
+                         a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top)
+                 }
++                val displayed = message.value
+                 compose.onNodeWithText(labels.first()).performClick()
+                 compose.waitForIdle()
+                 assertEquals(message.value.messageId to 0, selected)
++                assertSame(displayed, selectedEvent)
+                 val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply {
+                     setLocale(Locale(locale))
+                 })
+--- a/app/app/src/test/java/com/jarvys/agent/canvas/ChatCanvasContractTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/canvas/ChatCanvasContractTest.kt
+@@ -45,20 +45,27 @@
+         val transferable = user.copy(attachments = listOf(ChatAttachment(
+             attachmentId, "report.txt", "text/plain", 12, ChatAttachment.Kind.FILE, "$attachmentId-report.txt",
+         )))
+-        val suggested = user.copy(proactiveReplies = listOf(ProactiveSuggestedReply("Sí", "sí")))
++        val suggested = latest.copy(proactiveThreadKey = "thread",
++            proactiveReplies = listOf(ProactiveSuggestedReply("Sí", "sí")))
++        val selection = requireNotNull(ChatCanvasProactiveReplySelection.encode(suggested, 0))
+ 
+         assertTrue(allowed("copy", user))
+         assertFalse(allowed("copy", tool))
+         assertTrue(allowed("open_viewer", previewTool))
+         assertTrue(allowed("download", transferable))
+         assertTrue(allowed("share", transferable))
+-        assertTrue(allowed("respond", suggested, value = "0"))
+-        assertFalse(allowed("respond", suggested, value = "0", allowProactiveReplies = false))
++        assertTrue(allowed("respond", suggested, value = selection))
++        assertFalse(allowed("respond", suggested, value = selection, allowProactiveReplies = false))
+         val workspaceReply = ChatCanvasEventSerializer.page(context, listOf(suggested), running = false,
+             allowProactiveReplies = false).getJSONArray("events").getJSONObject(0)
+         assertEquals(0, workspaceReply.getJSONArray("replies").length())
+         assertFalse(allowed("respond", suggested, value = "1"))
+-        assertFalse(allowed("respond", suggested.copy(proactiveRepliesUsed = true), value = "0"))
++        assertFalse(allowed("respond", suggested.copy(), value = selection))
++        assertFalse(allowed("respond", suggested.copy(kind = "user"), value = selection))
++        assertFalse(allowed("respond", suggested, value = selection.substringBeforeLast(':') + ":00"))
++        assertFalse(allowed("respond", suggested, value = selection.substringBeforeLast(':') + ":+0"))
++        assertFalse(allowed("respond", suggested, value = selection + ":0"))
++        assertFalse(allowed("respond", suggested.copy(proactiveRepliesUsed = true), value = selection))
+         assertTrue(allowed("retry", latest, latestAssistant = "m-11"))
+         assertFalse(allowed("retry", latest, latestAssistant = "m-11", allowRetry = false))
+         assertFalse(allowed("retry", latest, running = true, latestAssistant = "m-11"))
+--- a/app/app/src/test/java/com/jarvys/agent/canvas/ChatCanvasResourceResolutionTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/canvas/ChatCanvasResourceResolutionTest.kt
+@@ -98,6 +98,58 @@
+         assertTrue("Dispatch callback runs on the main thread", callbackOnMain)
+     }
+ 
++    @Test
++    fun proactiveRespondUsesTheActualRenderedAssistantAndRejectsSameSeqRetargeting() {
++        val context: android.content.Context = androidx.test.core.app.ApplicationProvider.getApplicationContext()
++        val original = AgentRunUiEvent.proactiveMessageEvent(41, "assistant", "Canonical notice", 1,
++            "notice-41", "thread-41", listOf(com.jarvys.agent.proactive.ProactiveSuggestedReply("Yes", "Yes please")), false)
++        var currentEvents = listOf(original)
++        val received = mutableListOf<AgentRunUiEvent>()
++        val ordinals = mutableListOf<Int>()
++        val bridge = ChatCanvasNativeBridge(
++            sessionId = "central", currentEvents = { currentEvents }, running = { false },
++            allowRetry = { true }, hasOlder = { false }, loadingOlder = { false }, benchmarkStartedAtNanos = null,
++            callbacks = ChatCanvasCallbacks(action = { action, selected, value ->
++                assertEquals("respond", action)
++                assertTrue(Looper.myLooper() == Looper.getMainLooper())
++                received += selected
++                ordinals += requireNotNull(ChatCanvasProactiveReplySelection.ordinal(selected, value))
++            }),
++        )
++        fun renderedSelection(event: AgentRunUiEvent) = ChatCanvasEventSerializer.page(context, listOf(event), false)
++            .getJSONArray("events").getJSONObject(0).getJSONArray("replies").getJSONObject(0).getString("selection")
++        val displayedSelection = renderedSelection(original)
++        assertFalse(displayedSelection.isEmpty())
++        bridge.dispatch("respond", original.id, displayedSelection)
++        shadowOf(Looper.getMainLooper()).idle()
++        assertEquals(listOf(0), ordinals)
++        org.junit.Assert.assertSame(original, received.single())
++
++        // Even an equal copied event with the same seq, message ID and options is a new display instance.
++        currentEvents = listOf(original.copy())
++        bridge.dispatch("respond", original.id, displayedSelection)
++        shadowOf(Looper.getMainLooper()).idle()
++        assertEquals(1, received.size)
++
++        currentEvents = listOf(original)
++        bridge.dispatch("respond", original.id, displayedSelection)
++        currentEvents = listOf(original.copy(proactiveReplies = listOf(
++            com.jarvys.agent.proactive.ProactiveSuggestedReply("Changed", "Different action"))))
++        shadowOf(Looper.getMainLooper()).idle()
++        assertEquals("A queued callback may not retarget a changed option", 1, received.size)
++
++        val fresh = currentEvents.single()
++        bridge.dispatch("respond", fresh.id, renderedSelection(fresh))
++        shadowOf(Looper.getMainLooper()).idle()
++        assertEquals(2, received.size)
++        org.junit.Assert.assertSame(fresh, received.last())
++        listOf("0", "-1", displayedSelection + ":0", displayedSelection.substringBeforeLast(':') + ":00").forEach {
++            bridge.dispatch("respond", fresh.id, it)
++        }
++        shadowOf(Looper.getMainLooper()).idle()
++        assertEquals(2, received.size)
++    }
++
+     private fun imageAttachment(): ChatAttachment {
+         val id = UUID.randomUUID().toString()
+         return ChatAttachment(id, "image.png", "image/png", 1, ChatAttachment.Kind.IMAGE, "$id-image.png")
+--- /dev/null
++++ b/app/app/src/test/java/com/jarvys/agent/proactive/ProactiveNotifierCanonicalSourceTest.kt
+@@ -0,0 +1,112 @@
++package com.jarvys.agent.proactive
++
++import android.Manifest
++import android.app.Notification
++import android.app.NotificationManager
++import android.content.Context
++import androidx.test.core.app.ApplicationProvider
++import com.jarvys.agent.ChatTestStore
++import com.jarvys.agent.LocalRunStore
++import com.jarvys.agent.MainActivity
++import com.jarvys.agent.workspaces.WorkspaceIdentity
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertNotEquals
++import org.junit.Assert.assertNotNull
++import org.junit.Assert.assertTrue
++import org.junit.Rule
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.Shadows.shadowOf
++import org.robolectric.annotation.Config
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [34])
++class ProactiveNotifierCanonicalSourceTest {
++    @get:Rule val chatTestStore = ChatTestStore(registerApplicationFilesDirectory = true)
++    private val context: Context get() = ApplicationProvider.getApplicationContext()
++    private val central = WorkspaceIdentity.CENTRAL_SESSION
++    private val thread = "native-notification-thread"
++
++    @Test fun onlyRemoteInputIsMutableAndEveryActionHasExactSourceBinding() {
++        shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
++        val store = LocalRunStore(context)
++        val noticeId = store.appendProactiveAssistantMessageIfAbsent(central, "notice", "Canonical notice",
++            listOf(ProactiveSuggestedReply("Yes", "Yes please"), ProactiveSuggestedReply("No", "No thanks")), thread)
++        assertTrue(postCached(noticeId))
++        val notification = notification()
++        assertTrue(shadowOf(notification.contentIntent).isImmutable)
++        assertEquals(3, notification.actions.size)
++        notification.actions.take(2).forEachIndexed { ordinal, action ->
++            assertTrue(shadowOf(action.actionIntent).isImmutable)
++            val binding = ProactiveReplyNotificationIdentity.readValidated(context, shadowOf(action.actionIntent).savedIntent)
++            assertNotNull(binding)
++            assertEquals(noticeId, binding!!.sourceMessageId)
++            assertEquals("OPTION", binding.actionKind)
++            assertEquals(ordinal, binding.selectedOrdinal)
++        }
++        val inline = notification.actions.last()
++        assertFalse(shadowOf(inline.actionIntent).isImmutable)
++        assertEquals(ProactiveActionReceiver.EXTRA_INLINE_REPLY, inline.remoteInputs.single().resultKey)
++        val binding = ProactiveReplyNotificationIdentity.readValidated(context, shadowOf(inline.actionIntent).savedIntent)
++        assertNotNull(binding)
++        assertEquals("INLINE", binding!!.actionKind)
++        assertEquals(noticeId, binding.sourceMessageId)
++    }
++
++    @Test @Config(sdk = [30])
++    fun preAndroidTwelveRemoteInputRemainsFillableWhileOpenAndChipsAreImmutable() {
++        val store = LocalRunStore(context)
++        val notice = store.appendProactiveAssistantMessageIfAbsent(central, "pre-s", "Notice",
++            listOf(ProactiveSuggestedReply("Yes", "Yes")), thread)
++        assertTrue(postCached(notice))
++        val notification = notification()
++        assertTrue(shadowOf(notification.contentIntent).isImmutable)
++        assertTrue(shadowOf(notification.actions.first().actionIntent).isImmutable)
++        assertFalse(shadowOf(notification.actions.last().actionIntent).isImmutable)
++    }
++
++    @Test fun unchangedSourceKeepsIdentityAndRefreshUsesCanonicalUserInsteadOfCachedAssistant() {
++        shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
++        val store = LocalRunStore(context)
++        val noticeId = store.appendProactiveAssistantMessageIfAbsent(central, "notice", "Original notice", emptyList(), thread)
++        assertTrue(postCached(noticeId))
++        val originalHandle = notification().actions.last().actionIntent
++        val originalIntent = shadowOf(originalHandle).savedIntent
++        val original = requireNotNull(ProactiveReplyNotificationIdentity.readValidated(context, originalIntent))
++        assertTrue(postCached(noticeId))
++        assertEquals(originalHandle, notification().actions.last().actionIntent)
++        assertEquals(original, ProactiveReplyNotificationIdentity.readValidated(context,
++            shadowOf(notification().actions.last().actionIntent).savedIntent))
++
++        // This is a notification-source test, not evidence of composite acceptance or a provider run.
++        val userId = store.appendProactiveUserMessage(central, "Intentional same reply", thread, null)
++        assertTrue(ProactiveNotifier.refreshThread(context, thread, noticeId, "Stale cached assistant",
++            emptyList(), noticeId, emptyList(), false))
++        val refreshed = notification()
++        val refreshedHandle = refreshed.actions.last().actionIntent
++        val current = requireNotNull(ProactiveReplyNotificationIdentity.readValidated(context,
++            shadowOf(refreshedHandle).savedIntent))
++        assertEquals(userId, current.sourceMessageId)
++        assertNotEquals(original.actionId, current.actionId)
++        assertNotEquals(originalHandle, refreshedHandle)
++        assertEquals(original, ProactiveReplyNotificationIdentity.readValidated(context, shadowOf(originalHandle).savedIntent))
++        assertEquals(userId, shadowOf(refreshed.contentIntent).savedIntent.getStringExtra(MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID))
++        assertTrue(refreshed.extras.getCharSequence(Notification.EXTRA_TEXT).toString().contains("Intentional same reply"))
++        assertEquals(2, store.readProactiveThreadMessages(central, thread).size)
++        assertEquals(1, context.getSystemService(NotificationManager::class.java).activeNotifications.size)
++    }
++
++    @Test fun callerOnlySourceCannotCreateAReplyAffordance() {
++        shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
++        assertFalse(postCached("missing-canonical-message"))
++        assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications.isEmpty())
++    }
++
++    private fun postCached(messageId: String): Boolean = ProactiveNotifier.post(context, thread, messageId,
++        "Caller text is not the canonical source", "normal", emptyList(), messageId, emptyList(), false)
++
++    private fun notification(): Notification = context.getSystemService(NotificationManager::class.java)
++        .activeNotifications.single().notification
++}
+--- /dev/null
++++ b/app/app/src/test/java/com/jarvys/agent/proactive/ProactiveReplyNotificationIdentityTest.kt
+@@ -0,0 +1,102 @@
++package com.jarvys.agent.proactive
++
++import android.app.PendingIntent
++import android.content.Context
++import android.content.Intent
++import android.net.Uri
++import androidx.test.core.app.ApplicationProvider
++import com.jarvys.agent.FreshStorageBootstrap
++import com.jarvys.agent.MainActivity
++import com.jarvys.agent.chatdb.ProactiveReplyAcceptance
++import com.jarvys.agent.workspaces.WorkspaceIdentity
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertNotEquals
++import org.junit.Assert.assertNull
++import org.junit.Assert.assertTrue
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.Shadows.shadowOf
++import org.robolectric.annotation.Config
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [34])
++class ProactiveReplyNotificationIdentityTest {
++    private val context: Context get() = ApplicationProvider.getApplicationContext()
++
++    @Test fun explicitBindingRoundTripsFullThreadAndSeparatesOrdinalFromLogicalAcceptance() {
++        val first = binding(kind = "OPTION", ordinal = 0, thread = "payments/a?b#c 😀")
++        val second = binding(kind = "OPTION", ordinal = 1, thread = first.threadKey)
++        val firstIntent = ProactiveReplyNotificationIdentity.createIntent(context, first)
++        val secondIntent = ProactiveReplyNotificationIdentity.createIntent(context, second)
++        assertEquals(first, ProactiveReplyNotificationIdentity.readValidated(context, firstIntent))
++        assertEquals(second, ProactiveReplyNotificationIdentity.readValidated(context, secondIntent))
++        assertEquals(first.actionId, second.actionId)
++        assertNotEquals(firstIntent.data, secondIntent.data)
++        assertTrue(firstIntent.data!!.pathSegments.contains(first.threadKey))
++        assertEquals(ProactiveActionReceiver::class.java.name, firstIntent.component?.className)
++    }
++
++    @Test fun missingOldOrMutatedUriAndExtrasCannotReplaceTheCanonicalBinding() {
++        val source = binding()
++        val valid = ProactiveReplyNotificationIdentity.createIntent(context, source)
++        val changes: List<(Intent) -> Unit> = listOf(
++            { it.removeExtra(ProactiveReplyNotificationIdentity.EXTRA_PHYSICAL_GENERATION) },
++            { it.putExtra(ProactiveReplyNotificationIdentity.EXTRA_PHYSICAL_GENERATION, "recreated-generation") },
++            { it.putExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID, "new-source") },
++            { it.putExtra(ProactiveReplyNotificationIdentity.EXTRA_THREAD_KEY, "other-thread") },
++            { it.putExtra(ProactiveActionReceiver.EXTRA_THREAD_TOKEN, "other-token") },
++            { it.putExtra(ProactiveReplyNotificationIdentity.EXTRA_ACTION_ID, "other-action") },
++            { it.putExtra(ProactiveReplyNotificationIdentity.EXTRA_SOURCE_FINGERPRINT, "changed-source-payload") },
++            { it.removeExtra(ProactiveReplyNotificationIdentity.EXTRA_SOURCE_FINGERPRINT) },
++            { it.putExtra(ProactiveReplyNotificationIdentity.EXTRA_ACTION_KIND, "OPTION") },
++            { it.putExtra(ProactiveActionReceiver.EXTRA_REPLY_INDEX, 0) },
++            { it.action = ProactiveActionReceiver.ACTION_SUGGESTED_REPLY },
++            { it.setClass(context, MainActivity::class.java) },
++            { it.component = null },
++            { it.data = Uri.parse("jarvys://proactive/reply/123") },
++            { it.data = Uri.parse(valid.data.toString() + "?source=other") },
++            { it.putExtra(FreshStorageBootstrap.GENERATION_EXTRA, "old-format") },
++        )
++        changes.forEachIndexed { index, change ->
++            assertNull("mutated notification field $index", ProactiveReplyNotificationIdentity.readValidated(context,
++                Intent(valid).also(change)))
++        }
++        val old = FreshStorageBootstrap.stamp(Intent(context, ProactiveActionReceiver::class.java))
++            .setAction(ProactiveActionReceiver.ACTION_INLINE_REPLY)
++            .putExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID, source.sourceMessageId)
++            .putExtra(ProactiveActionReceiver.EXTRA_THREAD_TOKEN, ProactiveThreadKey.fingerprint(source.threadKey))
++            .setData(Uri.parse("jarvys://proactive/reply/${source.threadKey.hashCode()}"))
++        assertNull(ProactiveReplyNotificationIdentity.readValidated(context, old))
++    }
++
++    @Test fun physicalGenerationSourceAndFullThreadKeepOldPendingIntentHandlesBound() {
++        val source = binding(thread = "Aa")
++        val original = ProactiveReplyNotificationIdentity.createIntent(context, source)
++        val oldHandle = PendingIntent.getBroadcast(context, 88, original,
++            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
++        val replacements = listOf(
++            binding(generation = "same-format-new-physical-store", thread = source.threadKey),
++            binding(source = "next-source", thread = source.threadKey),
++            binding(thread = "BB"), // Same String.hashCode, different full thread identity.
++            binding(thread = source.threadKey, fingerprint = "same-id-changed-payload"),
++        )
++        assertEquals("Aa".hashCode(), "BB".hashCode())
++        replacements.forEach { next ->
++            val intent = ProactiveReplyNotificationIdentity.createIntent(context, next)
++            val handle = PendingIntent.getBroadcast(context, 88, intent,
++                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
++            assertNotEquals(oldHandle, handle)
++            assertNotEquals(original.data, intent.data)
++        }
++        assertEquals(source, ProactiveReplyNotificationIdentity.readValidated(context, shadowOf(oldHandle).savedIntent))
++        assertFalse(shadowOf(oldHandle).isImmutable)
++    }
++
++    private fun binding(
++        generation: String = "physical-generation", source: String = "source-message", thread: String = "thread",
++        kind: String = "INLINE", ordinal: Int? = null, fingerprint: String = "canonical-source-fingerprint",
++    ) = ProactiveReplyNotificationIdentity.Binding(generation, source, thread, kind,
++        ProactiveReplyAcceptance.actionId(generation, WorkspaceIdentity.CENTRAL_SESSION, thread, source, kind), ordinal, fingerprint)
++}
+--- a/app/app/src/test/java/com/jarvys/agent/ui/chat/AssistantTextSelectionTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/ui/chat/AssistantTextSelectionTest.kt
+@@ -207,7 +207,10 @@
+             com.jarvys.agent.proactive.ProactiveSuggestedReply("Suggestion excluded", "Suggested action")))
+         var selected: Pair<String, Int>? = null
+         install {
+-            AssistantReplyView(reply, {}, false, onProactiveSuggestedReply = { id, index -> selected = id to index })
++            AssistantReplyView(reply, {}, false, onProactiveSuggestedReply = { displayed, index ->
++                org.junit.Assert.assertSame(reply, displayed)
++                selected = displayed.messageId to index
++            })
+         }
+         select(body, "bravo")
+         selectAll()

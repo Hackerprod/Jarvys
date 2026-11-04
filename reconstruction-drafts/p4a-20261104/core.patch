@@ -1,0 +1,793 @@
+diff --git a/app/app/src/main/java/com/jarvys/agent/ConversationReader.kt b/app/app/src/main/java/com/jarvys/agent/ConversationReader.kt
+--- a/app/app/src/main/java/com/jarvys/agent/ConversationReader.kt
++++ b/app/app/src/main/java/com/jarvys/agent/ConversationReader.kt
+@@ -365,6 +365,7 @@
+     /** Resolves the active compaction boundary and asks for the compacted notice a thread reply answers. */
+     suspend fun readCompactedProactiveReferent(conversationId: String, replyMessageId: String): ProactiveReferent? =
+         readProjection {
++            com.jarvys.agent.chatdb.ProactiveReplySourceValidation.validateContext(database,conversationId,replyMessageId)
+             val firstKept = memory.activeCompaction(conversationId)?.first_kept ?: return@readProjection null
+             conversations.readCompactedProactiveReferent(conversationId, replyMessageId, firstKept)
+         }
+diff --git a/app/app/src/main/java/com/jarvys/agent/ProactiveReplyHandoffPolicy.java b/app/app/src/main/java/com/jarvys/agent/ProactiveReplyHandoffPolicy.java
+new file mode 100644
+--- /dev/null
++++ b/app/app/src/main/java/com/jarvys/agent/ProactiveReplyHandoffPolicy.java
+@@ -0,0 +1,7 @@
++package com.jarvys.agent;
++
++/** Independent P4A format gate. Enable only after matching Full/Play D3 conservation review. */
++public final class ProactiveReplyHandoffPolicy {
++    private ProactiveReplyHandoffPolicy() {}
++    public static boolean admissionEnabled() { return false; }
++}
+diff --git a/app/app/src/main/java/com/jarvys/agent/chatdb/CentralTurnSubmissionRepository.kt b/app/app/src/main/java/com/jarvys/agent/chatdb/CentralTurnSubmissionRepository.kt
+--- a/app/app/src/main/java/com/jarvys/agent/chatdb/CentralTurnSubmissionRepository.kt
++++ b/app/app/src/main/java/com/jarvys/agent/chatdb/CentralTurnSubmissionRepository.kt
+@@ -110,13 +110,17 @@
+         requireAvailable();check(WorkspaceIdentity.isCentral(message.conversationId) && message.role=="user" && message.hiddenKind==null)
+         check(submissionId.isNotBlank() && processId.isNotBlank() && storageGeneration==generation())
+         CentralSubmissionRequest.read(database,message.conversationId,message.messageId)
+-        val digest=captureCentralUserRootDigestInTransaction(database,message.conversationId,message.messageId)
++        val digest=captureCentralUserRootDigestInTransaction(database,message.conversationId,message.messageId,preparingSubmission=true)
+         find(message.conversationId,submissionId)?.let { existing ->
+             check(existing.userMessageId==message.messageId && existing.sourceSha256==digest && existing.storageGeneration==storageGeneration && existing.originalAdmissionProcess==processId) {"Conflicting Central submission delivery"}
+             return existing
+         }
+         sql.execSQL("INSERT INTO central_turn_submissions(conversation_id,submission_id,user_message_id,user_seq,source_sha256,storage_generation,original_admission_process,current_admission_process,revision,state) VALUES(?,?,?,?,?,?,?,?,1,'PREPARED')",arrayOf(message.conversationId,submissionId,message.messageId,message.seq,digest,storageGeneration,processId,processId))
+-        return checkNotNull(find(message.conversationId,submissionId))
++        return checkNotNull(find(message.conversationId,submissionId)).also { committed ->
++            check(captureCentralUserRootDigestInTransaction(database,message.conversationId,message.messageId)==committed.sourceSha256) {
++                "Prepared submission failed immediate post-insert source validation"
++            }
++        }
+     }
+     fun claim(permit:CentralSubmissionAdmission.LivePermit,authority:CentralSubmissionAdmission.ClaimAuthority):CentralSubmissionSnapshot {
+         requireAvailable();authority.requireTransactionOwner()
+diff --git a/app/app/src/main/java/com/jarvys/agent/chatdb/CentralUserRootCheckpoint.kt b/app/app/src/main/java/com/jarvys/agent/chatdb/CentralUserRootCheckpoint.kt
+--- a/app/app/src/main/java/com/jarvys/agent/chatdb/CentralUserRootCheckpoint.kt
++++ b/app/app/src/main/java/com/jarvys/agent/chatdb/CentralUserRootCheckpoint.kt
+@@ -16,7 +16,7 @@
+     database.withChatReadTransaction { captureCentralUserRootDigestInTransaction(database,conversationId,messageId) }
+ 
+ /** Caller already owns the native transaction; used for atomic submission/source conservation. */
+-internal fun captureCentralUserRootDigestInTransaction(database:JarvysChatDatabase,conversationId:String,messageId:String):String {
++internal fun captureCentralUserRootDigestInTransaction(database:JarvysChatDatabase,conversationId:String,messageId:String,preparingSubmission:Boolean=false):String {
+         check(WorkspaceIdentity.isCentral(conversationId) && messageId.isNotBlank())
+         val args=arrayOf(conversationId,messageId)
+         database.chatSql.query("SELECT m.role,m.hidden_kind FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.conversation_id=? AND m.message_id=?",args).use { c ->
+@@ -24,6 +24,7 @@
+                 "Tree origin is not an exact visible USER row"
+             }
+         }
++        val proactiveAcceptance=ProactiveReplySourceValidation.validateUser(database,conversationId,messageId,preparingSubmission)
+         val digest=MessageDigest.getInstance("SHA-256")
+         fun field(value:String?) {
+             val size=value?.length ?: -1
+@@ -41,5 +42,13 @@
+         database.chatSql.query("SELECT ordinal,attachment_id,name,mime_type,size_bytes,kind,relative_path,sha256,file_ref_id FROM message_attachments WHERE conversation_id=? AND message_id=? ORDER BY ordinal",args).use { c ->
+             while(c.moveToNext()) { field("attachment");for(i in 0 until c.columnCount) field(if(c.isNull(i)) null else c.getString(i)) }
+         }
+-        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
++        val result=digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
++        if(proactiveAcceptance!=null && !preparingSubmission) {
++            database.chatSql.query("SELECT source_sha256 FROM central_turn_submissions WHERE conversation_id=? AND user_message_id=?",args).use { c ->
++                check(c.moveToFirst() && c.getType(0)==Cursor.FIELD_TYPE_STRING && c.getString(0)==result && !c.moveToNext()) {
++                    "Accepted proactive USER no longer matches its committed root"
++                }
++            }
++        }
++        return result
+     }
+diff --git a/app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt b/app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt
+--- a/app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt
++++ b/app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt
+@@ -2031,6 +2031,54 @@
+             }
+         }
+     }
++    /** Read-only canonical source projection; no native interaction can be reconstructed from it. */
++    fun readProactiveReplySourceSync(messageId:String?,threadKey:String?):ProactiveReplySourceSnapshot? = executeOnWorker { repos ->
++        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
++        anchor.fenced {runBlocking {repos.database.withChatReadTransaction {
++            ProactiveReplySourceValidation.read(repos.database,messageId,threadKey)
++        }}}
++    }
++    fun captureLatestProactiveReplySourceSync(threadKey:String):ProactiveReplySourceSnapshot? =
++        readProactiveReplySourceSync(null,threadKey)
++    fun captureProactiveReplySourceSync(sourceMessageId:String,kind:String,ordinal:Int?):ProactiveReplySourceSnapshot? = executeOnWorker { repos ->
++        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
++        anchor.fenced {runBlocking {repos.database.withChatReadTransaction {
++            ProactiveReplySourceValidation.read(repos.database,sourceMessageId,null)?.also {
++                // Shape only: consumed/hidden/latest are reconciled inside the writer AFTER duplicate lookup.
++                if(kind==ProactiveReplyAcceptance.OPTION)check(it.role=="assistant" && !it.decisionId.isNullOrBlank() &&
++                    ordinal!=null && ordinal>=0 && ordinal<it.suggestedReplies.size && it.suggestedReplies[ordinal].text.trim().isNotEmpty())
++                else check(kind==ProactiveReplyAcceptance.INLINE && ordinal==null)
++            }
++        }}}
++    }
++    /** Called before takeUntrustedContext inspects nullable thread columns. Corruption never falls back. */
++    fun validateProactiveReplySourceSync(sessionId:String,userMessageId:String) = executeOnWorker { repos ->
++        runBlocking {repos.database.withChatReadTransaction {
++            ProactiveReplySourceValidation.validateContext(repos.database,sessionId,userMessageId)
++        }}
++        Unit
++    }
++    /** Caller already owns Central admission lock; lifecycle -> writer is the only nested lock order. */
++    fun appendProactiveReplySubmissionSync(action:com.jarvys.agent.ProactiveReplyAdmission.NativeAction):ProactiveReplyAppendReceipt? {
++        com.jarvys.agent.CentralAvailabilityPolicy.requireRegistrySchemaReady(applicationContext)
++        return executeOnWorker { repos ->
++            val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
++            anchor.fenced {
++                action.requireCurrent()
++                val result=runBlocking {ProactiveReplyWriter(repos.database,repos.conversations).append(action)}
++                    ?: return@fenced null
++                val snapshot=result.snapshot
++                val source=CentralUserRootCheckpoint(snapshot.storageGeneration,snapshot.sessionId,snapshot.userMessageId,
++                    snapshot.sourceSha256,anchor.attest(repos.database,snapshot.storageGeneration))
++                val receipt=CentralSubmissionAppendReceipt(snapshot,source,runBlocking {repos.database.withChatReadTransaction {
++                    check(captureCentralUserRootDigestInTransaction(repos.database,snapshot.sessionId,snapshot.userMessageId)==snapshot.sourceSha256)
++                    CentralSubmissionRequest.read(repos.database,snapshot.sessionId,snapshot.userMessageId)
++                }})
++                action.requireCurrent()
++                ProactiveReplyAppendReceipt(result.created,receipt,result.text,result.threadKey)
++            }
++        }
++    }
+     /** Exact source lookup only; never creates or restores a live permission. */
+     fun readCentralSubmissionForSourceSync(source:CentralUserRootCheckpoint):CentralSubmissionSnapshot? = executeOnWorker { repos ->
+         val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+diff --git a/app/app/src/main/java/com/jarvys/agent/chatdb/ConversationRepository.kt b/app/app/src/main/java/com/jarvys/agent/chatdb/ConversationRepository.kt
+--- a/app/app/src/main/java/com/jarvys/agent/chatdb/ConversationRepository.kt
++++ b/app/app/src/main/java/com/jarvys/agent/chatdb/ConversationRepository.kt
+@@ -1161,11 +1161,13 @@
+         replyMessageId: String,
+         firstKept: Long,
+     ): ProactiveReferent? = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
++        val acceptance=ProactiveReplySourceValidation.validateContext(database,conversationId,replyMessageId)
+         val highWater = maxSeq(conversationId)
+         val reply = hydrateMessages(conversationId, listOf(replyMessageId), highWater).singleOrNull()
+             ?: return@withChatReadTransaction null
+         val replyThread = reply.proactiveThreadKey?.takeIf(String::isNotEmpty) ?: return@withChatReadTransaction null
+-        val noticeId = reply.proactiveReplyToMessageId ?: sql.query(
++        val noticeId = if(acceptance!=null) acceptance.referentMessageId ?: return@withChatReadTransaction null
++        else reply.proactiveReplyToMessageId ?: sql.query(
+             "SELECT message_id FROM messages WHERE conversation_id=? AND proactive_thread_key=? " +
+                 "AND proactive_decision_id IS NOT NULL AND seq<? ORDER BY seq DESC LIMIT 1",
+             arrayOf(conversationId, replyThread, reply.seq),
+@@ -1173,6 +1175,7 @@
+         val notice = hydrateMessages(conversationId, listOf(noticeId), highWater).singleOrNull()
+             ?: return@withChatReadTransaction null
+         if (notice.messageIndex >= firstKept) return@withChatReadTransaction null
++        if(acceptance!=null)check(notice.proactiveThreadKey==replyThread) {"Accepted proactive referent thread changed"}
+         val threadKey = notice.proactiveThreadKey?.takeIf(String::isNotEmpty) ?: replyThread
+         val nextNoticeSeq = sql.query(
+             "SELECT MIN(seq) FROM messages WHERE conversation_id=? AND proactive_thread_key=? " +
+diff --git a/app/app/src/main/java/com/jarvys/agent/chatdb/ProactiveReplyAcceptance.kt b/app/app/src/main/java/com/jarvys/agent/chatdb/ProactiveReplyAcceptance.kt
+new file mode 100644
+--- /dev/null
++++ b/app/app/src/main/java/com/jarvys/agent/chatdb/ProactiveReplyAcceptance.kt
+@@ -0,0 +1,238 @@
++package com.jarvys.agent.chatdb
++
++import android.database.Cursor
++import com.jarvys.agent.ConversationInput
++import com.jarvys.agent.workspaces.WorkspaceIdentity
++import org.json.JSONObject
++import java.security.MessageDigest
++
++/** Read-only source projection. This value cannot authorize a write or a provider start. */
++data class ProactiveReplySourceSnapshot(
++    val physicalGeneration:String,
++    val sourceMessageId:String,
++    val seq:Long,
++    val role:String,
++    val threadKey:String,
++    val decisionId:String?,
++    val text:String,
++    val sourceFingerprint:String,
++    val currentEligible:Boolean,
++    val suggestedReplies:List<SuggestedReplyInput>,
++    val consumed:Boolean,
++    val inlineActionId:String,
++)
++
++/** Immutable exact acceptance evidence, never a live native interaction or inherited authority. */
++data class ProactiveReplyAcceptanceValue(
++    val physicalGeneration:String,
++    val sessionId:String,
++    val kind:String,
++    val actionId:String,
++    val sourceMessageId:String,
++    val sourceFingerprint:String,
++    val threadKey:String,
++    val replyToMessageId:String?,
++    val selectedOrdinal:Int?,
++    val textSha256:String,
++    val referentMessageId:String?,
++    val referentFingerprint:String?,
++)
++
++/** Canonical schema has one spelling; duplicate keys, unknown keys and JSON coercions are rejected. */
++object ProactiveReplyAcceptance {
++    const val PART_KIND="proactive_reply_acceptance_v1"
++    const val OPTION="OPTION"
++    const val INLINE="INLINE"
++    private val digestPattern=Regex("[a-f0-9]{64}")
++    private val keys=setOf("version","physicalGeneration","sessionId","kind","actionId","sourceMessageId",
++        "sourceFingerprint","threadKey","replyToMessageId","selectedOrdinal","textSha256","referentMessageId","referentFingerprint")
++
++    /** Fixed UTF-16 code units, not platform UTF-8 replacement of unpaired surrogates. */
++    @JvmStatic fun digestFields(vararg fields:String?):String {
++        val digest=MessageDigest.getInstance("SHA-256")
++        fields.forEach { value ->
++            val size=value?.length ?: -1
++            for(shift in listOf(24,16,8,0))digest.update((size ushr shift).toByte())
++            value?.forEach { ch ->digest.update((ch.code ushr 8).toByte());digest.update(ch.code.toByte()) }
++        }
++        return digest.digest().joinToString(""){"%02x".format(it.toInt() and 255)}
++    }
++    @JvmStatic fun actionId(generation:String,session:String,thread:String,source:String,kind:String):String {
++        require(generation.isNotBlank() && WorkspaceIdentity.isCentral(session) && thread.isNotBlank() && source.isNotBlank())
++        require(kind==OPTION || kind==INLINE)
++        return if(kind==OPTION)digestFields("jarvys-proactive-reply-action-v1",generation,session,source,kind)
++        else digestFields("jarvys-proactive-reply-action-v1",generation,session,thread,source,kind)
++    }
++    @JvmStatic fun submissionId(actionId:String):String {
++        require(digestPattern.matches(actionId));return "proactive-reply-v1:$actionId"
++    }
++    @JvmStatic fun textDigest(text:String):String=digestFields("jarvys-proactive-reply-text-v1",text)
++    private fun checked(value:ProactiveReplyAcceptanceValue):ProactiveReplyAcceptanceValue {
++        require(value.physicalGeneration.isNotBlank() && WorkspaceIdentity.isCentral(value.sessionId))
++        require(value.threadKey.isNotBlank() && value.sourceMessageId.isNotBlank())
++        require(digestPattern.matches(value.sourceFingerprint) && digestPattern.matches(value.textSha256))
++        require(value.actionId==actionId(value.physicalGeneration,value.sessionId,value.threadKey,value.sourceMessageId,value.kind))
++        if(value.kind==OPTION)require(value.selectedOrdinal!=null && value.selectedOrdinal>=0 && value.replyToMessageId==value.sourceMessageId)
++        else require(value.kind==INLINE && value.selectedOrdinal==null && value.replyToMessageId==null)
++        require((value.referentMessageId==null)==(value.referentFingerprint==null))
++        value.referentFingerprint?.let {require(digestPattern.matches(it))}
++        value.referentMessageId?.let {require(it.isNotBlank())}
++        if(value.kind==OPTION)require(value.referentMessageId==value.sourceMessageId && value.referentFingerprint==value.sourceFingerprint)
++        return value
++    }
++    // Escape every code unit to conserve exact UTF-16, including unpaired surrogates, on every JVM.
++    private fun quote(value:String?):String=if(value==null)"null" else buildString {
++        append('"');value.forEach {append("\\u");append(it.code.toString(16).padStart(4,'0'))};append('"')
++    }
++    @JvmStatic fun encode(value:ProactiveReplyAcceptanceValue):String {
++        checked(value)
++        return "{\"version\":1,\"physicalGeneration\":"+quote(value.physicalGeneration)+
++            ",\"sessionId\":"+quote(value.sessionId)+",\"kind\":"+quote(value.kind)+
++            ",\"actionId\":"+quote(value.actionId)+",\"sourceMessageId\":"+quote(value.sourceMessageId)+
++            ",\"sourceFingerprint\":"+quote(value.sourceFingerprint)+",\"threadKey\":"+quote(value.threadKey)+
++            ",\"replyToMessageId\":"+quote(value.replyToMessageId)+",\"selectedOrdinal\":"+(value.selectedOrdinal?.toString() ?: "null")+
++            ",\"textSha256\":"+quote(value.textSha256)+",\"referentMessageId\":"+quote(value.referentMessageId)+",\"referentFingerprint\":"+quote(value.referentFingerprint)+"}"
++    }
++    @JvmStatic fun decode(payload:String):ProactiveReplyAcceptanceValue {
++        val json=JSONObject(payload)
++        require(json.keys().asSequence().toSet()==keys)
++        require(json.get("version") is Int && json.getInt("version")==1)
++        fun text(key:String):String {val value=json.get(key);require(value is String);return value}
++        fun optionalText(key:String):String? {val value=json.get(key);if(value===JSONObject.NULL)return null;require(value is String);return value}
++        val ordinal=json.get("selectedOrdinal").let {if(it===JSONObject.NULL)null else {require(it is Int);it}}
++        val reply=json.get("replyToMessageId").let {if(it===JSONObject.NULL)null else {require(it is String);it}}
++        val value=checked(ProactiveReplyAcceptanceValue(text("physicalGeneration"),text("sessionId"),text("kind"),text("actionId"),
++            text("sourceMessageId"),text("sourceFingerprint"),text("threadKey"),reply,ordinal,text("textSha256"),optionalText("referentMessageId"),optionalText("referentFingerprint")))
++        require(encode(value)==payload) {"Noncanonical or duplicate proactive acceptance fields"}
++        return value
++    }
++}
++
++/** All callers own a native Room lease. Never invokes root capture or recursively validates ancestors. */
++internal object ProactiveReplySourceValidation {
++    private data class Row(val id:String,val stable:String,val seq:Long,val role:String,val status:String?,val thread:String?,
++        val decision:String?,val replyTo:String?,val hidden:String?,val consumed:Long?,val interrupt:String?)
++    private fun string(c:Cursor,index:Int):String {check(c.getType(index)==Cursor.FIELD_TYPE_STRING);return c.getString(index)}
++    private fun nullable(c:Cursor,index:Int):String?=if(c.isNull(index))null else string(c,index)
++    private fun readRow(database:JarvysChatDatabase,session:String,id:String):Row? = database.chatSql.query(
++        "SELECT message_id,stable_id,seq,role,status,proactive_thread_key,proactive_decision_id,proactive_reply_to_message_id,hidden_kind,suggested_replies_consumed_seq,interrupt_request_id FROM messages WHERE conversation_id=? AND message_id=?",
++        arrayOf(session,id)).use { c ->
++        if(!c.moveToFirst())return@use null
++        check(c.getType(2)==Cursor.FIELD_TYPE_INTEGER)
++        val consumed=if(c.isNull(9))null else {check(c.getType(9)==Cursor.FIELD_TYPE_INTEGER);c.getLong(9)}
++        Row(string(c,0),string(c,1),c.getLong(2),string(c,3),nullable(c,4),nullable(c,5),nullable(c,6),nullable(c,7),nullable(c,8),consumed,nullable(c,10))
++            .also {check(it.seq>0 && !c.moveToNext())}
++    }
++    private fun parts(database:JarvysChatDatabase,session:String,id:String):List<MessagePartInput> = database.chatSql.query(
++        "SELECT ordinal,kind,payload FROM message_parts WHERE conversation_id=? AND message_id=? ORDER BY ordinal",arrayOf(session,id)).use { c ->
++        buildList {while(c.moveToNext()) {check(c.getType(0)==Cursor.FIELD_TYPE_INTEGER);add(MessagePartInput(string(c,1),string(c,2)))}}
++    }
++    private fun options(database:JarvysChatDatabase,session:String,id:String):List<SuggestedReplyInput> = database.chatSql.query(
++        "SELECT ordinal,label,text FROM proactive_suggested_replies WHERE conversation_id=? AND message_id=? ORDER BY ordinal",arrayOf(session,id)).use { c ->
++        buildList {while(c.moveToNext()) {check(c.getType(0)==Cursor.FIELD_TYPE_INTEGER && c.getLong(0)==size.toLong());add(SuggestedReplyInput(string(c,1),string(c,2)))}}
++    }
++    fun generation(database:JarvysChatDatabase):String=database.chatSql.query("SELECT value FROM storage_meta WHERE key=?",
++        arrayOf(ConnectionProjectionRepository.GENERATION_KEY)).use { c ->
++        check(c.moveToFirst());string(c,0).also {check(runCatching {java.util.UUID.fromString(it).toString()==it}.getOrDefault(false) && !c.moveToNext())}
++    }
++    private fun eligible(row:Row,parts:List<MessagePartInput>):Boolean = row.thread?.isNotBlank()==true &&
++        (row.role=="user" && row.status==null || row.role=="assistant" && NativeRegenerationSource.terminal(row.status)) &&
++        row.interrupt==null && parts.none {it.kind==ConversationInput.PROVENANCE_PART_KIND}
++    private fun fingerprint(row:Row,parts:List<MessagePartInput>,options:List<SuggestedReplyInput>):String {
++        val fields=mutableListOf<String?>("jarvys-proactive-reply-source-v1",row.id,row.stable,row.seq.toString(),row.role,row.status,row.thread,row.decision,row.replyTo)
++        parts.filter {it.kind==MessagePartKinds.TEXT}.forEachIndexed {index,part ->fields.addAll(listOf("text",index.toString(),part.payload))}
++        options.forEachIndexed {index,option ->fields.addAll(listOf("option",index.toString(),option.label,option.text))}
++        return ProactiveReplyAcceptance.digestFields(*fields.toTypedArray())
++    }
++    private fun latestId(database:JarvysChatDatabase,session:String,thread:String):String? {
++        val ids=database.chatSql.query("SELECT message_id FROM messages WHERE conversation_id=? AND proactive_thread_key=? AND hidden_kind IS NULL AND role IN ('user','assistant') ORDER BY seq DESC",arrayOf(session,thread)).use { c ->buildList {while(c.moveToNext())add(string(c,0))}}
++        return ids.firstOrNull { id ->val row=checkNotNull(readRow(database,session,id));eligible(row,parts(database,session,id))}
++    }
++    /** Visibility/latest status is a first-admission check only, not part of immutable fingerprint. */
++    fun read(database:JarvysChatDatabase,sourceId:String?,thread:String?,admissionState:Boolean=true):ProactiveReplySourceSnapshot? {
++        val session=WorkspaceIdentity.CENTRAL_SESSION
++        require(!sourceId.isNullOrBlank() || !thread.isNullOrBlank())
++        val id=sourceId ?: latestId(database,session,checkNotNull(thread)) ?: return null
++        val row=readRow(database,session,id) ?: return null
++        val sourceThread=row.thread?.takeIf(String::isNotBlank) ?: return null
++        if(thread!=null)check(thread==sourceThread) {"Proactive source thread changed"}
++        val parts=parts(database,session,id)
++        check(eligible(row,parts)) {"Proactive source is not a settled genuine thread message"}
++        val generation=generation(database)
++        val replies=options(database,session,id)
++        return ProactiveReplySourceSnapshot(generation,id,row.seq,row.role,sourceThread,row.decision,
++            parts.filter {it.kind==MessagePartKinds.TEXT}.joinToString(""){it.payload},fingerprint(row,parts,replies),
++            admissionState && row.hidden==null && latestId(database,session,sourceThread)==id,java.util.Collections.unmodifiableList(replies),row.consumed!=null,
++            ProactiveReplyAcceptance.actionId(generation,session,sourceThread,id,ProactiveReplyAcceptance.INLINE))
++    }
++    fun requireAdmission(database:JarvysChatDatabase,source:ProactiveReplySourceSnapshot,kind:String,ordinal:Int?) {
++        val row=checkNotNull(readRow(database,WorkspaceIdentity.CENTRAL_SESSION,source.sourceMessageId))
++        check(row.hidden==null) {"Proactive source was hidden before admission"}
++        when(kind) {
++            ProactiveReplyAcceptance.OPTION -> {
++                check(source.role=="assistant" && !source.decisionId.isNullOrBlank() && ordinal!=null && ordinal>=0 && ordinal<source.suggestedReplies.size)
++                check(!source.consumed && source.suggestedReplies[ordinal].text.trim().isNotEmpty()) {"Proactive option was consumed or empty"}
++            }
++            ProactiveReplyAcceptance.INLINE ->check(ordinal==null && source.currentEligible) {"Inline source is no longer the current thread head"}
++            else ->error("Unknown proactive reply kind")
++        }
++    }
++    /** Same latest-prior-notice semantics, pinned once without inheriting any ancestor authority. */
++    fun referent(database:JarvysChatDatabase,source:ProactiveReplySourceSnapshot,kind:String):ProactiveReplySourceSnapshot? {
++        if(kind==ProactiveReplyAcceptance.OPTION)return source
++        val id=database.chatSql.query("SELECT message_id FROM messages WHERE conversation_id=? AND proactive_thread_key=? AND proactive_decision_id IS NOT NULL AND seq<=? ORDER BY seq DESC LIMIT 1",
++            arrayOf(WorkspaceIdentity.CENTRAL_SESSION,source.threadKey,source.seq)).use {c ->if(c.moveToFirst())string(c,0) else null} ?: return null
++        val notice=checkNotNull(read(database,id,source.threadKey,false))
++        check(notice.role=="assistant" && !notice.decisionId.isNullOrBlank())
++        return notice
++    }
++    /** Context readers also compare the full stored root, without a validator -> digest -> validator cycle. */
++    fun validateContext(database:JarvysChatDatabase,session:String,userId:String):ProactiveReplyAcceptanceValue? {
++        val proof=validateUser(database,session,userId)
++        if(proof!=null)captureCentralUserRootDigestInTransaction(database,session,userId)
++        return proof
++    }
++    /** Called before every root hash and before referent reads, including the thread-null path. */
++    fun validateUser(database:JarvysChatDatabase,session:String,userId:String,allowUnregisteredAcceptance:Boolean=false):ProactiveReplyAcceptanceValue? {
++        val row=readRow(database,session,userId) ?: error("Proactive reply USER is missing")
++        val parts=parts(database,session,userId)
++        val proofs=parts.filter {it.kind==ProactiveReplyAcceptance.PART_KIND}
++        val request=parts.any {it.kind==CentralSubmissionRequest.PART_KIND}
++        val submissions=CentralTurnSubmissionRepository(database)
++        val submission=if(submissions.available())database.chatSql.query("SELECT submission_id,storage_generation,user_seq FROM central_turn_submissions WHERE conversation_id=? AND user_message_id=?",arrayOf(session,userId)).use {c ->
++            if(!c.moveToFirst())null else {
++                check(c.getType(2)==Cursor.FIELD_TYPE_INTEGER)
++                Triple(string(c,0),string(c,1),c.getLong(2)).also {check(!c.moveToNext())}
++            }
++        } else null
++        val positive=submission!=null
++        if(proofs.isEmpty()) {
++            check(!(row.thread!=null && (positive || request)) && !row.stable.startsWith("proactive-reply-v1:")) {"Positive threaded USER acceptance is missing"}
++            return null // Retained non-positive thread history is not backfilled or upgraded.
++        }
++        check(proofs.size==1 && row.role=="user" && row.status==null && row.decision==null && row.interrupt==null && WorkspaceIdentity.isCentral(session))
++        val proof=ProactiveReplyAcceptance.decode(proofs.single().payload)
++        check(proof.sessionId==session && proof.physicalGeneration==generation(database) && proof.threadKey==row.thread && proof.replyToMessageId==row.replyTo)
++        check(row.stable==ProactiveReplyAcceptance.submissionId(proof.actionId))
++        check(positive || allowUnregisteredAcceptance) {"Typed proactive USER has no positive submission receipt"}
++        if(submission!=null)check(submission.first==row.stable && submission.second==proof.physicalGeneration && submission.third==row.seq)
++        check(parts.count {it.kind==CentralSubmissionRequest.PART_KIND}==1 && CentralSubmissionRequest.read(database,session,userId).isEmpty())
++        check(parts.none {it.kind==ConversationInput.PROVENANCE_PART_KIND})
++        val text=parts.filter {it.kind==MessagePartKinds.TEXT}.joinToString(""){it.payload}
++        check(text.isNotBlank() && text==text.trim() && proof.textSha256==ProactiveReplyAcceptance.textDigest(text))
++        check(!database.chatSql.query("SELECT 1 FROM message_attachments WHERE conversation_id=? AND message_id=? LIMIT 1",arrayOf(session,userId)).use {it.moveToFirst()})
++        val source=checkNotNull(read(database,proof.sourceMessageId,null,false)) {"Accepted proactive source is missing"}
++        check(source.seq<row.seq && source.threadKey==proof.threadKey && source.sourceFingerprint==proof.sourceFingerprint) {"Accepted proactive source changed"}
++        val referent=referent(database,source,proof.kind)
++        check(referent?.sourceMessageId==proof.referentMessageId && referent?.sourceFingerprint==proof.referentFingerprint) {"Accepted proactive referent changed"}
++        if(proof.kind==ProactiveReplyAcceptance.OPTION) {
++            val ordinal=checkNotNull(proof.selectedOrdinal)
++            check(source.role=="assistant" && !source.decisionId.isNullOrBlank() && ordinal<source.suggestedReplies.size && source.suggestedReplies[ordinal].text.trim()==text)
++            val consumed=checkNotNull(readRow(database,session,source.sourceMessageId)?.consumed) {"Accepted option marker is missing"}
++            check(consumed>row.seq && database.chatSql.query("SELECT item_kind,item_key FROM conversation_items WHERE conversation_id=? AND seq=?",arrayOf(session,consumed)).use { c ->
++                c.moveToFirst() && string(c,0)=="proactive_reply_used" && string(c,1)==source.sourceMessageId && !c.moveToNext()
++            }) {"Accepted option marker changed"}
++        }
++        return proof
++    }
++}
+diff --git a/app/app/src/main/java/com/jarvys/agent/chatdb/ProactiveReplyWriter.kt b/app/app/src/main/java/com/jarvys/agent/chatdb/ProactiveReplyWriter.kt
+new file mode 100644
+--- /dev/null
++++ b/app/app/src/main/java/com/jarvys/agent/chatdb/ProactiveReplyWriter.kt
+@@ -0,0 +1,73 @@
++package com.jarvys.agent.chatdb
++
++import com.jarvys.agent.ProactiveReplyAdmission
++import com.jarvys.agent.workspaces.WorkspaceIdentity
++
++/** Read-only disposition. Only created=true may be registered by its still-live native owner. */
++class ProactiveReplyAppendReceipt internal constructor(
++    val created:Boolean,
++    val receipt:CentralSubmissionAppendReceipt,
++    val text:String,
++    val threadKey:String,
++)
++
++internal data class ProactiveReplyWriteResult(val created:Boolean,val snapshot:CentralSubmissionSnapshot,val text:String,val threadKey:String)
++
++/** Separate typed path: ordinary central writers retain both existing null-thread guards. */
++internal class ProactiveReplyWriter(private val database:JarvysChatDatabase,private val conversations:ConversationRepository) {
++    suspend fun append(action:ProactiveReplyAdmission.NativeAction):ProactiveReplyWriteResult? = database.withChatWriteTransaction {
++        action.requireCurrent()
++        val result=appendInTransaction(action.physicalGeneration,action.sourceMessageId,action.threadKey,action.sourceFingerprint,
++            action.kind,action.selectedOrdinal,action.text,action.actionId,action.submissionId,action.processId) {
++                check(com.jarvys.agent.CentralAvailabilityPolicy.admissionEnabled() && com.jarvys.agent.ProactiveReplyHandoffPolicy.admissionEnabled()) {"Proactive reply admission disabled pending D3"}
++                action.requireCurrent()
++            }
++        action.requireCurrent()
++        result
++    }
++
++    /** Internal D3 persistence seam only. Production entry requires the live typed NativeAction above. */
++    internal suspend fun appendInTransaction(generation:String,sourceMessageId:String,threadKey:String,sourceFingerprint:String,
++        kind:String,selectedOrdinal:Int?,text:String,actionId:String,submissionId:String,processId:String,
++        beforeNewWrite:()->Unit):ProactiveReplyWriteResult? = database.withChatWriteTransaction {
++        val session=WorkspaceIdentity.CENTRAL_SESSION
++        check(generation==ProactiveReplySourceValidation.generation(database) && processId.isNotBlank())
++        check(actionId==ProactiveReplyAcceptance.actionId(generation,session,threadKey,sourceMessageId,kind))
++        check(submissionId==ProactiveReplyAcceptance.submissionId(actionId) && text.isNotBlank() && text==text.trim())
++        check((kind==ProactiveReplyAcceptance.OPTION && selectedOrdinal!=null && selectedOrdinal>=0) ||
++            (kind==ProactiveReplyAcceptance.INLINE && selectedOrdinal==null))
++        val submissions=CentralTurnSubmissionRepository(database);submissions.requireAvailable()
++        val source=checkNotNull(ProactiveReplySourceValidation.read(database,sourceMessageId,threadKey,false))
++        check(source.physicalGeneration==generation && source.sourceFingerprint==sourceFingerprint) {"Captured proactive source changed"}
++        val referent=ProactiveReplySourceValidation.referent(database,source,kind)
++        val expected=ProactiveReplyAcceptanceValue(generation,session,kind,actionId,sourceMessageId,sourceFingerprint,threadKey,
++            if(kind==ProactiveReplyAcceptance.OPTION)sourceMessageId else null,selectedOrdinal,ProactiveReplyAcceptance.textDigest(text),referent?.sourceMessageId,referent?.sourceFingerprint)
++        val payload=ProactiveReplyAcceptance.encode(expected)
++        // Reconcile the exact durable acceptance BEFORE latest/visible/unconsumed eligibility checks.
++        submissions.find(session,submissionId)?.let { prior ->
++            check(prior.storageGeneration==generation)
++            check(ProactiveReplySourceValidation.validateUser(database,session,prior.userMessageId)==expected) {"Conflicting proactive action delivery"}
++            check(captureCentralUserRootDigestInTransaction(database,session,prior.userMessageId)==prior.sourceSha256) {"Committed proactive source changed"}
++            return@withChatWriteTransaction ProactiveReplyWriteResult(false,prior,text,threadKey)
++        }
++        // A partial/deleted receipt is corruption, not permission to backfill or create another USER.
++        check(!database.chatSql.query("SELECT 1 FROM messages WHERE conversation_id=? AND stable_id=?",arrayOf(session,submissionId)).use {it.moveToFirst()}) {"Proactive acceptance is missing its submission receipt"}
++        val current=checkNotNull(ProactiveReplySourceValidation.read(database,sourceMessageId,threadKey))
++        if(kind==ProactiveReplyAcceptance.OPTION && source.consumed)return@withChatWriteTransaction null // Legacy marker is evidence only.
++        ProactiveReplySourceValidation.requireAdmission(database,current,kind,selectedOrdinal)
++        if(kind==ProactiveReplyAcceptance.OPTION)check(source.suggestedReplies[checkNotNull(selectedOrdinal)].text.trim()==text)
++        beforeNewWrite()
++        val input=AppendMessageInput(session,"user",listOf(MessagePartInput(MessagePartKinds.TEXT,text),
++            MessagePartInput(CentralSubmissionRequest.PART_KIND,CentralSubmissionRequest.encode(emptyList())),MessagePartInput(ProactiveReplyAcceptance.PART_KIND,payload)),
++            proactiveThreadKey=threadKey,proactiveReplyToMessageId=expected.replyToMessageId,stableId=submissionId)
++        val message=requireSuccess(conversations.appendMessage(input))
++        if(kind==ProactiveReplyAcceptance.OPTION)requireSuccess(conversations.consumeSuggestedReplies(session,sourceMessageId))
++        // Root validation in insertPrepared also checks the exact consumed marker and source linkage.
++        val snapshot=submissions.insertPrepared(message,submissionId,processId,generation)
++        ProactiveReplyWriteResult(true,snapshot,text,threadKey)
++    }
++    private fun <T> requireSuccess(result:ChatDbResult<T>):T=when(result) {
++        is ChatDbResult.Success ->result.value
++        else ->error("Atomic proactive reply write failed: $result")
++    }
++}
+diff --git a/app/app/src/test/java/com/jarvys/agent/chatdb/ProactiveReplyAcceptancePersistenceTest.kt b/app/app/src/test/java/com/jarvys/agent/chatdb/ProactiveReplyAcceptancePersistenceTest.kt
+new file mode 100644
+--- /dev/null
++++ b/app/app/src/test/java/com/jarvys/agent/chatdb/ProactiveReplyAcceptancePersistenceTest.kt
+@@ -0,0 +1,302 @@
++package com.jarvys.agent.chatdb
++
++import android.content.Context
++import androidx.test.core.app.ApplicationProvider
++import com.jarvys.agent.ConversationInput
++import com.jarvys.agent.ConversationReader
++import com.jarvys.agent.workspaces.WorkspaceIdentity
++import kotlinx.coroutines.runBlocking
++import org.junit.*
++import org.junit.Assert.*
++import org.junit.rules.TemporaryFolder
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.annotation.Config
++import java.io.File
++import java.util.concurrent.Executors
++import java.util.concurrent.TimeUnit
++
++/** D3 storage-only seams. This suite does not mint a native action or prove provider/device delivery. */
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk=[34],shadows=[com.jarvys.agent.ArtifactOsShadow::class])
++class ProactiveReplyAcceptancePersistenceTest {
++    @get:Rule val temporary=TemporaryFolder()
++    private val context:Context get()=ApplicationProvider.getApplicationContext()
++    private val worker=Executors.newSingleThreadExecutor()
++    private lateinit var db:JarvysChatDatabase
++    private val session=WorkspaceIdentity.CENTRAL_SESSION
++    private val thread="proactive:reply-proof:😀:e\u0301"
++    private val file get()=File(temporary.root,"reply-proof.db")
++    @Before fun open() {db=JarvysChatDatabaseProvider.openDatabaseFileForTests(context,file,true,true)}
++    @After fun close() {if(::db.isInitialized)JarvysChatDatabaseProvider.closeDatabaseFileForTests(db);worker.shutdownNow()}
++    private fun <T> work(body:suspend ()->T):T=worker.submit<T>{runBlocking {body()}}.get(60,TimeUnit.SECONDS)
++    private fun repository()=ConversationRepository(db)
++    private suspend fun notice(id:String="notice",key:String=thread):StoredMessage {
++        ConnectionProjectionRepository(db).generation()
++        return (repository().appendProactiveAssistantMessageIfAbsent(session,id,"Exact notice 😀",key,
++            listOf(SuggestedReplyInput("Yes","Do it 😀"),SuggestedReplyInput("Other","Do something else"))) as ChatDbResult.Success).value
++    }
++    private suspend fun source(id:String)=db.withChatReadTransaction {checkNotNull(ProactiveReplySourceValidation.read(db,id,null))}
++    private suspend fun accept(source:ProactiveReplySourceSnapshot,kind:String=ProactiveReplyAcceptance.OPTION,ordinal:Int?=0,
++        text:String=if(kind==ProactiveReplyAcceptance.OPTION)source.suggestedReplies[ordinal!!].text.trim() else "Same reply 😀",
++        beforeNewWrite:()->Unit={}):ProactiveReplyWriteResult? {
++        val action=ProactiveReplyAcceptance.actionId(source.physicalGeneration,session,source.threadKey,source.sourceMessageId,kind)
++        return ProactiveReplyWriter(db,repository()).appendInTransaction(source.physicalGeneration,source.sourceMessageId,source.threadKey,
++            source.sourceFingerprint,kind,ordinal,text,action,ProactiveReplyAcceptance.submissionId(action),"process-A",beforeNewWrite)
++    }
++    private suspend fun rejected(body:suspend ()->Unit) {var failure:Throwable?=null;try {body()}catch(t:Throwable){failure=t};assertNotNull("Expected strict rejection",failure)}
++    private fun scalar(sql:String):Long=db.testChatSql.query(sql).use {check(it.moveToFirst());it.getLong(0)}
++    private fun conservation():List<Long> = listOf("messages","message_parts","conversation_items","central_turn_submissions","proactive_suggested_replies")
++        .map {scalar("SELECT COUNT(*) FROM $it")} + listOf(scalar("SELECT next_seq FROM conversations"),scalar("SELECT message_count FROM conversations"))
++
++    @Test fun gateRemainsOffUntilIndependentD3Approval() {assertFalse(com.jarvys.agent.ProactiveReplyHandoffPolicy.admissionEnabled())}
++
++    @Test fun optionDuplicateIsDataOnlyAndConflictingOrdinalCannotCreateSecondUser()=work {
++        val notice=notice();val captured=source(notice.messageId)
++        var beforeWrites=0
++        val first=checkNotNull(accept(captured,beforeNewWrite={beforeWrites++}));assertTrue(first.created)
++        val duplicate=checkNotNull(accept(captured,beforeNewWrite={beforeWrites++}));assertFalse(duplicate.created)
++        assertEquals(first.snapshot,duplicate.snapshot);assertEquals(1,beforeWrites)
++        rejected {accept(captured,ordinal=1)}
++        assertEquals(1L,scalar("SELECT COUNT(*) FROM central_turn_submissions"));assertEquals(1L,scalar("SELECT COUNT(*) FROM messages WHERE role='user'"))
++        val user=repository().getMessage(session,first.snapshot.userMessageId)!!
++        assertEquals(thread,user.proactiveThreadKey);assertEquals(notice.messageId,user.proactiveReplyToMessageId)
++        assertEquals(first.snapshot.sourceSha256,captureCentralUserRootDigest(db,session,user.messageId))
++        JarvysChatDatabaseProvider.closeDatabaseFileForTests(db);open()
++        assertEquals(first.snapshot,checkNotNull(accept(captured)).snapshot)
++    }
++
++    @Test fun eachCompositeFailureRollsBackUserConsumptionQueueSpineAndCounters()=work {
++        for(kind in listOf("user","marker","consume","submission")) {
++            val notice=notice("notice-$kind");val captured=source(notice.messageId);val before=conservation()
++            val trigger=when(kind) {
++                "user"->"BEFORE INSERT ON messages WHEN NEW.role='user'"
++                "marker"->"BEFORE INSERT ON conversation_items WHEN NEW.item_kind='proactive_reply_used'"
++                "consume"->"BEFORE UPDATE OF suggested_replies_consumed_seq ON messages"
++                else->"BEFORE INSERT ON central_turn_submissions"
++            }
++            db.testChatSql.execSQL("CREATE TRIGGER reject_reply $trigger BEGIN SELECT RAISE(ABORT,'injected_reply_failure'); END")
++            try {rejected {accept(captured)}} finally {db.testChatSql.execSQL("DROP TRIGGER reject_reply")}
++            assertEquals(before,conservation());assertNull(repository().getMessage(session,notice.messageId)!!.suggestedRepliesConsumedSeq)
++        }
++        JarvysChatDatabaseProvider.closeDatabaseFileForTests(db);open()
++        assertEquals(0L,scalar("SELECT COUNT(*) FROM central_turn_submissions"));assertEquals(0L,scalar("SELECT COUNT(*) FROM messages WHERE role='user'"))
++    }
++
++    @Test fun oldConsumedNoticeIsNotBackfilled()=work {
++        val notice=notice();val captured=source(notice.messageId)
++        repository().consumeSuggestedReplies(session,notice.messageId)
++        val before=conservation();assertNull(accept(captured));assertEquals(before,conservation())
++    }
++
++    @Test fun inlineUsesExactOccurrenceAndAcceptedUserBecomesNextIdenticalReplyAnchor()=work {
++        val notice=notice();val captured=source(notice.messageId)
++        val first=checkNotNull(accept(captured,ProactiveReplyAcceptance.INLINE,null))
++        val duplicate=checkNotNull(accept(captured,ProactiveReplyAcceptance.INLINE,null));assertFalse(duplicate.created)
++        rejected {accept(captured,ProactiveReplyAcceptance.INLINE,null,"Different text")}
++        val next=db.withChatReadTransaction {checkNotNull(ProactiveReplySourceValidation.read(db,null,thread))}
++        assertEquals(first.snapshot.userMessageId,next.sourceMessageId)
++        assertNotEquals(captured.inlineActionId,next.inlineActionId)
++        val second=checkNotNull(accept(next,ProactiveReplyAcceptance.INLINE,null));assertTrue(second.created)
++        assertNotEquals(first.snapshot.submissionId,second.snapshot.submissionId)
++        assertNull(repository().getMessage(session,second.snapshot.userMessageId)!!.proactiveReplyToMessageId)
++        assertEquals(2L,scalar("SELECT COUNT(*) FROM central_turn_submissions"))
++    }
++
++    @Test fun staleHiddenAndUnfinishedSourcesCannotAdmitButLaterHideDoesNotRevoke()=work {
++        val notice=notice();val captured=source(notice.messageId)
++        val newer=(repository().appendMessage(AppendMessageInput(session,"assistant",listOf(MessagePartInput("text","unfinished")),
++            status="streaming",proactiveThreadKey=thread)) as ChatDbResult.Success).value
++        assertEquals(notice.messageId,db.withChatReadTransaction {ProactiveReplySourceValidation.read(db,null,thread)}!!.sourceMessageId)
++        rejected {source(newer.messageId)}
++        val accepted=checkNotNull(accept(captured,ProactiveReplyAcceptance.INLINE,null))
++        db.testChatSql.execSQL("UPDATE messages SET hidden_kind='proactive_dismissed' WHERE message_id=?",arrayOf(notice.messageId))
++        assertEquals(accepted.snapshot.sourceSha256,captureCentralUserRootDigest(db,session,accepted.snapshot.userMessageId))
++        assertFalse(checkNotNull(accept(captured,ProactiveReplyAcceptance.INLINE,null)).created)
++        rejected {accept(captured)} // New OPTION on a hidden notice is rejected despite old INLINE receipt.
++        db.withChatWriteTransaction {CentralTurnSubmissionRepository(db).cancelCapturedInTransaction(listOf(accepted.snapshot))}
++        assertEquals("CANCELLED",checkNotNull(accept(captured,ProactiveReplyAcceptance.INLINE,null)).snapshot.state)
++    }
++
++    @Test fun currentEligibleSourceExcludesInternalProvenanceAndStaleInline()=work {
++        val first=notice();val captured=source(first.messageId)
++        repository().appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","internal"),MessagePartInput(ConversationInput.PROVENANCE_PART_KIND,"{}")),proactiveThreadKey=thread))
++        assertEquals(first.messageId,db.withChatReadTransaction {ProactiveReplySourceValidation.read(db,null,thread)}!!.sourceMessageId)
++        notice("new-notice")
++        rejected {accept(captured,ProactiveReplyAcceptance.INLINE,null)}
++        assertNotNull(accept(captured)) // Visible unconsumed OPTION retains its original notice identity.
++    }
++
++    @Test fun changedUserThreadReplyToSourceOptionOrProofFailsEveryReadWithoutFallback()=work {
++        val mutations=listOf<(StoredMessage,ProactiveReplyWriteResult)->Unit>(
++            {_,a->db.testChatSql.execSQL("UPDATE messages SET proactive_thread_key=NULL WHERE message_id=?",arrayOf(a.snapshot.userMessageId))},
++            {_,a->db.testChatSql.execSQL("UPDATE messages SET proactive_reply_to_message_id=NULL WHERE message_id=?",arrayOf(a.snapshot.userMessageId))},
++            {n,_->db.testChatSql.execSQL("UPDATE messages SET proactive_thread_key='other' WHERE message_id=?",arrayOf(n.messageId))},
++            {n,_->db.testChatSql.execSQL("UPDATE proactive_suggested_replies SET text='changed' WHERE message_id=? AND ordinal=0",arrayOf(n.messageId))},
++            {_,a->db.testChatSql.execSQL("DELETE FROM message_parts WHERE message_id=? AND kind=?",arrayOf(a.snapshot.userMessageId,ProactiveReplyAcceptance.PART_KIND))},
++            {n,_->db.testChatSql.execSQL("UPDATE messages SET seq=seq+10000 WHERE message_id=?",arrayOf(n.messageId))},
++            {n,_->db.testChatSql.execSQL("UPDATE messages SET role='agent' WHERE message_id=?",arrayOf(n.messageId))},
++            {n,_->db.testChatSql.execSQL("UPDATE messages SET proactive_decision_id='changed-decision' WHERE message_id=?",arrayOf(n.messageId))},
++            {n,_->db.testChatSql.execSQL("UPDATE messages SET suggested_replies_consumed_seq=NULL WHERE message_id=?",arrayOf(n.messageId))},
++        )
++        mutations.forEachIndexed { index,mutate ->
++            val notice=notice("mutated-$index","thread-$index");val accepted=checkNotNull(accept(source(notice.messageId)))
++            mutate(notice,accepted)
++            rejected {captureCentralUserRootDigest(db,session,accepted.snapshot.userMessageId)}
++            rejected {repository().readCompactedProactiveReferent(session,accepted.snapshot.userMessageId,Long.MAX_VALUE)}
++            rejected {ConversationReader(db).readCompactedProactiveReferent(session,accepted.snapshot.userMessageId)}
++            rejected {db.withChatWriteTransaction {CentralTurnSubmissionRepository(db).cancelCapturedInTransaction(listOf(accepted.snapshot))}}
++        }
++    }
++
++    @Test fun pinnedOneLevelReferentSurvivesCompactionAndRejectsPriorNoticeMutation()=work {
++        val notice=notice();val first=checkNotNull(accept(source(notice.messageId),ProactiveReplyAcceptance.INLINE,null))
++        val second=checkNotNull(accept(source(first.snapshot.userMessageId),ProactiveReplyAcceptance.INLINE,null))
++        val referent=repository().readCompactedProactiveReferent(session,second.snapshot.userMessageId,Long.MAX_VALUE)!!
++        assertEquals(notice.messageId,referent.noticeMessageId);assertEquals(thread,referent.threadKey)
++        db.testChatSql.execSQL("UPDATE message_parts SET payload='changed original notice' WHERE message_id=? AND kind='text'",arrayOf(notice.messageId))
++        rejected {captureCentralUserRootDigest(db,session,second.snapshot.userMessageId)}
++        rejected {repository().readCompactedProactiveReferent(session,second.snapshot.userMessageId,Long.MAX_VALUE)}
++    }
++
++    @Test fun physicalGenerationChangeFailsEvenWhenBootstrapFormatIsUnchanged()=work {
++        val notice=notice();val captured=source(notice.messageId);val accepted=checkNotNull(accept(captured))
++        db.testChatSql.execSQL("UPDATE storage_meta SET value=? WHERE key=?",arrayOf(java.util.UUID.randomUUID().toString(),ConnectionProjectionRepository.GENERATION_KEY))
++        rejected {accept(captured)};rejected {captureCentralUserRootDigest(db,session,accepted.snapshot.userMessageId)}
++    }
++
++    @Test fun legacyOrdinaryAndThreadHistoryRemainUnmodifiedWithNoPositiveBackfill()=work {
++        notice()
++        val ordinary=(repository().appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","old ordinary 😀")))) as ChatDbResult.Success).value
++        val threaded=(repository().appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","old threaded 😀")),proactiveThreadKey=thread)) as ChatDbResult.Success).value
++        val before=listOf(captureCentralUserRootDigest(db,session,ordinary.messageId),captureCentralUserRootDigest(db,session,threaded.messageId))
++        assertNull(db.withChatReadTransaction {ProactiveReplySourceValidation.validateUser(db,session,threaded.messageId)})
++        JarvysChatDatabaseProvider.closeDatabaseFileForTests(db);open()
++        assertEquals(before,listOf(captureCentralUserRootDigest(db,session,ordinary.messageId),captureCentralUserRootDigest(db,session,threaded.messageId)))
++        assertEquals(0L,scalar("SELECT COUNT(*) FROM central_turn_submissions"));assertEquals(3L,scalar("PRAGMA user_version"))
++        assertEquals(0L,scalar("SELECT COUNT(*) FROM pragma_foreign_key_check"))
++    }
++
++    @Test fun deletedSubmissionCannotBeBackfilledFromTypedUserAndNullProofCannotBecomeOrdinary()=work {
++        val notice=notice();val captured=source(notice.messageId);val accepted=checkNotNull(accept(captured))
++        db.testChatSql.execSQL("DELETE FROM central_turn_submissions WHERE submission_id=?",arrayOf(accepted.snapshot.submissionId))
++        val before=conservation();rejected {accept(captured)};assertEquals(before,conservation())
++        rejected {captureCentralUserRootDigest(db,session,accepted.snapshot.userMessageId)}
++        db.testChatSql.execSQL("UPDATE message_parts SET payload='null' WHERE message_id=? AND kind=?",
++            arrayOf(accepted.snapshot.userMessageId,ProactiveReplyAcceptance.PART_KIND))
++        rejected {captureCentralUserRootDigest(db,session,accepted.snapshot.userMessageId)}
++    }
++
++    @Test fun selfConsistentProofAndTextTamperStillFailsCommittedRootAtContextReads()=work {
++        val notice=notice();val accepted=checkNotNull(accept(source(notice.messageId),ProactiveReplyAcceptance.INLINE,null))
++        val user=repository().getMessage(session,accepted.snapshot.userMessageId)!!
++        val proof=ProactiveReplyAcceptance.decode(user.parts.single {it.kind==ProactiveReplyAcceptance.PART_KIND}.payload)
++        val changed="tampered but self-consistent"
++        db.testChatSql.execSQL("UPDATE message_parts SET payload=? WHERE message_id=? AND kind='text'",arrayOf(changed,user.messageId))
++        db.testChatSql.execSQL("UPDATE message_parts SET payload=? WHERE message_id=? AND kind=?",arrayOf(
++            ProactiveReplyAcceptance.encode(proof.copy(textSha256=ProactiveReplyAcceptance.textDigest(changed))),user.messageId,ProactiveReplyAcceptance.PART_KIND))
++        rejected {captureCentralUserRootDigest(db,session,user.messageId)}
++        rejected {repository().readCompactedProactiveReferent(session,user.messageId,Long.MAX_VALUE)}
++        rejected {ConversationReader(db).readCompactedProactiveReferent(session,user.messageId)}
++    }
++
++    @Test fun coherentNoticeAndProofMutationCannotReplacePinnedContextWithoutStoredRoot()=work {
++        val notice=notice();val accepted=checkNotNull(accept(source(notice.messageId),ProactiveReplyAcceptance.INLINE,null))
++        val user=repository().getMessage(session,accepted.snapshot.userMessageId)!!
++        val proof=ProactiveReplyAcceptance.decode(user.parts.single {it.kind==ProactiveReplyAcceptance.PART_KIND}.payload)
++        db.testChatSql.execSQL("UPDATE message_parts SET payload='changed external notice' WHERE message_id=? AND kind='text'",arrayOf(notice.messageId))
++        val changed=source(notice.messageId)
++        val coherent=proof.copy(sourceFingerprint=changed.sourceFingerprint,referentFingerprint=changed.sourceFingerprint)
++        db.testChatSql.execSQL("UPDATE message_parts SET payload=? WHERE message_id=? AND kind=?",
++            arrayOf(ProactiveReplyAcceptance.encode(coherent),user.messageId,ProactiveReplyAcceptance.PART_KIND))
++        assertEquals(coherent,db.withChatReadTransaction {ProactiveReplySourceValidation.validateUser(db,session,user.messageId)})
++        rejected {db.withChatReadTransaction {ProactiveReplySourceValidation.validateContext(db,session,user.messageId)}}
++        rejected {captureCentralUserRootDigest(db,session,user.messageId)}
++        rejected {repository().readCompactedProactiveReferent(session,user.messageId,Long.MAX_VALUE)}
++        rejected {ConversationReader(db).readCompactedProactiveReferent(session,user.messageId)}
++    }
++
++    @Test fun currentV100OrdinaryPreparedStartedAndConsumedRowsRetainExactSchemaAndBytes()=work {
++        val oldNotice=notice("v100-consumed")
++        repository().consumeSuggestedReplies(session,oldNotice.messageId)
++        val writer=ConversationModelTurnWriter(db,repository(),ModelTranscriptRepository(db))
++        suspend fun ordinary(id:String)=writer.appendPreparedCentralSubmission(AppendMessageInput(session,"user",
++            listOf(MessagePartInput("text","v100 $id 😀"),MessagePartInput(CentralSubmissionRequest.PART_KIND,
++                CentralSubmissionRequest.encode(listOf("existing-skill")))),stableId=id),id,"historical-process")
++        val prepared=ordinary("old-prepared");val startedInput=ordinary("old-started")
++        val started=db.withChatWriteTransaction {CentralTurnSubmissionRepository(db).claimPreparedInTransaction(startedInput,
++            "historical-process","historical-run",7,setOf(startedInput.submissionId))}
++        repository().appendMessage(AppendMessageInput(session,"user",listOf(MessagePartInput("text","retained threaded 😀")),proactiveThreadKey=thread))
++        fun schema():List<List<String?>> = db.testChatSql.query("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").use {c ->
++            buildList {while(c.moveToNext())add((0 until c.columnCount).map {if(c.isNull(it))null else c.getString(it)})}
++        }
++        fun rows():Map<String,List<List<String>>> {
++            val tables=db.testChatSql.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").use {c ->buildList {while(c.moveToNext())add(c.getString(0))}}
++            fun quoted(name:String)="\""+name.replace("\"","\"\"")+"\""
++            return tables.associateWith {table ->
++                val columns=db.testChatSql.query("PRAGMA table_info("+quoted(table)+")").use {c ->buildList {while(c.moveToNext())add(c.getString(1))}}
++                db.testChatSql.query("SELECT "+columns.joinToString(","){"typeof("+quoted(it)+"),hex("+quoted(it)+")"}+" FROM "+quoted(table)).use {c ->
++                    buildList {while(c.moveToNext())add((0 until c.columnCount).map {c.getString(it) ?: "NULL"})}.sortedBy {it.joinToString("|")}
++                }
++            }
++        }
++        val schemaBefore=schema();val rowsBefore=rows()
++        for(row in listOf(prepared,started))assertEquals(row.sourceSha256,captureCentralUserRootDigest(db,session,row.userMessageId))
++        assertNull(accept(source(oldNotice.messageId)))
++        JarvysChatDatabaseProvider.closeDatabaseFileForTests(db);open()
++        assertEquals(schemaBefore,schema());assertEquals(rowsBefore,rows())
++        assertEquals(prepared,db.withChatReadTransaction {CentralTurnSubmissionRepository(db).find(session,prepared.submissionId)})
++        assertEquals(started,db.withChatReadTransaction {CentralTurnSubmissionRepository(db).find(session,started.submissionId)})
++        assertEquals(0L,scalar("SELECT COUNT(*) FROM pragma_foreign_key_check"))
++    }
++
++    @Test fun pinnedPriorNoticeThreadCannotFallBackToEarlierNotice()=work {
++        notice("earlier")
++        val notice=notice("pinned");val first=checkNotNull(accept(source(notice.messageId),ProactiveReplyAcceptance.INLINE,null))
++        val second=checkNotNull(accept(source(first.snapshot.userMessageId),ProactiveReplyAcceptance.INLINE,null))
++        db.testChatSql.execSQL("UPDATE messages SET proactive_thread_key='other-thread' WHERE message_id=?",arrayOf(notice.messageId))
++        rejected {captureCentralUserRootDigest(db,session,second.snapshot.userMessageId)}
++        rejected {repository().readCompactedProactiveReferent(session,second.snapshot.userMessageId,Long.MAX_VALUE)}
++    }
++
++    @Test fun sourceUserFingerprintDoesNotRecursivelyInheritEarlierAuthority()=work {
++        val notice=notice();val first=checkNotNull(accept(source(notice.messageId),ProactiveReplyAcceptance.INLINE,null))
++        val second=checkNotNull(accept(source(first.snapshot.userMessageId),ProactiveReplyAcceptance.INLINE,null))
++        db.testChatSql.execSQL("UPDATE message_parts SET payload='corrupt ancestor acceptance' WHERE message_id=? AND kind=?",
++            arrayOf(first.snapshot.userMessageId,ProactiveReplyAcceptance.PART_KIND))
++        rejected {captureCentralUserRootDigest(db,session,first.snapshot.userMessageId)}
++        assertEquals(second.snapshot.sourceSha256,captureCentralUserRootDigest(db,session,second.snapshot.userMessageId))
++    }
++
++    @Test fun concurrentSameAndDifferentOptionsHaveOneCommittedAcceptance()=work {
++        for(conflict in listOf(false,true)) {
++            val notice=notice("race-$conflict","race-thread-$conflict");val captured=source(notice.messageId)
++            val pool=Executors.newFixedThreadPool(2)
++            try {
++                val start=java.util.concurrent.CountDownLatch(1)
++                val results=(0..1).map {index ->pool.submit<ProactiveReplyWriteResult?> {
++                    start.await();runCatching {runBlocking {accept(captured,ordinal=if(conflict)index else 0)}}.getOrNull()
++                }}
++                start.countDown();val completed=results.map {it.get(30,TimeUnit.SECONDS)}
++                assertEquals(1,completed.count {it?.created==true})
++                assertEquals(if(conflict)1 else 2,completed.count {it!=null})
++            } finally {pool.shutdownNow()}
++        }
++        assertEquals(2L,scalar("SELECT COUNT(*) FROM central_turn_submissions"))
++    }
++
++    @Test fun canonicalCodecRejectsDuplicateUnknownNullAndCoercedFieldsAndConservesUtf16() {
++        val generation=java.util.UUID.randomUUID().toString();val thread="a\uD800b\uDC00😀e\u0301"
++        val id=ProactiveReplyAcceptance.actionId(generation,session,thread,"source",ProactiveReplyAcceptance.INLINE)
++        val value=ProactiveReplyAcceptanceValue(generation,session,ProactiveReplyAcceptance.INLINE,id,"source","a".repeat(64),thread,null,null,
++            ProactiveReplyAcceptance.textDigest("x\uD800😀"),null,null)
++        val payload=ProactiveReplyAcceptance.encode(value);assertEquals(value,ProactiveReplyAcceptance.decode(payload))
++        for(bad in listOf(payload.replaceFirst("{","{\"version\":1,"),payload.replaceFirst("{","{\"extra\":1,"),
++            payload.replace("\"version\":1","\"version\":null"),payload.replace("\"version\":1","\"version\":1.0"),payload+" ")) {
++            assertThrows(RuntimeException::class.java) {ProactiveReplyAcceptance.decode(bad)}
++        }
++        assertNotEquals(ProactiveReplyAcceptance.textDigest("\uD800"),ProactiveReplyAcceptance.textDigest("\uD801"))
++        assertNotEquals(ProactiveReplyAcceptance.digestFields("ab","c"),ProactiveReplyAcceptance.digestFields("a","bc"))
++        assertNotEquals(ProactiveReplyAcceptance.digestFields(null),ProactiveReplyAcceptance.digestFields(""))
++    }
++}

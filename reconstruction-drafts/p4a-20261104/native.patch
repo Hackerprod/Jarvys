@@ -1,0 +1,428 @@
+--- a/app/app/src/main/java/com/jarvys/agent/AgentForegroundService.java
++++ b/app/app/src/main/java/com/jarvys/agent/AgentForegroundService.java
+@@ -580,6 +580,7 @@
+   }
+ 
+   public static void stopRun(String sessionId) {
++    ProactiveReplyAdmission.cancelCapturedInteractions(sessionId);
+     AgentForegroundService service = currentInstance;
+     if (service != null) service.enqueueStopTask(() -> service.stopSessionRun(sessionId));
+   }
+@@ -989,6 +990,25 @@
+       com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt receipt=new LocalRunStore(context).appendCentralSubmission(authority);
+       authority.recordCommitted(receipt); // Evidence only: registration can still fail without losing the stored USER/files.
+       return CentralSubmissionAdmission.register(authority,receipt);
++    }
++  }
++
++  /** Same native admission/STOP lane; historical or duplicate reply receipts never remint authority. */
++  static CentralSubmissionAdmission.LivePermit admitProactiveReply(Context context,
++      ProactiveReplyAdmission.NativeAction action) {
++    if (!ProactiveReplyHandoffPolicy.admissionEnabled() || !CentralAvailabilityPolicy.admissionEnabled())
++      throw new IllegalStateException("Native reply admission is disabled");
++    synchronized (interruptAdmissionLock(WorkspaceIdentity.CENTRAL_SESSION)) {
++      action.requireCurrent();
++      if (CentralAvailabilityPolicy.registryMigrationEnabled())
++        try (com.jarvys.agent.workspaces.WorkspaceRegistry registry = new com.jarvys.agent.workspaces.WorkspaceRegistry(context)) {
++          registry.upgradeCentralResumeSchema();
++        }
++      com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt result = new LocalRunStore(context).appendProactiveReplySubmission(action);
++      if (result == null) return null;
++      action.recordCommitted(result);
++      if (!result.getCreated()) return null;
++      return CentralSubmissionAdmission.registerProactiveReply(action, result);
+     }
+   }
+ 
+@@ -1872,6 +1892,7 @@
+       return START_NOT_STICKY;
+     }
+     if (intent != null && ACTION_STOP.equals(intent.getAction())) {
++      ProactiveReplyAdmission.cancelCapturedInteractions(WorkspaceIdentity.CENTRAL_SESSION);
+       enqueueStopTask(this::stopRunAndServices);
+       return START_NOT_STICKY;
+     }
+--- a/app/app/src/main/java/com/jarvys/agent/CentralSubmissionAdmission.java
++++ b/app/app/src/main/java/com/jarvys/agent/CentralSubmissionAdmission.java
+@@ -118,6 +118,21 @@
+         action.requireCurrent(receipt.getSnapshot().getSessionId(),receipt.getSnapshot().getSubmissionId());
+         return registerReceipt(receipt,receipt.getSelectedSkillIds());
+     }
++    /** Only the original live reply interaction's newly committed receipt can issue a permit. */
++    static LivePermit registerProactiveReply(ProactiveReplyAdmission.NativeAction action,
++            com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt result) {
++        action.requireNewCommit(result);
++        if (!result.getCreated() || !result.getReceipt().getSelectedSkillIds().isEmpty())
++            throw new IllegalStateException("Proactive reply cannot inherit selected skills");
++        return action.registerPermit(result, () -> {
++            // New durable acceptance only: do not call the generic duplicate path's lifecycle fence
++            // while holding the interaction lock. A prior permit is an integrity conflict here.
++            LivePermit fresh = new LivePermit(result.getReceipt(), Collections.emptyList());
++            if (LIVE.putIfAbsent(key(fresh.getSessionId(), fresh.getSubmissionId()), fresh) != null)
++                throw new IllegalStateException("New proactive acceptance already has a permit");
++            return fresh;
++        });
++    }
+     private static LivePermit registerReceipt(CentralSubmissionAppendReceipt receipt,List<String> skills) {
+         LivePermit fresh=new LivePermit(receipt,skills);
+         String key=key(fresh.getSessionId(),fresh.getSubmissionId());
+@@ -130,6 +145,13 @@
+         }
+         return fresh;
+     }
++    /** Denial only: includes queued P4 permits whose UI/receiver interaction has already closed. */
++    static void retireCapturedProactiveReplies(String session) {
++        for (LivePermit permit : new ArrayList<>(LIVE.values()))
++            if (session.equals(permit.getSessionId()) && permit.getSubmissionId().startsWith("proactive-reply-v1:"))
++                invalidate(permit);
++    }
++
+     static LivePermit find(String session,String id) { return LIVE.get(key(session,id)); }
+     static List<LivePermit> prepared(String session) {
+         List<LivePermit> found=new ArrayList<>();
+--- a/app/app/src/main/java/com/jarvys/agent/LocalRunStore.java
++++ b/app/app/src/main/java/com/jarvys/agent/LocalRunStore.java
+@@ -701,6 +701,20 @@
+                                                           Long durationMs,
+                                                           String runId, String userMessageId, String status) {
+         return appendConversationMessage(sessionId, role, content, durationMs, runId, userMessageId, status, null);
++    }
++
++    /** Canonical reply source data only. Reading never grants launch permission. */
++    public com.jarvys.agent.chatdb.ProactiveReplySourceSnapshot readProactiveReplySource(String messageId, String threadKey) {
++        if (chatDatabaseBridge == null) throw noChatDatabase();
++        return chatDatabaseBridge.readProactiveReplySourceSync(messageId, threadKey);
++    }
++    public com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt appendProactiveReplySubmission(ProactiveReplyAdmission.NativeAction action) {
++        if (chatDatabaseBridge == null) throw noChatDatabase();
++        return chatDatabaseBridge.appendProactiveReplySubmissionSync(action);
++    }
++    public void validateProactiveReplySource(String sessionId, String userMessageId) {
++        if (chatDatabaseBridge == null) throw noChatDatabase();
++        chatDatabaseBridge.validateProactiveReplySourceSync(sessionId, userMessageId);
+     }
+ 
+     /** Genuine native Send; ordinary historical USER writes never become queued submissions. */
+--- a/app/app/src/main/java/com/jarvys/agent/MainChatTurnContextProvider.java
++++ b/app/app/src/main/java/com/jarvys/agent/MainChatTurnContextProvider.java
+@@ -139,6 +139,7 @@
+         StringBuilder context = new StringBuilder();
+         for (String replyId : new ArrayList<>(replyCandidates)) {
+             replyCandidates.remove(replyId);
++            store.validateProactiveReplySource(sessionId, replyId);
+             StoredMessage reply = store.readStoredMessage(sessionId, replyId);
+             if (reply == null || reply.getProactiveThreadKey() == null || reply.getProactiveThreadKey().isEmpty())
+                 continue;
+--- /dev/null
++++ b/app/app/src/main/java/com/jarvys/agent/ProactiveReplyAdmission.kt
+@@ -0,0 +1,224 @@
++package com.jarvys.agent
++
++import android.content.Context
++import com.jarvys.agent.proactive.refreshVisibleCentral
++import androidx.lifecycle.Lifecycle
++import androidx.lifecycle.LifecycleOwner
++import androidx.lifecycle.LifecycleEventObserver
++import android.os.Handler
++import android.os.Looper
++import com.jarvys.agent.chatdb.ProactiveReplyAcceptance
++import com.jarvys.agent.chatdb.ProactiveReplySourceSnapshot
++import com.jarvys.agent.proactive.ProactiveActionReceiver
++import com.jarvys.agent.proactive.ProactiveReplyNotificationIdentity
++import com.jarvys.agent.workspaces.WorkspaceIdentity
++import java.util.Collections
++import java.util.IdentityHashMap
++
++/** Native interaction ownership only. Persisted source/action IDs are evidence, never launch permission. */
++object ProactiveReplyAdmission {
++    private val active = Collections.newSetFromMap(IdentityHashMap<NativeInteraction, Boolean>())
++    private val lock = Any()
++    private const val SESSION = WorkspaceIdentity.CENTRAL_SESSION
++
++    class NativeInteraction private constructor(
++        private val uiOwner: LifecycleOwner?,
++        private val displayed: AgentRunUiEvent?,
++        private val delivery: ProactiveActionReceiver.NativeDelivery?,
++        private val notification: ProactiveReplyNotificationIdentity.Binding?,
++        val kind: String,
++        val sourceMessageId: String,
++        val selectedOrdinal: Int?,
++        private val enteredText: String?,
++    ) : AutoCloseable {
++        private var bound: NativeAction? = null
++        private var begun = false
++        private var registeredPermit: CentralSubmissionAdmission.LivePermit? = null
++        private var lifecycleObserver: LifecycleEventObserver? = null
++        private var committed: com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt? = null
++
++        fun requireCurrent() = synchronized(lock) {
++            check(active.contains(this)) { "Native reply interaction expired" }
++            if (uiOwner != null) {
++                check(uiOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) { "Reply UI is no longer active" }
++                check(displayed != null && selectedOrdinal != null &&
++                    AgentRunUiState.containsExactProactiveSelection(SESSION, displayed, selectedOrdinal)) {
++                    "Displayed reply selection changed"
++                }
++            } else {
++                checkNotNull(delivery).requireCurrent()
++            }
++        }
++
++        /** One conversion from actual interaction to a canonically bound native persistence attempt. */
++        fun bind(source: ProactiveReplySourceSnapshot): NativeAction = synchronized(lock) {
++            requireCurrent()
++            check(!begun && bound == null) { "Native reply already prepared" }
++            check(source.sourceMessageId == sourceMessageId)
++            val option = if (kind == "OPTION") source.suggestedReplies.getOrNull(checkNotNull(selectedOrdinal))
++                ?: throw IllegalArgumentException("Reply option is missing") else null
++            val text = option?.text?.trim() ?: checkNotNull(enteredText).trim()
++            check(text.isNotEmpty()) { "Reply text is empty" }
++            if (displayed != null) {
++                check(displayed.proactiveThreadKey == source.threadKey && displayed.text == source.text)
++                val shown = displayed.proactiveReplies.getOrNull(checkNotNull(selectedOrdinal))
++                check(shown != null && shown.text.trim() == text && shown.label == option!!.label) {
++                    "Displayed reply content changed"
++                }
++            }
++            val id = ProactiveReplyAcceptance.actionId(source.physicalGeneration, SESSION,
++                source.threadKey, source.sourceMessageId, kind)
++            notification?.let {
++                check(it.physicalGeneration == source.physicalGeneration && it.threadKey == source.threadKey &&
++                    it.sourceMessageId == source.sourceMessageId && it.actionKind == kind &&
++                    it.actionId == id && it.sourceFingerprint == source.sourceFingerprint && it.selectedOrdinal == selectedOrdinal) { "Notification reply source changed" }
++            }
++            begun = true
++            NativeAction(this, kind, source.sourceMessageId, source.threadKey, source.physicalGeneration,
++                selectedOrdinal, text, id, ProactiveReplyAcceptance.submissionId(id), source.sourceFingerprint)
++                .also { bound = it }
++        }
++
++        internal fun requireBound(action: NativeAction) = synchronized(lock) {
++            requireCurrent()
++            check(begun && bound === action) { "Native reply attempt changed" }
++        }
++
++        internal fun recordCommitted(action: NativeAction, result: com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt) = synchronized(lock) {
++            check(bound === action && begun)
++            check(result.receipt.snapshot.submissionId == action.submissionId)
++            check(committed == null || committed === result)
++            committed = result // Evidence survives a later lifecycle cancellation; it is not a permit.
++        }
++
++        internal fun requireNewCommit(action: NativeAction, result: com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt) = synchronized(lock) {
++            requireBound(action)
++            check(committed === result && result.created) { "Only the original new native commit can dispatch" }
++        }
++
++        internal fun registerPermit(action: NativeAction, result: com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt,
++            factory: java.util.function.Supplier<CentralSubmissionAdmission.LivePermit>): CentralSubmissionAdmission.LivePermit = synchronized(lock) {
++            requireNewCommit(action, result)
++            check(registeredPermit == null) { "Reply permit already registered" }
++            val permit = factory.get()
++            try {
++                check(permit.submissionId == action.submissionId && permit.storageGeneration == action.physicalGeneration &&
++                    permit.sourceSha256 == result.receipt.snapshot.sourceSha256)
++                registeredPermit = permit
++                permit
++            } catch (failure: RuntimeException) {
++                CentralSubmissionAdmission.invalidate(permit)
++                throw failure
++            }
++        }
++
++        internal fun revokePending() {
++            synchronized(lock) {
++                active.remove(this)
++                registeredPermit?.let(CentralSubmissionAdmission::invalidate)
++            }
++            close()
++        }
++
++        fun committedEvidence(): com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt? = synchronized(lock) { committed }
++        internal fun observeLifecycle() {
++            val owner = uiOwner ?: return
++            check(Looper.myLooper() == Looper.getMainLooper()) { "Displayed reply must be captured on the UI thread" }
++            val observer = LifecycleEventObserver { _, event ->
++                if (event == Lifecycle.Event.ON_STOP || event == Lifecycle.Event.ON_DESTROY) close()
++            }
++            synchronized(lock) { lifecycleObserver = observer }
++            owner.lifecycle.addObserver(observer)
++        }
++        override fun close() {
++            val observer = synchronized(lock) {
++                active.remove(this)
++                lifecycleObserver.also { lifecycleObserver = null }
++            }
++            if (observer != null && uiOwner != null) {
++                if (Looper.myLooper() == Looper.getMainLooper()) uiOwner.lifecycle.removeObserver(observer)
++                else Handler(Looper.getMainLooper()).post { uiOwner.lifecycle.removeObserver(observer) }
++            }
++        }
++
++        companion object {
++            internal fun displayed(owner: LifecycleOwner, event: AgentRunUiEvent, index: Int): NativeInteraction =
++                NativeInteraction(owner, event, null, null, "OPTION", event.messageId, index, null)
++            internal fun receiver(delivery: ProactiveActionReceiver.NativeDelivery,
++                binding: ProactiveReplyNotificationIdentity.Binding, text: String): NativeInteraction =
++                NativeInteraction(null, null, delivery, binding, binding.actionKind, binding.sourceMessageId,
++                    binding.selectedOrdinal, text)
++        }
++    }
++
++    class NativeAction internal constructor(
++        private val owner: NativeInteraction,
++        val kind: String, val sourceMessageId: String, val threadKey: String,
++        val physicalGeneration: String, val selectedOrdinal: Int?, val text: String,
++        val actionId: String, val submissionId: String, val sourceFingerprint: String,
++    ) {
++        val processId: String get() = com.jarvys.agent.crew.CrewProcessIdentity.ID
++        fun requireCurrent() = owner.requireBound(this)
++        fun recordCommitted(result: com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt) = owner.recordCommitted(this, result)
++        fun requireNewCommit(result: com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt) = owner.requireNewCommit(this, result)
++        fun registerPermit(result: com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt,
++            factory: java.util.function.Supplier<CentralSubmissionAdmission.LivePermit>): CentralSubmissionAdmission.LivePermit =
++            owner.registerPermit(this, result, factory)
++    }
++
++    /** Denial-only snapshot at native STOP ingress. Later interactions are deliberately unaffected. */
++    @JvmStatic fun cancelCapturedInteractions(sessionId: String) {
++        if (sessionId != SESSION) return
++        synchronized(lock) {
++            active.toList().forEach { it.revokePending() }
++            CentralSubmissionAdmission.retireCapturedProactiveReplies(sessionId)
++        }
++    }
++
++    /** Native persistence seam; caller must retain the real interaction until dispatch or failure. */
++    internal fun prepare(context: Context, interaction: NativeInteraction): CentralSubmissionAdmission.LivePermit? {
++        check(ProactiveReplyHandoffPolicy.admissionEnabled()) { "Native reply admission disabled" }
++        interaction.requireCurrent()
++        val source = LocalRunStore(context.applicationContext).readProactiveReplySource(interaction.sourceMessageId, null)
++            ?: return null
++        val action = interaction.bind(source)
++        return AgentForegroundService.admitProactiveReply(context.applicationContext, action)
++    }
++
++    @JvmStatic fun submit(context: Context, interaction: NativeInteraction): Boolean {
++        val app = context.applicationContext
++        try {
++            val permit = prepare(app, interaction) ?: return false
++            AgentForegroundService.startCentralSubmission(app, permit, arrayListOf())
++            return true
++        } finally {
++            // Committed acceptance survives registration/dispatch failures. Refresh never retries it.
++            interaction.committedEvidence()?.let { result ->
++                runCatching { LocalRunStore(app).refreshVisibleCentral() }
++                runCatching { com.jarvys.agent.proactive.ProactiveInteractionDispatcher.refreshNotification(
++                    app, result.threadKey, result.receipt.snapshot.userMessageId) }
++            }
++        }
++    }
++
++    @JvmStatic fun captureDisplayedOption(owner: LifecycleOwner, event: AgentRunUiEvent, index: Int): NativeInteraction? {
++        if (!owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) ||
++            !AgentRunUiState.containsExactProactiveSelection(SESSION, event, index)) return null
++        return synchronized(lock) {
++            val interaction = NativeInteraction.displayed(owner, event, index)
++            active.add(interaction)
++            try { interaction.observeLifecycle(); interaction.requireCurrent(); interaction }
++            catch (obsolete: IllegalStateException) { interaction.close(); null }
++        }
++    }
++
++    @JvmStatic fun captureReceiver(delivery: ProactiveActionReceiver.NativeDelivery): NativeInteraction {
++        delivery.requireCurrent()
++        return synchronized(lock) {
++            val interaction = NativeInteraction.receiver(delivery, delivery.binding, delivery.text)
++            active.add(interaction)
++            try { interaction.requireCurrent(); interaction }
++            catch (obsolete: RuntimeException) { active.remove(interaction); throw obsolete }
++        }
++    }
++}
+--- a/app/app/src/main/java/com/jarvys/agent/proactive/ProactiveInteractionDispatcher.kt
++++ b/app/app/src/main/java/com/jarvys/agent/proactive/ProactiveInteractionDispatcher.kt
+@@ -19,12 +19,16 @@
+ object ProactiveInteractionDispatcher {
+     private const val SESSION = WorkspaceIdentity.CENTRAL_SESSION
+ 
++    fun submitNativeReply(context: Context, interaction: com.jarvys.agent.ProactiveReplyAdmission.NativeInteraction): Boolean =
++        com.jarvys.agent.ProactiveReplyAdmission.submit(context, interaction)
++
+     fun submitSuggestedReply(context: Context, messageId: String, index: Int): Boolean {
+         val claim = prepareSuggestedReply(context, messageId, index) ?: return false
+         return launchPreparedTurn(context.applicationContext, claim)
+     }
+ 
+     fun prepareSuggestedReply(context: Context, messageId: String, index: Int): ProactiveReplyClaim? {
++        if (com.jarvys.agent.ProactiveReplyHandoffPolicy.admissionEnabled()) return null
+         val app = context.applicationContext
+         val store = LocalRunStore(app)
+         val claim = store.claimProactiveSuggestedReply(SESSION, messageId, index) ?: return null
+@@ -40,6 +44,7 @@
+ 
+     /** [messageId] is a message of the notified thread; [threadToken] must match that row's thread. */
+     fun prepareInlineReply(context: Context, messageId: String, threadToken: String, text: String): ProactiveReplyClaim? {
++        if (com.jarvys.agent.ProactiveReplyHandoffPolicy.admissionEnabled()) return null
+         val normalized = text.trim()
+         if (normalized.isEmpty()) return null
+         val app = context.applicationContext
+@@ -82,6 +87,22 @@
+ }
+ 
+ class ProactiveActionReceiver : android.content.BroadcastReceiver() {
++    private val nativeLock = Any()
++    private val activeDeliveries = java.util.Collections.newSetFromMap(
++        java.util.IdentityHashMap<NativeDelivery, Boolean>())
++
++    /** Constructor arguments are insufficient: this receiver must actively own the exact delivery. */
++    class NativeDelivery internal constructor(
++        private val owner: ProactiveActionReceiver,
++        val binding: ProactiveReplyNotificationIdentity.Binding,
++        val text: String,
++    ) : AutoCloseable {
++        fun requireCurrent() = synchronized(owner.nativeLock) {
++            check(owner.activeDeliveries.contains(this)) { "Native notification delivery expired" }
++        }
++        override fun close() { synchronized(owner.nativeLock) { owner.activeDeliveries.remove(this) } }
++    }
++
+     override fun onReceive(context: Context, intent: android.content.Intent) {
+         if (!com.jarvys.agent.FreshStorageBootstrap.isCurrent(intent)) return
+         val action = intent.action
+@@ -91,11 +112,20 @@
+         val threadToken = intent.getStringExtra(EXTRA_THREAD_TOKEN).orEmpty()
+         val text = androidx.core.app.RemoteInput.getResultsFromIntent(intent)
+             ?.getCharSequence(EXTRA_INLINE_REPLY)?.toString().orEmpty()
++        val nativeBinding = if (com.jarvys.agent.ProactiveReplyHandoffPolicy.admissionEnabled())
++            ProactiveReplyNotificationIdentity.readValidated(context, intent) ?: return else null
++        val nativeDelivery = nativeBinding?.let { binding ->
++            synchronized(nativeLock) { NativeDelivery(this, binding, text).also(activeDeliveries::add) }
++        }
+         val pendingResult = goAsync()
+         try {
+             ProactiveReplyReceiverExecutor.execute {
+                 try {
+-                    when (action) {
++                    if (nativeDelivery != null) {
++                        com.jarvys.agent.ProactiveReplyAdmission.captureReceiver(nativeDelivery).use { interaction ->
++                            ProactiveInteractionDispatcher.submitNativeReply(context.applicationContext, interaction)
++                        }
++                    } else when (action) {
+                         ACTION_SUGGESTED_REPLY -> {
+                             ProactiveInteractionDispatcher.submitSuggestedReply(
+                                 context.applicationContext, messageId, index,
+@@ -114,11 +144,13 @@
+                         AgentErrorReporter.reportChatDatabaseFailure(context, failure)
+                     }
+                 } finally {
++                    nativeDelivery?.close()
+                     pendingResult?.finish()
+                     Thread.interrupted()
+                 }
+             }
+         } catch (failure: RuntimeException) {
++            nativeDelivery?.close()
+             pendingResult?.finish()
+             Log.e("JarvysProactive", "Could not queue notification reply", failure)
+         }
