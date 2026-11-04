@@ -186,8 +186,21 @@ internal object ProactiveReplySourceValidation {
         check(notice.role=="assistant" && !notice.decisionId.isNullOrBlank())
         return notice
     }
+    private fun readSubmission(database:JarvysChatDatabase,session:String,userId:String):Triple<String,String,Long>? {
+        val submissions=CentralTurnSubmissionRepository(database)
+        return if(submissions.available())database.chatSql.query("SELECT submission_id,storage_generation,user_seq FROM central_turn_submissions WHERE conversation_id=? AND user_message_id=?",arrayOf(session,userId)).use {c ->
+            if(!c.moveToFirst())null else {
+                check(c.getType(2)==Cursor.FIELD_TYPE_INTEGER)
+                Triple(string(c,0),string(c,1),c.getLong(2)).also {check(!c.moveToNext())}
+            }
+        } else null
+    }
     /** Context readers also compare the full stored root, without a validator -> digest -> validator cycle. */
     fun validateContext(database:JarvysChatDatabase,session:String,userId:String):ProactiveReplyAcceptanceValue? {
+        if(readRow(database,session,userId)==null) {
+            check(readSubmission(database,session,userId)==null) {"Accepted USER is missing"}
+            return null // Historical absent lookup is not an accepted input or a root-capture path.
+        }
         val proof=validateUser(database,session,userId)
         if(proof!=null)captureCentralUserRootDigestInTransaction(database,session,userId)
         return proof
@@ -198,16 +211,10 @@ internal object ProactiveReplySourceValidation {
         val parts=parts(database,session,userId)
         val proofs=parts.filter {it.kind==ProactiveReplyAcceptance.PART_KIND}
         val request=parts.any {it.kind==CentralSubmissionRequest.PART_KIND}
-        val submissions=CentralTurnSubmissionRepository(database)
-        val submission=if(submissions.available())database.chatSql.query("SELECT submission_id,storage_generation,user_seq FROM central_turn_submissions WHERE conversation_id=? AND user_message_id=?",arrayOf(session,userId)).use {c ->
-            if(!c.moveToFirst())null else {
-                check(c.getType(2)==Cursor.FIELD_TYPE_INTEGER)
-                Triple(string(c,0),string(c,1),c.getLong(2)).also {check(!c.moveToNext())}
-            }
-        } else null
+        val submission=readSubmission(database,session,userId)
         val positive=submission!=null
         if(proofs.isEmpty()) {
-            check(!(row.thread!=null && (positive || request)) && !row.stable.startsWith("proactive-reply-v1:")) {"Positive threaded USER acceptance is missing"}
+            check(!(row.thread!=null && (positive || request)) && !row.stable.startsWith("proactive-reply-v1:") && submission?.first?.startsWith("proactive-reply-v1:")!=true) {"Positive threaded USER acceptance is missing"}
             return null // Retained non-positive thread history is not backfilled or upgraded.
         }
         check(proofs.size==1 && row.role=="user" && row.status==null && row.decision==null && row.interrupt==null && WorkspaceIdentity.isCentral(session))

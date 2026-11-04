@@ -30,6 +30,8 @@ object ProactiveReplyAdmission {
         val sourceMessageId: String,
         val selectedOrdinal: Int?,
         private val enteredText: String?,
+        private val uiEpoch: Long?,
+        private val sessionEpoch: Long?,
     ) : AutoCloseable {
         private var bound: NativeAction? = null
         private var begun = false
@@ -40,6 +42,10 @@ object ProactiveReplyAdmission {
         fun requireCurrent() = synchronized(lock) {
             check(active.contains(this)) { "Native reply interaction expired" }
             if (uiOwner != null) {
+                check(uiEpoch != null && UserDecisionUiAvailability.isCurrentVisibleEpoch(uiEpoch) &&
+                    sessionEpoch != null && AgentRunUiState.isCurrentVisibleSessionEpoch(SESSION, sessionEpoch)) {
+                    "Reply presentation changed since the captured tap"
+                }
                 check(uiOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) { "Reply UI is no longer active" }
                 check(displayed != null && selectedOrdinal != null &&
                     AgentRunUiState.containsExactProactiveSelection(SESSION, displayed, selectedOrdinal)) {
@@ -142,12 +148,13 @@ object ProactiveReplyAdmission {
         }
 
         companion object {
-            internal fun displayed(owner: LifecycleOwner, event: AgentRunUiEvent, index: Int): NativeInteraction =
-                NativeInteraction(owner, event, null, null, "OPTION", event.messageId, index, null)
+            internal fun displayed(owner: LifecycleOwner, event: AgentRunUiEvent, index: Int,
+                uiEpoch: Long, sessionEpoch: Long): NativeInteraction =
+                NativeInteraction(owner, event, null, null, "OPTION", event.messageId, index, null, uiEpoch, sessionEpoch)
             internal fun receiver(delivery: ProactiveActionReceiver.NativeDelivery,
                 binding: ProactiveReplyNotificationIdentity.Binding, text: String): NativeInteraction =
                 NativeInteraction(null, null, delivery, binding, binding.actionKind, binding.sourceMessageId,
-                    binding.selectedOrdinal, text)
+                    binding.selectedOrdinal, text, null, null)
         }
     }
 
@@ -204,8 +211,10 @@ object ProactiveReplyAdmission {
     @JvmStatic fun captureDisplayedOption(owner: LifecycleOwner, event: AgentRunUiEvent, index: Int): NativeInteraction? {
         if (!owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) ||
             !AgentRunUiState.containsExactProactiveSelection(SESSION, event, index)) return null
+        val uiEpoch = UserDecisionUiAvailability.captureVisibleEpoch() ?: return null
+        val sessionEpoch = AgentRunUiState.captureVisibleSessionEpoch(SESSION) ?: return null
         return synchronized(lock) {
-            val interaction = NativeInteraction.displayed(owner, event, index)
+            val interaction = NativeInteraction.displayed(owner, event, index, uiEpoch, sessionEpoch)
             active.add(interaction)
             try { interaction.observeLifecycle(); interaction.requireCurrent(); interaction }
             catch (obsolete: IllegalStateException) { interaction.close(); null }

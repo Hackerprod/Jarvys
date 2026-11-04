@@ -475,6 +475,7 @@ object AgentRunUiState {
     private val assistantTextStreams = mutableMapOf<String, AgentRunUiEvent>()
     private var nextAssistantTextStreamId = -1L
     private var visibleSessionId: String? = null
+    private var visibleSessionEpoch = 0L
     private val publishedState = MutableStateFlow(AgentRunUiSnapshot())
     private val publishedTimelineEvents = MutableStateFlow(AgentRunUiTimelineEvents())
     /** Per-session immutable timeline snapshots avoid routing through the currently visible session. */
@@ -555,7 +556,10 @@ object AgentRunUiState {
                 else {
                     synchronized(lock) {
                         value.sessionId?.let { storeSessionSnapshotLocked(it, value) }
-                        if (visibleSessionId == null) visibleSessionId = value.sessionId
+                        if (visibleSessionId == null && value.sessionId != null) {
+                            visibleSessionEpoch = Math.incrementExact(visibleSessionEpoch)
+                            visibleSessionId = value.sessionId
+                        }
                         publishVisibleSnapshotLocked(value)
                         refreshVisibleInteractiveOwnerLocked()
                     }
@@ -637,6 +641,7 @@ object AgentRunUiState {
     @JvmStatic
     fun showSession(sessionId: String) = synchronized(lock) {
         publishedState.value.sessionId?.let { storeSessionSnapshotLocked(it, publishedState.value) }
+        if (visibleSessionId != sessionId) visibleSessionEpoch = Math.incrementExact(visibleSessionEpoch)
         visibleSessionId = sessionId
         val selected = (sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId))
             .copy(interactiveOwnerSessionId = activeInteractiveOwnerSessionIdLocked(sessionId))
@@ -671,6 +676,14 @@ object AgentRunUiState {
         eventsForSession(sessionId).any {
             it.id == event.id && it.kind == event.kind && it.messageId == event.messageId
         }
+    }
+
+    /** Monotonic process-local session visibility, so leaving and returning cannot revive an old tap. */
+    @JvmStatic fun captureVisibleSessionEpoch(sessionId: String): Long? = synchronized(lock) {
+        visibleSessionEpoch.takeIf { visibleSessionId == sessionId }
+    }
+    @JvmStatic fun isCurrentVisibleSessionEpoch(sessionId: String, epoch: Long): Boolean = synchronized(lock) {
+        visibleSessionId == sessionId && visibleSessionEpoch == epoch
     }
 
     /** Recovery captures the actual immutable displayed selection, not just a caller-selected row ID. */

@@ -22,3 +22,11 @@ Design commit 5968f8ff715d452a4222e354be5e800aee93bdad, document SHA-256 44af5c3
 ## Limits
 
 P4A is only the acceptance/handoff subset of the first P4 unit. Exact-evidence hide and source-snapshot conservation are subsequent work; no arbitrary semantic-equivalence, quiet-hours, fatigue threshold or timer is introduced. The source-backed P4B design remains unimplemented. Old binaries are not promised to understand new typed positive submissions. Existing v100 delivery and historical failures remain unchanged.
+
+## First OFF diagnostic and owner-fence corrections
+
+The first integrated OFF candidate b6d30c239902bd91f698975da52480a30de309da compiled production Kotlin/Java, but unit-test compilation failed before execution: a Context-typed permission fixture and direct use of host-only java.management were invalid against the Android compile classpath. The fixture now uses its actual Application type and reflective host management calls, retaining the exact BLOCKED/thread-lock-owner assertion. Zero tests ran in that attempt; no Play or D3 PASS is claimed.
+
+Independent static review identified two owner-lifetime races before activation. A received notification reply waiting in the executor must already belong to the STOP snapshot, so its interaction is now registered at receiver ingress and reused by the queued runnable. A UI interaction must not revive after leaving and returning to the same retained event; native visibility and session revisions now fence that round trip. These process-local revisions are denial fences, not timing/rate policy or persisted task status. Fresh later user gestures receive fresh owners. The fixes and independent regression cases still require execution on the sealed candidate.
+
+Independent source review also identified a contextual downgrade when a typed USER's proof and mutable thread/stable fields were stripped while its positive submission receipt survived. Receipt identity now independently requires the proof. Absent historical lookups retain their null behavior only without a positive receipt; root capture still requires a real USER. Two storage-only regression methods join the preregistered OFF cohort (28 primary, 11 auxiliary, 39 total per variant). These corrections remain unexecuted; gate OFF and independent D3 approval pending.

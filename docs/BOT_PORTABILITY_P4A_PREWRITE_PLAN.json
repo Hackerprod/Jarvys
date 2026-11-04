@@ -1,6 +1,6 @@
 {
   "status": "preregistered-unrun-gate-off",
-  "primaryD3Methods": 26,
+  "primaryD3Methods": 28,
   "variants": [
     "Full",
     "Play"
@@ -54,6 +54,15 @@
       "phase": "primaryD3"
     },
     {
+      "class": "com.jarvys.agent.chatdb.ProactiveReplyIndependentD3DowngradeTest",
+      "source": "app/app/src/test/java/com/jarvys/agent/chatdb/ProactiveReplyIndependentD3DowngradeTest.kt",
+      "declaredMethods": [
+        "historicalMissingLookupStaysNullWhileRootCaptureRequiresActualUser",
+        "coherentProofRemovalAndUserMetadataStrippingCannotDowngradeTypedReceiptToOrdinaryContext"
+      ],
+      "phase": "primaryD3"
+    },
+    {
       "class": "com.jarvys.agent.proactive.ProactiveActionReceiverTest",
       "source": "app/app/src/test/java/com/jarvys/agent/proactive/ProactiveActionReceiverTest.kt",
       "declaredMethods": [
@@ -96,7 +105,7 @@
   "activationConditions": [
     "Matching variants pass primary D3 and auxiliary native source/identity checks on the same source bytes.",
     "Independent D3 review before enabling new writes.",
-    "Move the unchanged OFF-only assertion outside normal app test sources before enabling; 25 storage/bootstrap methods remain for final ON validation.",
+    "Move the unchanged OFF-only assertion outside normal app test sources before enabling; 27 storage/bootstrap/receipt methods remain for final ON validation.",
     "Run native UI/receiver/service acceptance and matching final regression, then independent implementation review."
   ]
 }

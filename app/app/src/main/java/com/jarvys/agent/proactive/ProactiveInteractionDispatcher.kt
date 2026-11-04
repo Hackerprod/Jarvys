@@ -117,15 +117,24 @@ class ProactiveActionReceiver : android.content.BroadcastReceiver() {
         val nativeDelivery = nativeBinding?.let { binding ->
             synchronized(nativeLock) { NativeDelivery(this, binding, text).also(activeDeliveries::add) }
         }
+        // Register the actual received tap before queueing: a STOP must see deliveries waiting
+        // behind another receiver task, not permit them to become fresh interactions afterward.
+        val nativeInteraction = try {
+            nativeDelivery?.let(com.jarvys.agent.ProactiveReplyAdmission::captureReceiver)
+        } catch (failure: RuntimeException) {
+            nativeDelivery?.close()
+            throw failure
+        }
         val pendingResult = try { goAsync() } catch (failure: RuntimeException) {
+            nativeInteraction?.close()
             nativeDelivery?.close()
             throw failure
         }
         try {
             ProactiveReplyReceiverExecutor.execute {
                 try {
-                    if (nativeDelivery != null) {
-                        com.jarvys.agent.ProactiveReplyAdmission.captureReceiver(nativeDelivery).use { interaction ->
+                    if (nativeInteraction != null) {
+                        nativeInteraction.use { interaction ->
                             ProactiveInteractionDispatcher.submitNativeReply(context.applicationContext, interaction)
                         }
                     } else when (action) {
@@ -147,12 +156,14 @@ class ProactiveActionReceiver : android.content.BroadcastReceiver() {
                         AgentErrorReporter.reportChatDatabaseFailure(context, failure)
                     }
                 } finally {
+                    nativeInteraction?.close()
                     nativeDelivery?.close()
                     pendingResult?.finish()
                     Thread.interrupted()
                 }
             }
         } catch (failure: RuntimeException) {
+            nativeInteraction?.close()
             nativeDelivery?.close()
             pendingResult?.finish()
             Log.e("JarvysProactive", "Could not queue notification reply", failure)

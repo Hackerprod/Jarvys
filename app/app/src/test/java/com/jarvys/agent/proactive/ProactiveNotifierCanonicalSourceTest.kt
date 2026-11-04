@@ -25,7 +25,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], shadows = [com.jarvys.agent.ArtifactOsShadow::class])
 class ProactiveNotifierCanonicalSourceTest {
     @get:Rule val chatTestStore = ChatTestStore(registerApplicationFilesDirectory = true)
-    private val context: Context get() = ApplicationProvider.getApplicationContext()
+    private val context: android.app.Application get() = ApplicationProvider.getApplicationContext()
     private val central = WorkspaceIdentity.CENTRAL_SESSION
     private val thread = "native-notification-thread"
 
@@ -127,12 +127,20 @@ class ProactiveNotifierCanonicalSourceTest {
             val refreshPublisher = Thread(secondTask, "p4-notification-refresh")
             secondPublisher = refreshPublisher
             refreshPublisher.start()
-            val threads = java.lang.management.ManagementFactory.getThreadMXBean()
+            // java.management is a host JDK API, not part of Android's compile bootclasspath.
+            val management = Class.forName("java.lang.management.ManagementFactory")
+            val threads = management.getMethod("getThreadMXBean").invoke(null)
+            val beanType = Class.forName("java.lang.management.ThreadMXBean")
+            val infoType = Class.forName("java.lang.management.ThreadInfo")
+            val readInfo = beanType.getMethod("getThreadInfo", java.lang.Long.TYPE)
+            val readState = infoType.getMethod("getThreadState")
+            val readLockOwner = infoType.getMethod("getLockOwnerId")
             val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
             var waitingOnFirst = false
             while (System.nanoTime() < deadline && !secondTask.isDone) {
-                val state = threads.getThreadInfo(refreshPublisher.id)
-                waitingOnFirst = state != null && state.threadState == Thread.State.BLOCKED && state.lockOwnerId == firstPublisher.id
+                val state = readInfo.invoke(threads, refreshPublisher.id)
+                waitingOnFirst = state != null && readState.invoke(state) == Thread.State.BLOCKED &&
+                    (readLockOwner.invoke(state) as Long) == firstPublisher.id
                 if (waitingOnFirst) break
                 Thread.sleep(5)
             }

@@ -45,15 +45,23 @@ class ProactiveReplyUiSelectionTest {
             assertFalse(AgentRunUiState.containsExactProactiveSelection(session, displayed, -1))
             assertFalse(AgentRunUiState.containsExactProactiveSelection(session, displayed, 1))
             assertFalse(AgentRunUiState.containsExactProactiveSelection("another-session", displayed, 0))
+            val originalVisibilityEpoch = requireNotNull(UserDecisionUiAvailability.captureVisibleEpoch())
+            val originalSessionEpoch = requireNotNull(AgentRunUiState.captureVisibleSessionEpoch(session))
             UserDecisionUiAvailability.setChatVisible(false)
             assertFalse("Leaving the chat route invalidates the captured selection",
                 AgentRunUiState.containsExactProactiveSelection(session, displayed, 0))
             UserDecisionUiAvailability.setChatVisible(true)
+            assertFalse("Returning must not revive the old captured presentation epoch",
+                UserDecisionUiAvailability.isCurrentVisibleEpoch(originalVisibilityEpoch))
+            assertTrue(UserDecisionUiAvailability.isCurrentVisibleEpoch(requireNotNull(UserDecisionUiAvailability.captureVisibleEpoch())))
             assertTrue(AgentRunUiState.containsExactProactiveSelection(session, displayed, 0))
             AgentRunUiState.showSession("workspace-native-route")
             assertFalse("A retained Central snapshot is not a visible native selection",
                 AgentRunUiState.containsExactProactiveSelection(session, displayed, 0))
             AgentRunUiState.showSession(session)
+            assertFalse("Returning to Central must not revive an old session epoch",
+                AgentRunUiState.isCurrentVisibleSessionEpoch(session, originalSessionEpoch))
+            assertTrue(AgentRunUiState.isCurrentVisibleSessionEpoch(session, requireNotNull(AgentRunUiState.captureVisibleSessionEpoch(session))))
             assertTrue(AgentRunUiState.containsExactProactiveSelection(session, displayed, 0))
             val replacement = displayed.copy(text = "New displayed revision")
             AgentRunUiState.restoreSession(session, listOf(replacement))

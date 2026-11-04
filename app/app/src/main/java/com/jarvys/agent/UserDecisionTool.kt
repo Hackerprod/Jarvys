@@ -144,7 +144,21 @@ class UserDecisionTool @JvmOverloads constructor(
 }
 
 object UserDecisionUiAvailability {
+    private val visibilityLock = Any()
     @Volatile private var chatVisible = false
-    @JvmStatic fun setChatVisible(visible: Boolean) { chatVisible = visible }
+    private var visibilityEpoch = 0L
+    @JvmStatic fun setChatVisible(visible: Boolean) = synchronized(visibilityLock) {
+        if (chatVisible != visible) {
+            visibilityEpoch = Math.incrementExact(visibilityEpoch)
+            chatVisible = visible
+        }
+    }
     @JvmStatic fun isChatVisible(): Boolean = chatVisible
+    /** Process-local presentation fence, never persisted or usable as execution permission. */
+    @JvmStatic fun captureVisibleEpoch(): Long? = synchronized(visibilityLock) {
+        visibilityEpoch.takeIf { chatVisible }
+    }
+    @JvmStatic fun isCurrentVisibleEpoch(epoch: Long): Boolean = synchronized(visibilityLock) {
+        chatVisible && visibilityEpoch == epoch
+    }
 }
