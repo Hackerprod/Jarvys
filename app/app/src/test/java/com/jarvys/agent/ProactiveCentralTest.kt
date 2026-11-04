@@ -136,14 +136,16 @@ class ProactiveCentralTest {
         org.robolectric.Shadows.shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         val manager = context.getSystemService(android.app.NotificationManager::class.java)
         manager.cancelAll()
-        assertTrue(com.jarvys.agent.proactive.ProactiveNotifier.post(context, "anchor-thread", "notice-77", "Body", "normal",
-            emptyList(), "notice-77", emptyList(), false))
+        val noticeId = LocalRunStore(context).appendProactiveAssistantMessageIfAbsent(
+            central, "anchor-notice", "Body", emptyList(), "anchor-thread")
+        assertTrue(com.jarvys.agent.proactive.ProactiveNotifier.post(context, "anchor-thread", noticeId, "Body", "normal",
+            emptyList(), noticeId, emptyList(), false))
         val posted = org.robolectric.Shadows.shadowOf(manager).allNotifications.single()
         val open = org.robolectric.Shadows.shadowOf(posted.contentIntent).savedIntent
-        assertEquals("notice-77", open.getStringExtra(MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID))
+        assertEquals(noticeId, open.getStringExtra(MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID))
         assertFalse(open.hasExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION))
         val reply = org.robolectric.Shadows.shadowOf(posted.actions.last().actionIntent).savedIntent
-        assertEquals("notice-77", reply.getStringExtra(com.jarvys.agent.proactive.ProactiveActionReceiver.EXTRA_MESSAGE_ID))
+        assertEquals(noticeId, reply.getStringExtra(com.jarvys.agent.proactive.ProactiveActionReceiver.EXTRA_MESSAGE_ID))
     }
 
     @Test fun B8_aTaskResultIsRecoveredWithTheTaskAndOccurrenceAsSource() {

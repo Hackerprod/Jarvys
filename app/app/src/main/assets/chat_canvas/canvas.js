@@ -210,7 +210,7 @@
       addAction(actions, "Compartir", "share", event.seq);
     }
     if (event.replies && !event.repliesUsed) event.replies.forEach(function (reply, index) {
-      addAction(actions, reply.label, "respond", event.seq, String(index));
+      addAction(actions, reply.label, "respond", event.seq, reply.selection || "");
     });
     if (actions.childNodes.length) article.appendChild(actions);
     return article;

@@ -703,6 +703,20 @@ public final class LocalRunStore {
         return appendConversationMessage(sessionId, role, content, durationMs, runId, userMessageId, status, null);
     }
 
+    /** Canonical reply source data only. Reading never grants launch permission. */
+    public com.jarvys.agent.chatdb.ProactiveReplySourceSnapshot readProactiveReplySource(String messageId, String threadKey) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.readProactiveReplySourceSync(messageId, threadKey);
+    }
+    public com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt appendProactiveReplySubmission(ProactiveReplyAdmission.NativeAction action) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.appendProactiveReplySubmissionSync(action);
+    }
+    public void validateProactiveReplySource(String sessionId, String userMessageId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        chatDatabaseBridge.validateProactiveReplySourceSync(sessionId, userMessageId);
+    }
+
     /** Genuine native Send; ordinary historical USER writes never become queued submissions. */
     public com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt appendCentralSubmission(
             CentralSubmissionAdmission.AppendAuthority authority) {

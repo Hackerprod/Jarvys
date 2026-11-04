@@ -8,6 +8,8 @@ import android.system.OsConstants
 import android.system.ErrnoException
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.chatdb.ConversationRepository
+import com.jarvys.agent.chatdb.ConnectionProjectionRepository
+import com.jarvys.agent.chatdb.withChatWriteTransaction
 import com.jarvys.agent.chatdb.JarvysChatDatabaseProvider
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.workspaces.WorkspaceRegistry
@@ -113,9 +115,14 @@ object FreshStorageBootstrap {
                     check(StorageGeneration(app).chatRoot().let { it.isDirectory || it.mkdirs() })
                     val database = JarvysChatDatabaseProvider.getInstance(app)
                     runBlocking {
-                        ChatDatabaseBridge.requireSuccessSync(
-                            ConversationRepository(database).ensureConversation(WorkspaceIdentity.CENTRAL_SESSION, "central"),
-                            "Create Central")
+                        database.withChatWriteTransaction {
+                            ChatDatabaseBridge.requireSuccessSync(
+                                ConversationRepository(database).ensureConversation(WorkspaceIdentity.CENTRAL_SESSION, "central"),
+                                "Create Central")
+                            // Establish the existing physical-store identity before any first notice.
+                            // This is bootstrap metadata, never a source receipt or execution permit.
+                            ConnectionProjectionRepository(database).generation()
+                        }
                     }
                     WorkspaceRegistry(app).use { it.openForBootstrap() }
                     prepared += key

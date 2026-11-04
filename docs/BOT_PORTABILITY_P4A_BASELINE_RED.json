@@ -1,0 +1,56 @@
+{
+  "status": "full-baseline-red-not-implementation-pass",
+  "sourceBase": "e0801e05caca2f4857ace19e1d7033cd8fe7a356",
+  "sealedRegressionSha256": "f856d8356141e9338e4d0bb1112e257ceef50e86ef018846496dfc8907640504",
+  "sourceBindingSha256": "8600222842bf1174008eaaa40e60f3bb7fadcfb669eb70b5c9eca320608b03ef",
+  "boundSourceFiles": 2046,
+  "sourceUnchanged": true,
+  "artifactBindingSha256": "0a9cf6f265566bf3dc1c17425a8de77d0731ed2b2d819e8714261c80eb3c5fe7",
+  "boundArtifactFiles": 3064,
+  "artifactsUnchanged": true,
+  "variant": "Full",
+  "exportExit": 0,
+  "testLauncherExit": 1,
+  "counts": {
+    "tests": 3,
+    "failures": 3,
+    "errors": 0,
+    "skipped": 0
+  },
+  "regressions": {
+    "class": "com.jarvys.agent.ProactiveReplyHandoffRegressionTest",
+    "tests": 2,
+    "failures": 2,
+    "optionEvidence": {
+      "consumedSeq": 2,
+      "users": 0,
+      "submissions": 0,
+      "nextSeqBefore": 2,
+      "nextSeqAfter": 3,
+      "repeatReturnedNull": true,
+      "repeatHitUserInsert": false
+    },
+    "inlineEvidence": {
+      "users": 1,
+      "submissions": 0,
+      "matchingSubmissions": 0,
+      "displayState": null,
+      "canRetry": null
+    }
+  },
+  "calibration": {
+    "class": "com.jarvys.agent.proactive.ProactiveActionReceiverTest",
+    "tests": 1,
+    "failures": 1,
+    "failure": "CleanInstallRequiredException before assertions",
+    "sourceLocation": "FreshStorageBootstrap.requireFreshFiles:141",
+    "disposition": "unresolved host-fixture diagnosis; not a calibration PASS",
+    "diagnosis": "Robolectric SDK34 default lstat reports absent paths as present; missing existing ArtifactOsShadow. Fixture annotation repaired, not yet revalidated. Native storage guard and Application preserved."
+  },
+  "limits": [
+    "No baseline Play run or claim.",
+    "No APK, device, process-death or live-provider evidence.",
+    "JVM network/process guard retained; not an OS/native network sandbox.",
+    "All earlier bootstrap failures and the interrupted 1GiB Kotlin OOM attempt are retained privately."
+  ]
+}

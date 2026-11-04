@@ -1,5 +1,6 @@
 package com.jarvys.agent.chatdb
 
+import android.database.Cursor
 import com.jarvys.agent.connectors.ConnectionStateCoordinator
 import java.util.UUID
 
@@ -45,9 +46,12 @@ internal class ConnectionProjectionRepository(private val database: JarvysChatDa
         }
 
     private fun readGeneration(): String? = sql.query("SELECT value FROM storage_meta WHERE key=?", arrayOf(GENERATION_KEY)).use { c ->
-        if (!c.moveToFirst()) null else c.getString(0).also { value ->
-            check(runCatching { UUID.fromString(value).toString() == value }.getOrDefault(false)) {
-                "Invalid connection projection generation"
+        if (!c.moveToFirst()) null else {
+            check(c.getType(0) == Cursor.FIELD_TYPE_STRING) { "Invalid connection projection generation type" }
+            c.getString(0).also { value ->
+                check(runCatching { UUID.fromString(value).toString() == value }.getOrDefault(false) && !c.moveToNext()) {
+                    "Invalid connection projection generation"
+                }
             }
         }
     }

@@ -45,20 +45,27 @@ class ChatCanvasContractTest {
         val transferable = user.copy(attachments = listOf(ChatAttachment(
             attachmentId, "report.txt", "text/plain", 12, ChatAttachment.Kind.FILE, "$attachmentId-report.txt",
         )))
-        val suggested = user.copy(proactiveReplies = listOf(ProactiveSuggestedReply("Sí", "sí")))
+        val suggested = latest.copy(proactiveThreadKey = "thread",
+            proactiveReplies = listOf(ProactiveSuggestedReply("Sí", "sí")))
+        val selection = requireNotNull(ChatCanvasProactiveReplySelection.encode(suggested, 0))
 
         assertTrue(allowed("copy", user))
         assertFalse(allowed("copy", tool))
         assertTrue(allowed("open_viewer", previewTool))
         assertTrue(allowed("download", transferable))
         assertTrue(allowed("share", transferable))
-        assertTrue(allowed("respond", suggested, value = "0"))
-        assertFalse(allowed("respond", suggested, value = "0", allowProactiveReplies = false))
+        assertTrue(allowed("respond", suggested, value = selection))
+        assertFalse(allowed("respond", suggested, value = selection, allowProactiveReplies = false))
         val workspaceReply = ChatCanvasEventSerializer.page(context, listOf(suggested), running = false,
             allowProactiveReplies = false).getJSONArray("events").getJSONObject(0)
         assertEquals(0, workspaceReply.getJSONArray("replies").length())
         assertFalse(allowed("respond", suggested, value = "1"))
-        assertFalse(allowed("respond", suggested.copy(proactiveRepliesUsed = true), value = "0"))
+        assertFalse(allowed("respond", suggested.copy(), value = selection))
+        assertFalse(allowed("respond", suggested.copy(kind = "user"), value = selection))
+        assertFalse(allowed("respond", suggested, value = selection.substringBeforeLast(':') + ":00"))
+        assertFalse(allowed("respond", suggested, value = selection.substringBeforeLast(':') + ":+0"))
+        assertFalse(allowed("respond", suggested, value = selection + ":0"))
+        assertFalse(allowed("respond", suggested.copy(proactiveRepliesUsed = true), value = selection))
         assertTrue(allowed("retry", latest, latestAssistant = "m-11"))
         assertFalse(allowed("retry", latest, latestAssistant = "m-11", allowRetry = false))
         assertFalse(allowed("retry", latest, running = true, latestAssistant = "m-11"))

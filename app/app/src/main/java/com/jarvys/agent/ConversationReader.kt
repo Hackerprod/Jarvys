@@ -365,6 +365,7 @@ internal class ConversationReader(
     /** Resolves the active compaction boundary and asks for the compacted notice a thread reply answers. */
     suspend fun readCompactedProactiveReferent(conversationId: String, replyMessageId: String): ProactiveReferent? =
         readProjection {
+            com.jarvys.agent.chatdb.ProactiveReplySourceValidation.validateContext(database,conversationId,replyMessageId)
             val firstKept = memory.activeCompaction(conversationId)?.first_kept ?: return@readProjection null
             conversations.readCompactedProactiveReferent(conversationId, replyMessageId, firstKept)
         }

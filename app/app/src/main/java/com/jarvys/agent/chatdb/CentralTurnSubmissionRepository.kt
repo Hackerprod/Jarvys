@@ -110,13 +110,17 @@ internal class CentralTurnSubmissionRepository(private val database: JarvysChatD
         requireAvailable();check(WorkspaceIdentity.isCentral(message.conversationId) && message.role=="user" && message.hiddenKind==null)
         check(submissionId.isNotBlank() && processId.isNotBlank() && storageGeneration==generation())
         CentralSubmissionRequest.read(database,message.conversationId,message.messageId)
-        val digest=captureCentralUserRootDigestInTransaction(database,message.conversationId,message.messageId)
+        val digest=captureCentralUserRootDigestInTransaction(database,message.conversationId,message.messageId,preparingSubmission=true)
         find(message.conversationId,submissionId)?.let { existing ->
             check(existing.userMessageId==message.messageId && existing.sourceSha256==digest && existing.storageGeneration==storageGeneration && existing.originalAdmissionProcess==processId) {"Conflicting Central submission delivery"}
             return existing
         }
         sql.execSQL("INSERT INTO central_turn_submissions(conversation_id,submission_id,user_message_id,user_seq,source_sha256,storage_generation,original_admission_process,current_admission_process,revision,state) VALUES(?,?,?,?,?,?,?,?,1,'PREPARED')",arrayOf(message.conversationId,submissionId,message.messageId,message.seq,digest,storageGeneration,processId,processId))
-        return checkNotNull(find(message.conversationId,submissionId))
+        return checkNotNull(find(message.conversationId,submissionId)).also { committed ->
+            check(captureCentralUserRootDigestInTransaction(database,message.conversationId,message.messageId)==committed.sourceSha256) {
+                "Prepared submission failed immediate post-insert source validation"
+            }
+        }
     }
     fun claim(permit:CentralSubmissionAdmission.LivePermit,authority:CentralSubmissionAdmission.ClaimAuthority):CentralSubmissionSnapshot {
         requireAvailable();authority.requireTransactionOwner()

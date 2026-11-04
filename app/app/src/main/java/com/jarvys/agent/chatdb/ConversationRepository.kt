@@ -1161,11 +1161,13 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         replyMessageId: String,
         firstKept: Long,
     ): ProactiveReferent? = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+        val acceptance=ProactiveReplySourceValidation.validateContext(database,conversationId,replyMessageId)
         val highWater = maxSeq(conversationId)
         val reply = hydrateMessages(conversationId, listOf(replyMessageId), highWater).singleOrNull()
             ?: return@withChatReadTransaction null
         val replyThread = reply.proactiveThreadKey?.takeIf(String::isNotEmpty) ?: return@withChatReadTransaction null
-        val noticeId = reply.proactiveReplyToMessageId ?: sql.query(
+        val noticeId = if(acceptance!=null) acceptance.referentMessageId ?: return@withChatReadTransaction null
+        else reply.proactiveReplyToMessageId ?: sql.query(
             "SELECT message_id FROM messages WHERE conversation_id=? AND proactive_thread_key=? " +
                 "AND proactive_decision_id IS NOT NULL AND seq<? ORDER BY seq DESC LIMIT 1",
             arrayOf(conversationId, replyThread, reply.seq),
@@ -1173,6 +1175,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         val notice = hydrateMessages(conversationId, listOf(noticeId), highWater).singleOrNull()
             ?: return@withChatReadTransaction null
         if (notice.messageIndex >= firstKept) return@withChatReadTransaction null
+        if(acceptance!=null)check(notice.proactiveThreadKey==replyThread) {"Accepted proactive referent thread changed"}
         val threadKey = notice.proactiveThreadKey?.takeIf(String::isNotEmpty) ?: replyThread
         val nextNoticeSeq = sql.query(
             "SELECT MIN(seq) FROM messages WHERE conversation_id=? AND proactive_thread_key=? " +

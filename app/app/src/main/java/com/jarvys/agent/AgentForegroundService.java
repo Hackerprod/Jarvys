@@ -580,6 +580,7 @@ public final class AgentForegroundService extends Service {
   }
 
   public static void stopRun(String sessionId) {
+    ProactiveReplyAdmission.cancelCapturedInteractions(sessionId);
     AgentForegroundService service = currentInstance;
     if (service != null) service.enqueueStopTask(() -> service.stopSessionRun(sessionId));
   }
@@ -989,6 +990,25 @@ public final class AgentForegroundService extends Service {
       com.jarvys.agent.chatdb.CentralSubmissionAppendReceipt receipt=new LocalRunStore(context).appendCentralSubmission(authority);
       authority.recordCommitted(receipt); // Evidence only: registration can still fail without losing the stored USER/files.
       return CentralSubmissionAdmission.register(authority,receipt);
+    }
+  }
+
+  /** Same native admission/STOP lane; historical or duplicate reply receipts never remint authority. */
+  static CentralSubmissionAdmission.LivePermit admitProactiveReply(Context context,
+      ProactiveReplyAdmission.NativeAction action) {
+    if (!ProactiveReplyHandoffPolicy.admissionEnabled() || !CentralAvailabilityPolicy.admissionEnabled())
+      throw new IllegalStateException("Native reply admission is disabled");
+    synchronized (interruptAdmissionLock(WorkspaceIdentity.CENTRAL_SESSION)) {
+      action.requireCurrent();
+      if (CentralAvailabilityPolicy.registryMigrationEnabled())
+        try (com.jarvys.agent.workspaces.WorkspaceRegistry registry = new com.jarvys.agent.workspaces.WorkspaceRegistry(context)) {
+          registry.upgradeCentralResumeSchema();
+        }
+      com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt result = new LocalRunStore(context).appendProactiveReplySubmission(action);
+      if (result == null) return null;
+      action.recordCommitted(result);
+      if (!result.getCreated()) return null;
+      return CentralSubmissionAdmission.registerProactiveReply(action, result);
     }
   }
 
@@ -1872,6 +1892,7 @@ public final class AgentForegroundService extends Service {
       return START_NOT_STICKY;
     }
     if (intent != null && ACTION_STOP.equals(intent.getAction())) {
+      ProactiveReplyAdmission.cancelCapturedInteractions(WorkspaceIdentity.CENTRAL_SESSION);
       enqueueStopTask(this::stopRunAndServices);
       return START_NOT_STICKY;
     }

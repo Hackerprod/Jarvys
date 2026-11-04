@@ -1,3 +1,7 @@
+## Estado vigente — P4A: dos fallos reproducidos, candidato OFF pendiente de D3 — 04-11-2026
+
+Diseño con PASS independiente; Full confirmó consumo perdido tras fallo de USER e inline sin PREPARED al reabrir. La calibración falló por fixture lstat y conserva su evidencia; reparación de test pendiente de ejecución. [Progreso, límites y cohorte preregistrada](docs/BOT_PORTABILITY_P4A_PROGRESS.md). Fix integrado con gate OFF; no implementación PASS ni APK nuevo. Se preservan Central, menú, datos y permisos. Ocultación de evidencia y fatiga no se declaran terminadas.
+
 ## Estado vigente — P4A: diseño de aceptación durable, sin activación — 04-11-2026
 
 Se retoma el roadmap desde v100 verificada. El análisis identifica límites separados entre consumir una sugerencia, persistir USER y arrancar Central; la reproducción determinista y la revisión independiente están pendientes. [Contrato acotado y gates](docs/BOT_PORTABILITY_P4A_HANDOFF_DESIGN.md). No nuevos topes, quiet-hours, fatiga, menú ni APK; no se afirma P4 PASS. La ocultación durable de evidencia queda en la siguiente parte del primer bloque P4. Se conservan los PASS y FAIL históricos y los límites de teléfono/proveedor real.

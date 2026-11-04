@@ -91,8 +91,9 @@ internal object ChatCanvasEventSerializer {
         }
         value.put("decisionOptions", options)
         val replies = JSONArray()
-        if (allowProactiveReplies) event.proactiveReplies.forEach { reply ->
-            replies.put(JSONObject().put("label", reply.label))
+        if (allowProactiveReplies) event.proactiveReplies.forEachIndexed { index, reply ->
+            replies.put(JSONObject().put("label", reply.label)
+                .put("selection", ChatCanvasProactiveReplySelection.encode(event, index).orEmpty()))
         }
         value.put("replies", replies)
         return value
@@ -152,12 +153,30 @@ internal object ChatCanvasActionPolicy {
                 !event.generatedImagePath.isNullOrBlank() || event.attachments.isNotEmpty()
             "resolve_decision" -> event.kind == "user_decision" && event.decisionStatus == "PENDING" &&
                 (event.decisionOptions.any { it.id == value } || value == "dismiss" && event.decisionAllowDismiss)
-            "respond" -> allowProactiveReplies && event.kind == "user" && !event.proactiveRepliesUsed &&
-                value.toIntOrNull()?.let { it in event.proactiveReplies.indices } == true
+            "respond" -> allowProactiveReplies && ChatCanvasProactiveReplySelection.ordinal(event, value) != null
             else -> false
         }
         return decision(allowed, "action is not allowed for this event")
     }
 
     private fun decision(allowed: Boolean, reason: String) = ChatCanvasActionDecision(allowed, if (allowed) "allowed" else reason)
+}
+
+/** Exact rendered option fence. A token or argument DTO alone never grants native admission. */
+internal object ChatCanvasProactiveReplySelection {
+    fun encode(event: AgentRunUiEvent, ordinal: Int): String? {
+        if (event.kind != "assistant" || event.messageId.isBlank() || event.proactiveThreadKey.isNullOrBlank()
+            || event.proactiveRepliesUsed || !event.hasUnchangedProactiveSelection()
+            || ordinal !in event.proactiveReplies.indices) return null
+        return "${event.proactiveSelectionToken}:$ordinal"
+    }
+
+    fun ordinal(event: AgentRunUiEvent, value: String): Int? {
+        val separator = value.lastIndexOf(':')
+        if (separator <= 0) return null
+        val rawOrdinal = value.substring(separator + 1)
+        val ordinal = rawOrdinal.toIntOrNull() ?: return null
+        if (rawOrdinal != ordinal.toString() || encode(event, ordinal) != value) return null
+        return ordinal
+    }
 }

@@ -14,7 +14,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [com.jarvys.agent.ArtifactOsShadow::class])
 class ProactiveActionReceiverTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     @Test fun receiverIsPrivateAndRejectsUnknownMessageAndThreadBeforeWritingOrLaunching() {

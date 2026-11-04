@@ -2031,6 +2031,54 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
             }
         }
     }
+    /** Read-only canonical source projection; no native interaction can be reconstructed from it. */
+    fun readProactiveReplySourceSync(messageId:String?,threadKey:String?):ProactiveReplySourceSnapshot? = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {runBlocking {repos.database.withChatReadTransaction {
+            ProactiveReplySourceValidation.read(repos.database,messageId,threadKey)
+        }}}
+    }
+    fun captureLatestProactiveReplySourceSync(threadKey:String):ProactiveReplySourceSnapshot? =
+        readProactiveReplySourceSync(null,threadKey)
+    fun captureProactiveReplySourceSync(sourceMessageId:String,kind:String,ordinal:Int?):ProactiveReplySourceSnapshot? = executeOnWorker { repos ->
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {runBlocking {repos.database.withChatReadTransaction {
+            ProactiveReplySourceValidation.read(repos.database,sourceMessageId,null)?.also {
+                // Shape only: consumed/hidden/latest are reconciled inside the writer AFTER duplicate lookup.
+                if(kind==ProactiveReplyAcceptance.OPTION)check(it.role=="assistant" && !it.decisionId.isNullOrBlank() &&
+                    ordinal!=null && ordinal>=0 && ordinal<it.suggestedReplies.size && it.suggestedReplies[ordinal].text.trim().isNotEmpty())
+                else check(kind==ProactiveReplyAcceptance.INLINE && ordinal==null)
+            }
+        }}}
+    }
+    /** Called before takeUntrustedContext inspects nullable thread columns. Corruption never falls back. */
+    fun validateProactiveReplySourceSync(sessionId:String,userMessageId:String) = executeOnWorker { repos ->
+        runBlocking {repos.database.withChatReadTransaction {
+            ProactiveReplySourceValidation.validateContext(repos.database,sessionId,userMessageId)
+        }}
+        Unit
+    }
+    /** Caller already owns Central admission lock; lifecycle -> writer is the only nested lock order. */
+    fun appendProactiveReplySubmissionSync(action:com.jarvys.agent.ProactiveReplyAdmission.NativeAction):ProactiveReplyAppendReceipt? {
+        com.jarvys.agent.CentralAvailabilityPolicy.requireRegistrySchemaReady(applicationContext)
+        return executeOnWorker { repos ->
+            val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            anchor.fenced {
+                action.requireCurrent()
+                val result=runBlocking {ProactiveReplyWriter(repos.database,repos.conversations).append(action)}
+                    ?: return@fenced null
+                val snapshot=result.snapshot
+                val source=CentralUserRootCheckpoint(snapshot.storageGeneration,snapshot.sessionId,snapshot.userMessageId,
+                    snapshot.sourceSha256,anchor.attest(repos.database,snapshot.storageGeneration))
+                val receipt=CentralSubmissionAppendReceipt(snapshot,source,runBlocking {repos.database.withChatReadTransaction {
+                    check(captureCentralUserRootDigestInTransaction(repos.database,snapshot.sessionId,snapshot.userMessageId)==snapshot.sourceSha256)
+                    CentralSubmissionRequest.read(repos.database,snapshot.sessionId,snapshot.userMessageId)
+                }})
+                action.requireCurrent()
+                ProactiveReplyAppendReceipt(result.created,receipt,result.text,result.threadKey)
+            }
+        }
+    }
     /** Exact source lookup only; never creates or restores a live permission. */
     fun readCentralSubmissionForSourceSync(source:CentralUserRootCheckpoint):CentralSubmissionSnapshot? = executeOnWorker { repos ->
         val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)

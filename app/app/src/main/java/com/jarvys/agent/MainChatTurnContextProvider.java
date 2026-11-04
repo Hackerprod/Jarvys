@@ -139,6 +139,7 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
         StringBuilder context = new StringBuilder();
         for (String replyId : new ArrayList<>(replyCandidates)) {
             replyCandidates.remove(replyId);
+            store.validateProactiveReplySource(sessionId, replyId);
             StoredMessage reply = store.readStoredMessage(sessionId, replyId);
             if (reply == null || reply.getProactiveThreadKey() == null || reply.getProactiveThreadKey().isEmpty())
                 continue;

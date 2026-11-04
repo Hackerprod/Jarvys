@@ -634,16 +634,28 @@ class MainActivity : ComponentActivity() {
                     onCancelTranslation = ::cancelAssistantTranslation,
                     onHideTranslation = ::hideAssistantTranslation,
                     onDeleteAssistant = ::deleteAssistantMessage,
-                    onProactiveSuggestedReply = { messageId, index ->
-                        lifecycleScope.launch {
-                            val submittedResult = withContext(Dispatchers.IO) {
-                                chatDatabaseResult {
-                                    com.jarvys.agent.proactive.ProactiveInteractionDispatcher
-                                        .submitSuggestedReply(this@MainActivity, messageId, index)
+                    onProactiveSuggestedReply = { event, index ->
+                        // Capture the actual displayed selection while this native callback is active.
+                        val interaction = com.jarvys.agent.ProactiveReplyAdmission
+                            .captureDisplayedOption(this@MainActivity, event, index)
+                        if (interaction == null) {
+                            toast(getString(R.string.proactive_suggested_reply_unavailable))
+                        } else {
+                            lifecycleScope.launch {
+                                try {
+                                    val submittedResult = withContext(Dispatchers.IO) {
+                                        chatDatabaseResult {
+                                            com.jarvys.agent.proactive.ProactiveInteractionDispatcher
+                                                .submitNativeReply(this@MainActivity, interaction)
+                                        }
+                                    }
+                                    if (!submittedResult.getOrDefault(false)) {
+                                        toast(getString(R.string.proactive_suggested_reply_unavailable))
+                                    }
+                                } finally {
+                                    interaction.close()
                                 }
-                            }
-                            val submitted = submittedResult.getOrDefault(false)
-                            if (!submitted) toast(getString(R.string.proactive_suggested_reply_unavailable))
+                            }.invokeOnCompletion { interaction.close() }
                         }
                     },
                     onRegenerateAssistant = ::regenerateAssistantMessage,
@@ -1279,6 +1291,7 @@ ${event.text}
     }
 
     private fun stopCurrentWork() {
+        ProactiveReplyAdmission.cancelCapturedInteractions(conversationSessionId)
         attachmentDrafts.cancelSubmission(conversationSessionId)
         val state = AgentRunUiState.snapshotForSession(conversationSessionId)
         if (state.running || state.compacting) {
@@ -1581,7 +1594,7 @@ private fun JarvysApp(
     onCancelTranslation: (String) -> Unit,
     onHideTranslation: (String) -> Unit,
     onDeleteAssistant: (AgentRunUiEvent) -> Unit,
-    onProactiveSuggestedReply: (String, Int) -> Unit,
+    onProactiveSuggestedReply: (AgentRunUiEvent, Int) -> Unit,
     onRegenerateAssistant: (AgentRunUiEvent) -> Unit,
     onSpeakAssistant: (String, String) -> Unit,
     speakingMessageId: String?,
@@ -2441,7 +2454,7 @@ internal fun AgentRunScreen(
     onLoadOlderHistory: () -> Unit = {},
     onRetryOlderHistory: () -> Unit = onLoadOlderHistory,
     targetMessageId: String? = null,
-    onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
+    onProactiveSuggestedReply: (AgentRunUiEvent, Int) -> Unit = { _, _ -> },
     isRunning: Boolean,
     emptyReport: String?,
     connectorRegistry: ConnectorRegistry,

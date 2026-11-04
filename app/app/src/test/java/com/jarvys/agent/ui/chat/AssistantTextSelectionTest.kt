@@ -207,7 +207,10 @@ class AssistantTextSelectionTest {
             com.jarvys.agent.proactive.ProactiveSuggestedReply("Suggestion excluded", "Suggested action")))
         var selected: Pair<String, Int>? = null
         install {
-            AssistantReplyView(reply, {}, false, onProactiveSuggestedReply = { id, index -> selected = id to index })
+            AssistantReplyView(reply, {}, false, onProactiveSuggestedReply = { displayed, index ->
+                org.junit.Assert.assertSame(reply, displayed)
+                selected = displayed.messageId to index
+            })
         }
         select(body, "bravo")
         selectAll()

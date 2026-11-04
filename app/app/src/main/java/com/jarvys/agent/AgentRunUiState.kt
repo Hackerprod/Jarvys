@@ -98,6 +98,13 @@ data class AgentRunUiEvent(
     /** Read-only exact row selection for native recovery; not part of model source or message parts. */
     val centralAvailability:CentralAvailabilityDisplay? = null,
  ) {
+    /** Private immutable option values captured before any renderer can retain this event. */
+    private val proactiveSelectionReplies: List<ProactiveSuggestedReply> = proactiveReplies.toList()
+    internal fun hasUnchangedProactiveSelection(): Boolean = proactiveReplies == proactiveSelectionReplies
+
+    /** Process-local Canvas selection evidence, never persisted or used as model/admission authority. */
+    internal val proactiveSelectionToken: String by lazy { java.util.UUID.randomUUID().toString() }
+
     /** Parsed once per immutable event instance; a data-class copy gets a fresh analysis. */
     internal val visibilityDetailAnalysis: AgentRunUiEventVisibilityDetail by lazy {
         AgentRunUiEventVisibilityDetail.parse(this)
@@ -673,6 +680,17 @@ object AgentRunUiState {
             it.id==event.id && it.kind=="user" && event.kind=="user" && it.messageId==event.messageId
                 && it.centralAvailability===event.centralAvailability
         }
+    }
+
+    /** A reply callback owns this displayed event instance, not a caller-selected message ID. */
+    @JvmStatic
+    fun containsExactProactiveSelection(sessionId: String, event: AgentRunUiEvent, index: Int): Boolean = synchronized(lock) {
+        sessionId == com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+            && visibleSessionId == sessionId && UserDecisionUiAvailability.isChatVisible()
+            && event.kind == "assistant" && event.messageId.isNotBlank() && !event.proactiveThreadKey.isNullOrBlank()
+            && !event.proactiveRepliesUsed && event.hasUnchangedProactiveSelection()
+            && index in event.proactiveReplies.indices
+            && eventsForSession(sessionId).any { it === event }
     }
 
     @JvmStatic

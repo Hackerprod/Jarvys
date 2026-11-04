@@ -16,7 +16,7 @@ internal suspend fun captureCentralUserRootDigest(database:JarvysChatDatabase,co
     database.withChatReadTransaction { captureCentralUserRootDigestInTransaction(database,conversationId,messageId) }
 
 /** Caller already owns the native transaction; used for atomic submission/source conservation. */
-internal fun captureCentralUserRootDigestInTransaction(database:JarvysChatDatabase,conversationId:String,messageId:String):String {
+internal fun captureCentralUserRootDigestInTransaction(database:JarvysChatDatabase,conversationId:String,messageId:String,preparingSubmission:Boolean=false):String {
         check(WorkspaceIdentity.isCentral(conversationId) && messageId.isNotBlank())
         val args=arrayOf(conversationId,messageId)
         database.chatSql.query("SELECT m.role,m.hidden_kind FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.conversation_id=? AND m.message_id=?",args).use { c ->
@@ -24,6 +24,7 @@ internal fun captureCentralUserRootDigestInTransaction(database:JarvysChatDataba
                 "Tree origin is not an exact visible USER row"
             }
         }
+        val proactiveAcceptance=ProactiveReplySourceValidation.validateUser(database,conversationId,messageId,preparingSubmission)
         val digest=MessageDigest.getInstance("SHA-256")
         fun field(value:String?) {
             val size=value?.length ?: -1
@@ -41,5 +42,13 @@ internal fun captureCentralUserRootDigestInTransaction(database:JarvysChatDataba
         database.chatSql.query("SELECT ordinal,attachment_id,name,mime_type,size_bytes,kind,relative_path,sha256,file_ref_id FROM message_attachments WHERE conversation_id=? AND message_id=? ORDER BY ordinal",args).use { c ->
             while(c.moveToNext()) { field("attachment");for(i in 0 until c.columnCount) field(if(c.isNull(i)) null else c.getString(i)) }
         }
-        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+        val result=digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+        if(proactiveAcceptance!=null && !preparingSubmission) {
+            database.chatSql.query("SELECT source_sha256 FROM central_turn_submissions WHERE conversation_id=? AND user_message_id=?",args).use { c ->
+                check(c.moveToFirst() && c.getType(0)==Cursor.FIELD_TYPE_STRING && c.getString(0)==result && !c.moveToNext()) {
+                    "Accepted proactive USER no longer matches its committed root"
+                }
+            }
+        }
+        return result
     }

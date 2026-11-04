@@ -118,6 +118,21 @@ public final class CentralSubmissionAdmission {
         action.requireCurrent(receipt.getSnapshot().getSessionId(),receipt.getSnapshot().getSubmissionId());
         return registerReceipt(receipt,receipt.getSelectedSkillIds());
     }
+    /** Only the original live reply interaction's newly committed receipt can issue a permit. */
+    static LivePermit registerProactiveReply(ProactiveReplyAdmission.NativeAction action,
+            com.jarvys.agent.chatdb.ProactiveReplyAppendReceipt result) {
+        action.requireNewCommit(result);
+        if (!result.getCreated() || !result.getReceipt().getSelectedSkillIds().isEmpty())
+            throw new IllegalStateException("Proactive reply cannot inherit selected skills");
+        return action.registerPermit(result, () -> {
+            // New durable acceptance only: do not call the generic duplicate path's lifecycle fence
+            // while holding the interaction lock. A prior permit is an integrity conflict here.
+            LivePermit fresh = new LivePermit(result.getReceipt(), Collections.emptyList());
+            if (LIVE.putIfAbsent(key(fresh.getSessionId(), fresh.getSubmissionId()), fresh) != null)
+                throw new IllegalStateException("New proactive acceptance already has a permit");
+            return fresh;
+        });
+    }
     private static LivePermit registerReceipt(CentralSubmissionAppendReceipt receipt,List<String> skills) {
         LivePermit fresh=new LivePermit(receipt,skills);
         String key=key(fresh.getSessionId(),fresh.getSubmissionId());
@@ -130,6 +145,13 @@ public final class CentralSubmissionAdmission {
         }
         return fresh;
     }
+    /** Denial only: includes queued P4 permits whose UI/receiver interaction has already closed. */
+    static void retireCapturedProactiveReplies(String session) {
+        for (LivePermit permit : new ArrayList<>(LIVE.values()))
+            if (session.equals(permit.getSessionId()) && permit.getSubmissionId().startsWith("proactive-reply-v1:"))
+                invalidate(permit);
+    }
+
     static LivePermit find(String session,String id) { return LIVE.get(key(session,id)); }
     static List<LivePermit> prepared(String session) {
         List<LivePermit> found=new ArrayList<>();

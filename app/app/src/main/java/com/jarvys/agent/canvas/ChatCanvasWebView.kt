@@ -354,6 +354,7 @@ internal class ChatCanvasNativeBridge(
         if (!decision.allowed) return
         main.post {
             val current = currentEvents().firstOrNull { it.id == seq } ?: return@post
+            if (action == "respond" && current !== event) return@post
             val latest = currentEvents().lastOrNull { it.kind == "assistant" }?.messageId
             if (!ChatCanvasActionPolicy.check(action, current, value, running(), latest, hasOlder(),
                     allowRetry(), allowProactiveReplies()).allowed) return@post

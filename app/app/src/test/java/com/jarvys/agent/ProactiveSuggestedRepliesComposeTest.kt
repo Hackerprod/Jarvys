@@ -25,6 +25,7 @@ import com.jarvys.agent.proactive.ProactiveSuggestedReply
 import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertSame
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -43,6 +44,7 @@ class ProactiveSuggestedRepliesComposeTest {
         val scale = mutableStateOf(1f)
         val message = mutableStateOf(event("en"))
         var selected: Pair<String, Int>? = null
+        var selectedEvent: AgentRunUiEvent? = null
         val registry = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
             override fun isConnected(id: String) = false
             override fun setConnected(id: String, connected: Boolean) = Unit
@@ -70,8 +72,9 @@ class ProactiveSuggestedRepliesComposeTest {
                             connectorRegistry = registry,
                             onOpenPreview = {},
                             onOpenSkillFile = {},
-                            onProactiveSuggestedReply = { id, index ->
-                                selected = id to index
+                            onProactiveSuggestedReply = { displayed, index ->
+                                selectedEvent = displayed
+                                selected = displayed.messageId to index
                                 message.value = message.value.copy(proactiveRepliesUsed = true)
                             },
                         )
@@ -96,9 +99,11 @@ class ProactiveSuggestedRepliesComposeTest {
                     assertTrue("chip bounds overlap at locale=$locale scale=$fontScale: $a / $b",
                         a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top)
                 }
+                val displayed = message.value
                 compose.onNodeWithText(labels.first()).performClick()
                 compose.waitForIdle()
                 assertEquals(message.value.messageId to 0, selected)
+                assertSame(displayed, selectedEvent)
                 val localized = base.createConfigurationContext(Configuration(base.resources.configuration).apply {
                     setLocale(Locale(locale))
                 })

@@ -160,7 +160,7 @@ fun ConversationTimeline(
     onOpenPreview: (String) -> Unit,
     onOpenSkillFile: (SkillFileLink) -> Unit,
     targetMessageId: String? = null,
-    onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
+    onProactiveSuggestedReply: (AgentRunUiEvent, Int) -> Unit = { _, _ -> },
     onUndoMemoryRevision: (Long) -> Unit = {},
     onUndoReflectionGroup: (String) -> Unit = {},
     onTranslateAssistant: (AgentRunUiEvent, String) -> Unit = { _, _ -> },
@@ -225,7 +225,8 @@ fun ConversationTimeline(
                     }
                     "download", "share" -> canvasTransfer(context, generatedImageSessionId, event, action == "share")
                     "resolve_decision" -> resolveCanvasDecision(event, value)
-                    "respond" -> value.toIntOrNull()?.let { index -> onProactiveSuggestedReply(event.messageId, index) }
+                    "respond" -> com.jarvys.agent.canvas.ChatCanvasProactiveReplySelection.ordinal(event, value)
+                        ?.let { index -> onProactiveSuggestedReply(event, index) }
                 }
             }, requestOlder = onLoadOlderHistory),
             modifier = modifier.fillMaxSize(),
@@ -467,7 +468,7 @@ private fun JarvysConversationEvent(
     onOpenScheduledTask: (com.jarvys.agent.ScheduledTaskArtifact) -> Unit = {},
     onSaveGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     onShareGeneratedImage: (AgentRunUiEvent) -> Unit = {},
-    onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
+    onProactiveSuggestedReply: (AgentRunUiEvent, Int) -> Unit = { _, _ -> },
     animateEntry: Boolean = false,
     isGeneratingAnswer: Boolean = false,
     assistantReplyCapabilities: AssistantReplyCapabilities = AssistantReplyCapabilities(),
@@ -613,7 +614,7 @@ internal fun AssistantReplyView(
     translationErrorMessageId: String? = null,
     translationError: String? = null,
     streamActive: Boolean = false,
-    onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
+    onProactiveSuggestedReply: (AgentRunUiEvent, Int) -> Unit = { _, _ -> },
     isGeneratingAnswer: Boolean = streamActive,
     capabilities: AssistantReplyCapabilities = AssistantReplyCapabilities(),
     workspaceSenderLabel: String? = null,
@@ -747,11 +748,11 @@ private fun ReplyAction(icon: androidx.compose.ui.graphics.vector.ImageVector, l
 }
 
 @Composable
-private fun SuggestedReplyActions(event: AgentRunUiEvent, onSelect: (String, Int) -> Unit, enabled: Boolean) {
+private fun SuggestedReplyActions(event: AgentRunUiEvent, onSelect: (AgentRunUiEvent, Int) -> Unit, enabled: Boolean) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(5.dp),
         modifier = Modifier.fillMaxWidth().padding(top = 7.dp)) {
         event.proactiveReplies.forEachIndexed { index, reply ->
-            AssistChip(onClick = { if (!event.proactiveRepliesUsed && enabled) onSelect(event.messageId, index) },
+            AssistChip(onClick = { if (!event.proactiveRepliesUsed && enabled) onSelect(event, index) },
                 enabled = !event.proactiveRepliesUsed && enabled,
                 label = { Text(if (event.proactiveRepliesUsed) "${reply.label} · ${stringResource(R.string.proactive_suggested_reply_used)}" else reply.label) })
         }

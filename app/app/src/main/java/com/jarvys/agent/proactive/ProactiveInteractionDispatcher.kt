@@ -19,12 +19,16 @@ import java.util.concurrent.Executors
 object ProactiveInteractionDispatcher {
     private const val SESSION = WorkspaceIdentity.CENTRAL_SESSION
 
+    fun submitNativeReply(context: Context, interaction: com.jarvys.agent.ProactiveReplyAdmission.NativeInteraction): Boolean =
+        com.jarvys.agent.ProactiveReplyAdmission.submit(context, interaction)
+
     fun submitSuggestedReply(context: Context, messageId: String, index: Int): Boolean {
         val claim = prepareSuggestedReply(context, messageId, index) ?: return false
         return launchPreparedTurn(context.applicationContext, claim)
     }
 
     fun prepareSuggestedReply(context: Context, messageId: String, index: Int): ProactiveReplyClaim? {
+        if (com.jarvys.agent.ProactiveReplyHandoffPolicy.admissionEnabled()) return null
         val app = context.applicationContext
         val store = LocalRunStore(app)
         val claim = store.claimProactiveSuggestedReply(SESSION, messageId, index) ?: return null
@@ -40,6 +44,7 @@ object ProactiveInteractionDispatcher {
 
     /** [messageId] is a message of the notified thread; [threadToken] must match that row's thread. */
     fun prepareInlineReply(context: Context, messageId: String, threadToken: String, text: String): ProactiveReplyClaim? {
+        if (com.jarvys.agent.ProactiveReplyHandoffPolicy.admissionEnabled()) return null
         val normalized = text.trim()
         if (normalized.isEmpty()) return null
         val app = context.applicationContext
@@ -82,6 +87,22 @@ object ProactiveInteractionDispatcher {
 }
 
 class ProactiveActionReceiver : android.content.BroadcastReceiver() {
+    private val nativeLock = Any()
+    private val activeDeliveries = java.util.Collections.newSetFromMap(
+        java.util.IdentityHashMap<NativeDelivery, Boolean>())
+
+    /** Constructor arguments are insufficient: this receiver must actively own the exact delivery. */
+    class NativeDelivery internal constructor(
+        private val owner: ProactiveActionReceiver,
+        val binding: ProactiveReplyNotificationIdentity.Binding,
+        val text: String,
+    ) : AutoCloseable {
+        fun requireCurrent() = synchronized(owner.nativeLock) {
+            check(owner.activeDeliveries.contains(this)) { "Native notification delivery expired" }
+        }
+        override fun close() { synchronized(owner.nativeLock) { owner.activeDeliveries.remove(this) } }
+    }
+
     override fun onReceive(context: Context, intent: android.content.Intent) {
         if (!com.jarvys.agent.FreshStorageBootstrap.isCurrent(intent)) return
         val action = intent.action
@@ -91,11 +112,23 @@ class ProactiveActionReceiver : android.content.BroadcastReceiver() {
         val threadToken = intent.getStringExtra(EXTRA_THREAD_TOKEN).orEmpty()
         val text = androidx.core.app.RemoteInput.getResultsFromIntent(intent)
             ?.getCharSequence(EXTRA_INLINE_REPLY)?.toString().orEmpty()
-        val pendingResult = goAsync()
+        val nativeBinding = if (com.jarvys.agent.ProactiveReplyHandoffPolicy.admissionEnabled())
+            ProactiveReplyNotificationIdentity.readValidated(context, intent) ?: return else null
+        val nativeDelivery = nativeBinding?.let { binding ->
+            synchronized(nativeLock) { NativeDelivery(this, binding, text).also(activeDeliveries::add) }
+        }
+        val pendingResult = try { goAsync() } catch (failure: RuntimeException) {
+            nativeDelivery?.close()
+            throw failure
+        }
         try {
             ProactiveReplyReceiverExecutor.execute {
                 try {
-                    when (action) {
+                    if (nativeDelivery != null) {
+                        com.jarvys.agent.ProactiveReplyAdmission.captureReceiver(nativeDelivery).use { interaction ->
+                            ProactiveInteractionDispatcher.submitNativeReply(context.applicationContext, interaction)
+                        }
+                    } else when (action) {
                         ACTION_SUGGESTED_REPLY -> {
                             ProactiveInteractionDispatcher.submitSuggestedReply(
                                 context.applicationContext, messageId, index,
@@ -114,11 +147,13 @@ class ProactiveActionReceiver : android.content.BroadcastReceiver() {
                         AgentErrorReporter.reportChatDatabaseFailure(context, failure)
                     }
                 } finally {
+                    nativeDelivery?.close()
                     pendingResult?.finish()
                     Thread.interrupted()
                 }
             }
         } catch (failure: RuntimeException) {
+            nativeDelivery?.close()
             pendingResult?.finish()
             Log.e("JarvysProactive", "Could not queue notification reply", failure)
         }

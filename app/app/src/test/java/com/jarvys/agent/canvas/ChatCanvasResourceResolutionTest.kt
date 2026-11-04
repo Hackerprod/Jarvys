@@ -98,6 +98,71 @@ class ChatCanvasResourceResolutionTest {
         assertTrue("Dispatch callback runs on the main thread", callbackOnMain)
     }
 
+    @Test
+    fun proactiveRespondUsesTheActualRenderedAssistantAndRejectsSameSeqRetargeting() {
+        val context: android.content.Context = androidx.test.core.app.ApplicationProvider.getApplicationContext()
+        val original = AgentRunUiEvent.proactiveMessageEvent(41, "assistant", "Canonical notice", 1,
+            "notice-41", "thread-41", listOf(com.jarvys.agent.proactive.ProactiveSuggestedReply("Yes", "Yes please")), false)
+        var currentEvents = listOf(original)
+        val received = mutableListOf<AgentRunUiEvent>()
+        val ordinals = mutableListOf<Int>()
+        val bridge = ChatCanvasNativeBridge(
+            sessionId = "central", currentEvents = { currentEvents }, running = { false },
+            allowRetry = { true }, hasOlder = { false }, loadingOlder = { false }, benchmarkStartedAtNanos = null,
+            callbacks = ChatCanvasCallbacks(action = { action, selected, value ->
+                assertEquals("respond", action)
+                assertTrue(Looper.myLooper() == Looper.getMainLooper())
+                received += selected
+                ordinals += requireNotNull(ChatCanvasProactiveReplySelection.ordinal(selected, value))
+            }),
+        )
+        fun renderedSelection(event: AgentRunUiEvent) = ChatCanvasEventSerializer.page(context, listOf(event), false)
+            .getJSONArray("events").getJSONObject(0).getJSONArray("replies").getJSONObject(0).getString("selection")
+        val displayedSelection = renderedSelection(original)
+        assertFalse(displayedSelection.isEmpty())
+        bridge.dispatch("respond", original.id, displayedSelection)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(0), ordinals)
+        org.junit.Assert.assertSame(original, received.single())
+
+        // Even an equal copied event with the same seq, message ID and options is a new display instance.
+        currentEvents = listOf(original.copy())
+        bridge.dispatch("respond", original.id, displayedSelection)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, received.size)
+
+        currentEvents = listOf(original)
+        bridge.dispatch("respond", original.id, displayedSelection)
+        currentEvents = listOf(original.copy(proactiveReplies = listOf(
+            com.jarvys.agent.proactive.ProactiveSuggestedReply("Changed", "Different action"))))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("A queued callback may not retarget a changed option", 1, received.size)
+
+        val fresh = currentEvents.single()
+        bridge.dispatch("respond", fresh.id, renderedSelection(fresh))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(2, received.size)
+        org.junit.Assert.assertSame(fresh, received.last())
+        listOf("0", "-1", displayedSelection + ":0", displayedSelection.substringBeforeLast(':') + ":00").forEach {
+            bridge.dispatch("respond", fresh.id, it)
+        }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(2, received.size)
+
+        val mutableOptions = mutableListOf(com.jarvys.agent.proactive.ProactiveSuggestedReply("Same label", "Original text"))
+        val mutableEvent = original.copy(proactiveReplies = mutableOptions)
+        currentEvents = listOf(mutableEvent)
+        val mutableSelection = renderedSelection(mutableEvent)
+        bridge.dispatch("respond", mutableEvent.id, mutableSelection)
+        mutableOptions[0] = com.jarvys.agent.proactive.ProactiveSuggestedReply("Same label", "Changed text")
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("The same event instance cannot retarget a mutated option list", 2, received.size)
+        assertNull(ChatCanvasProactiveReplySelection.ordinal(mutableEvent, mutableSelection))
+        bridge.dispatch("respond", mutableEvent.id, mutableSelection)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(2, received.size)
+    }
+
     private fun imageAttachment(): ChatAttachment {
         val id = UUID.randomUUID().toString()
         return ChatAttachment(id, "image.png", "image/png", 1, ChatAttachment.Kind.IMAGE, "$id-image.png")
