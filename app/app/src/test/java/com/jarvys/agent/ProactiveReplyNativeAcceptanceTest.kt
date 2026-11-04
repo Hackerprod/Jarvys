@@ -22,6 +22,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.rules.RuleChain
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows
@@ -30,15 +31,18 @@ import org.robolectric.annotation.LooperMode
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.TimeUnit
 
 /** Genuine receiver ownership, Room and existing native STOP/retry boundaries. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = TreeNativeTestApplication::class, shadows = [ArtifactOsShadow::class])
+@Config(sdk = [34], application = TreeNativeTestApplication::class, shadows = [ArtifactOsShadow::class, ProactiveReplyNativeAcceptanceTest.FailingNotificationManagerShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class ProactiveReplyNativeAcceptanceTest {
-    @get:Rule val storage = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    private val storage = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(storage).around(TestSecretStoreRule())
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val session = WorkspaceIdentity.CENTRAL_SESSION
     private val thread = "native-p4a-acceptance"
@@ -47,6 +51,8 @@ class ProactiveReplyNativeAcceptanceTest {
     private fun <T> db(body: () -> T): T = storage.onDatabaseWorker(body)
     private val store get() = LocalRunStore(context)
     private val sql get() = JarvysChatDatabaseProvider.getInstance(context).testChatSql
+    private val runtimeFailure = AtomicReference<Throwable>()
+    private val runtimePhase = AtomicReference("before_runtime_constructor")
 
     @Before fun setUp() {
         check(ProactiveReplyHandoffPolicy.admissionEnabled()) { "Native P4A acceptance requires completed D3 activation, not a test override" }
@@ -54,6 +60,14 @@ class ProactiveReplyNativeAcceptanceTest {
             FreshStorageBootstrap.ensure(context)
             (context as TreeNativeTestApplication).connectionAccess().initializeAsync().get(30, TimeUnit.SECONDS)
         }
+        ProviderSettings(context).apply {
+            setProvider(ProviderSettings.Provider.OPENROUTER)
+            setOpenRouterModel("offline/p4-native-acceptance")
+        }
+        check(context.getSharedPreferences("provider_context_metadata", 0).edit()
+            .putInt("model_offline/p4-native-acceptance", 32768)
+            .putLong("fetched_offline/p4-native-acceptance", System.currentTimeMillis()).commit())
+        FailingNotificationManagerShadow.resetPublication()
         AgentRunUiState.resetSession(session)
         AgentRunUiState.showSession(session)
         UserDecisionUiAvailability.setChatVisible(true)
@@ -63,6 +77,7 @@ class ProactiveReplyNativeAcceptanceTest {
     }
 
     @After fun tearDown() {
+        FailingNotificationManagerShadow.resetPublication()
         awaitReceiverCompletion()
         serviceController?.let { controller ->
             AgentForegroundService.stopRun(session)
@@ -128,7 +143,9 @@ class ProactiveReplyNativeAcceptanceTest {
     private fun display(userId: String): AgentRunUiEvent {
         val events = db { store.readRecentConversationTimeline(session) }
         AgentRunUiState.restoreSession(session, events)
-        return events.single { it.kind == "user" && it.messageId == userId }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        // Equal MutableStateFlow values can retain the prior published object. Select what the UI actually exposes.
+        return AgentRunUiState.eventsForSession(session).single { it.kind == "user" && it.messageId == userId }
     }
 
     @Test fun actualOptionDeliveriesConserveFirstReceiptAndConflictingOrdinalCannotDispatch() {
@@ -172,6 +189,76 @@ class ProactiveReplyNativeAcceptanceTest {
         assertOnlyCentralStarts(drainServiceIntents(), 1)
     }
 
+    @Test fun notificationPublicationFailureRetainsAcceptanceAndLaterCanonicalReplyRemainsIndependent() {
+        val source = notice()
+        val original = inline(posted(source), "Same text after publication failure")
+        val originalBinding = requireNotNull(ProactiveReplyNotificationIdentity.readValidated(context, original))
+        val observed = AtomicReference<Result<Pair<List<com.jarvys.agent.chatdb.CentralSubmissionSnapshot>, Int>>>()
+        FailingNotificationManagerShadow.beforeFailure = {
+            observed.set(runCatching { submissions() to users().size })
+        }
+        FailingNotificationManagerShadow.failPublication = true
+        try {
+            deliver(original)
+            val accepted = submissions().single()
+            assertEquals("PREPARED", accepted.state)
+            assertEquals(1, users().size)
+            assertEquals(1, FailingNotificationManagerShadow.failures.get())
+            val atAndroid = requireNotNull(observed.get()).getOrThrow()
+            assertEquals(listOf(accepted), atAndroid.first)
+            assertEquals(1, atAndroid.second) // The Android-only fault happened after the actual durable commit.
+            val permit = requireNotNull(CentralSubmissionAdmission.find(session, accepted.submissionId))
+            permit.requirePrepared()
+            assertOnlyCentralStarts(drainServiceIntents(), 1) // Existing launch deliberately not delivered to a service.
+            deliver(Intent(original))
+            assertEquals(listOf(accepted), submissions())
+            assertEquals(1, users().size)
+            assertSame("Redelivery cannot mint or transfer a second permit", permit,
+                CentralSubmissionAdmission.find(session, accepted.submissionId))
+            assertOnlyCentralStarts(drainServiceIntents(), 0)
+            assertEquals(2, FailingNotificationManagerShadow.failures.get())
+
+            FailingNotificationManagerShadow.failPublication = false
+            val refreshed = inline(posted(source), "Same text after publication failure") // Stale caller ID still refreshes canonically.
+            val binding = requireNotNull(ProactiveReplyNotificationIdentity.readValidated(context, refreshed))
+            assertEquals(accepted.userMessageId, binding.sourceMessageId)
+            assertNotEquals(originalBinding.actionId, binding.actionId)
+            assertNotEquals(original.data, refreshed.data)
+            deliver(refreshed)
+            val second = submissions().single { it.submissionId != accepted.submissionId }
+            assertEquals("PREPARED", second.state)
+            assertEquals(accepted, submissions().single { it.submissionId == accepted.submissionId })
+            assertNotEquals(accepted.userMessageId, second.userMessageId)
+            assertEquals(listOf("Same text after publication failure", "Same text after publication failure"), users().map { it.text })
+            assertOnlyCentralStarts(drainServiceIntents(), 1)
+            assertSame(permit, CentralSubmissionAdmission.find(session, accepted.submissionId))
+            assertNotSame(permit, CentralSubmissionAdmission.find(session, second.submissionId))
+            assertEquals(2, FailingNotificationManagerShadow.failures.get())
+        } finally { FailingNotificationManagerShadow.resetPublication() }
+    }
+
+    /** Android notification publication only. No production hook and no fabricated admission authority. */
+    @org.robolectric.annotation.Implements(NotificationManager::class)
+    class FailingNotificationManagerShadow : org.robolectric.shadows.ShadowNotificationManager() {
+        @org.robolectric.annotation.Implementation
+        override fun notify(tag: String?, id: Int, notification: Notification) {
+            if (tag?.startsWith("jarvys_proactive_thread:") == true && failPublication) {
+                beforeFailure?.invoke()
+                failures.incrementAndGet()
+                throw IllegalStateException("Synthetic Android proactive publication failure")
+            }
+            super.notify(tag, id, notification)
+        }
+        companion object {
+            @Volatile var failPublication = false
+            @Volatile var beforeFailure: (() -> Unit)? = null
+            val failures = AtomicInteger()
+            @JvmStatic @org.robolectric.annotation.Resetter fun resetPublication() {
+                failPublication = false; beforeFailure = null; failures.set(0)
+            }
+        }
+    }
+
     @Test fun realReceiverRejectsChangedUriOrExtrasBeforeWriting() {
         val source = notice()
         val original = inline(posted(source), "Rejected tampering")
@@ -190,7 +277,11 @@ class ProactiveReplyNativeAcceptanceTest {
         val original = inline(posted(source), "Old physical generation")
         assertTrue(FreshStorageBootstrap.isCurrent(original))
         val prior = requireNotNull(ProactiveReplyNotificationIdentity.readValidated(context, original))
-        db { sql.execSQL("UPDATE storage_meta SET value=? WHERE key='connection_projection_generation_v1'", arrayOf(prior.physicalGeneration + "-recreated")) }
+        val replacement = if (prior.physicalGeneration == "00000000-0000-0000-0000-000000000001")
+            "00000000-0000-0000-0000-000000000002" else "00000000-0000-0000-0000-000000000001"
+        assertEquals(replacement, java.util.UUID.fromString(replacement).toString())
+        assertNotEquals(prior.physicalGeneration, replacement)
+        db { sql.execSQL("UPDATE storage_meta SET value=? WHERE key='connection_projection_generation_v1'", arrayOf(replacement)) }
         assertTrue("Format stamp alone remains current", FreshStorageBootstrap.isCurrent(original))
         deliver(original)
         assertTrue(submissions().isEmpty())
@@ -238,6 +329,75 @@ class ProactiveReplyNativeAcceptanceTest {
         assertEquals(accepted.sourceSha256, retainedRoot.originDigest)
         assertTrue(display(accepted.userMessageId).centralAvailability!!.canRetry)
         assertEquals(accepted, submissions().single())
+        fun sourceEvidence() = db {
+            sql.query("SELECT suggested_replies_consumed_seq,hidden_kind FROM messages WHERE conversation_id=? AND message_id=?",
+                arrayOf(session, source)).use { check(it.moveToFirst()); it.getLong(0) to it.getString(1) }
+        }
+        val hiddenEvidence = sourceEvidence()
+        assertTrue(hiddenEvidence.first > accepted.userSeq)
+        assertNotNull(hiddenEvidence.second)
+        serviceController = Robolectric.buildService(AgentForegroundService::class.java).create()
+        val service = serviceController!!.get()
+        val calls = AtomicInteger()
+        val actualModelInput = AtomicReference<String>()
+        val provider = object : ModelProviderClient {
+            override fun complete(systemPrompt: String, userPrompt: String, images: List<com.jarvys.agent.device.ScreenData>,
+                tools: List<ToolSpec>, sessionId: String, token: CancellationToken): ModelReply = error("Conversation route required")
+            override fun completeConversation(systemPrompt: String, history: List<ConversationTurn>, userPrompt: String,
+                images: List<com.jarvys.agent.device.ScreenData>, tools: List<ToolSpec>, sessionId: String,
+                token: CancellationToken): ModelReply {
+                token.throwIfCancelled()
+                calls.incrementAndGet()
+                actualModelInput.set(systemPrompt + "\n" + history.joinToString("\n") { it.content } + "\n" + userPrompt)
+                return ModelReply("Explicit hidden-source reply recovered", emptyList())
+            }
+        }
+        installRuntime(service, provider)
+        db { service.runPendingInputRecoverySafely(null) }
+        service.awaitSessionIdleForTesting(session).get(30, TimeUnit.SECONDS)
+        assertEquals(0, calls.get())
+        assertEquals(accepted, submissions().single())
+        assertOnlyCentralStarts(drainServiceIntents(), 0)
+        val selected = display(accepted.userMessageId)
+        assertFalse(AgentRunUiState.eventsForSession(session).any { it.messageId == source || it.messageId == firstSource })
+        val executor = Executors.newSingleThreadExecutor()
+        val drafts = recoveryModel(executor)
+        val owner = androidx.lifecycle.ViewModelStore().apply { put("hidden-source-explicit-recovery", drafts) }
+        try {
+            assertTrue(drafts.recoverPreparedSubmission(selected))
+            executor.submit {}.get(30, TimeUnit.SECONDS)
+            val recovered = submissions().single()
+            assertEquals("PREPARED", recovered.state)
+            assertEquals(accepted.revision + 1, recovered.revision)
+            assertEquals(accepted.userMessageId, recovered.userMessageId)
+            assertEquals(accepted.submissionId, recovered.submissionId)
+            assertEquals(accepted.sourceSha256, recovered.sourceSha256)
+            assertEquals(accepted.storageGeneration, recovered.storageGeneration)
+            assertEquals(hiddenEvidence, sourceEvidence())
+            val starts = drainServiceIntents()
+            assertOnlyCentralStarts(starts, 1)
+            service.onStartCommand(starts.single(), 0, 1)
+            service.onStartCommand(Intent(starts.single()), 0, 2)
+            service.awaitSessionIdleForTesting(session).get(30, TimeUnit.SECONDS)
+            runtimeFailure.get()?.let { throw AssertionError("Hidden source failed actual protected-context runtime", it) }
+            assertEquals(1, calls.get())
+            val completed = submissions().single()
+            assertEquals("COMPLETED", completed.state)
+            assertEquals(accepted.userMessageId, completed.userMessageId)
+            assertEquals(accepted.submissionId, completed.submissionId)
+            assertEquals(accepted.sourceSha256, completed.sourceSha256)
+            assertEquals(accepted.storageGeneration, completed.storageGeneration)
+            assertEquals(1, users().size)
+            assertEquals(hiddenEvidence, sourceEvidence())
+            val modelInput = requireNotNull(actualModelInput.get())
+            assertTrue(modelInput.contains(choices[0].text))
+            assertFalse("Valid hidden source identity must not expose its removed text", modelInput.contains("Synthetic native notice hidden-after"))
+            assertFalse(modelInput.contains("Synthetic native notice hidden-before"))
+            deliver(acceptedIntent)
+            assertEquals(listOf(completed), submissions())
+            assertOnlyCentralStarts(drainServiceIntents(), 0)
+            assertEquals(1, calls.get())
+        } finally { owner.clear(); executor.shutdownNow() }
     }
 
     @Test fun nativeStopBeforeClaimCancelsHiddenSourceAndDuplicateCannotReviveIt() {
@@ -267,7 +427,7 @@ class ProactiveReplyNativeAcceptanceTest {
     @Test fun duplicateActualServiceIntentClaimsAndStartsSyntheticProviderOnlyOnce() {
         serviceController = Robolectric.buildService(AgentForegroundService::class.java).create()
         val service = serviceController!!.get()
-        val entered = CountDownLatch(1)
+        val entered = CompletableFuture<Unit>()
         val release = CountDownLatch(1)
         val calls = AtomicInteger()
         val provider = object : ModelProviderClient {
@@ -277,22 +437,20 @@ class ProactiveReplyNativeAcceptanceTest {
                 images: List<com.jarvys.agent.device.ScreenData>, tools: List<ToolSpec>, sessionId: String,
                 token: CancellationToken): ModelReply {
                 calls.incrementAndGet()
-                entered.countDown()
+                entered.complete(Unit)
                 check(release.await(30, TimeUnit.SECONDS)) { "Native provider fixture was not released" }
                 token.throwIfCancelled()
                 return ModelReply("Synthetic accepted reply completed", emptyList())
             }
         }
-        service.runtimeFactory = AgentForegroundService.RuntimeFactory { app, id, skills ->
-            CoreAgentRuntime(app, id, skills, CorePromptBudget.standard(), provider)
-        }
+        installRuntime(service, provider)
         try {
             deliver(option(posted(notice())))
             val accepted = submissions().single()
             val intent = drainServiceIntents().single()
             assertEquals("com.jarvys.agent.CENTRAL_SUBMISSION", intent.action)
             service.onStartCommand(intent, 0, 1)
-            assertTrue("Actual provider must enter after native claim", entered.await(30, TimeUnit.SECONDS))
+            awaitNativeEntry(entered, service, "Actual provider must enter after native claim")
             assertEquals("STARTED", submissions().single().state)
             service.onStartCommand(Intent(intent), 0, 2)
             assertEquals(1, calls.get())
@@ -303,6 +461,32 @@ class ProactiveReplyNativeAcceptanceTest {
             assertEquals(accepted.userMessageId, submissions().single().userMessageId)
             assertEquals(1, users().size)
         } finally { release.countDown() }
+    }
+
+    private fun installRuntime(service: AgentForegroundService, provider: ModelProviderClient) {
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { app, id, skills ->
+            runtimePhase.set("runtime_constructor")
+            try {
+                CoreAgentRuntime(app, id, skills, CorePromptBudget.standard(), provider)
+                    .also { runtimePhase.set("runtime_ready") }
+            } catch (failure: Throwable) { runtimeFailure.compareAndSet(null, failure); throw failure }
+        }
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { runtime, goal, history, attachments, token, progress ->
+            runtimePhase.set("native_runner")
+            try { runtime.runMainChat(goal, history, attachments, token, progress) }
+            catch (failure: Throwable) { runtimeFailure.compareAndSet(null, failure); throw failure }
+        }
+    }
+
+    private fun awaitNativeEntry(entry: CompletableFuture<Unit>, service: AgentForegroundService, description: String) {
+        // Fail promptly if the real physical lane exits before the requested entry; never lengthen its timeout.
+        val idle = service.awaitSessionIdleForTesting(session) as CompletableFuture<*>
+        val wait = runCatching { CompletableFuture.anyOf(entry, idle).get(30, TimeUnit.SECONDS) }
+        val failure = runtimeFailure.get() ?: wait.exceptionOrNull()
+        if (!entry.isDone || failure != null) throw AssertionError(
+            "$description; phase=${runtimePhase.get()}; states=${submissions().map { it.state to it.revision }}; " +
+                "diagnostic=${LocalDiagnostics.get(context).snapshot(null, 1, true)}", failure)
+        assertTrue(description, entry.isDone)
     }
 
     private fun recoveryModel(executor: ExecutorService): AttachmentDraftViewModel {
@@ -326,9 +510,7 @@ class ProactiveReplyNativeAcceptanceTest {
                 return ModelReply(answer(), emptyList())
             }
         }
-        service.runtimeFactory = AgentForegroundService.RuntimeFactory { app, id, skills ->
-            CoreAgentRuntime(app, id, skills, CorePromptBudget.standard(), provider)
-        }
+        installRuntime(service, provider)
     }
 
     @Test fun reopenedTypedReplyRunsOnceOnlyThroughFreshDisplayedViewModelRecovery() {
@@ -348,7 +530,9 @@ class ProactiveReplyNativeAcceptanceTest {
         assertOnlyCentralStarts(drainServiceIntents(), 0)
 
         val stale = display(accepted.userMessageId)
-        val selected = display(accepted.userMessageId) // New actual display supersedes stale immutable evidence.
+        AgentRunUiState.restoreSession(session, emptyList()) // Actual display replacement, not an equal-value re-assignment.
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        val selected = display(accepted.userMessageId)
         assertNotSame(stale.centralAvailability, selected.centralAvailability)
         assertEquals("PREPARED", selected.centralAvailability!!.state)
         assertTrue(selected.centralAvailability!!.canRetry)
@@ -413,14 +597,14 @@ class ProactiveReplyNativeAcceptanceTest {
     @Test fun typedStartedReplyAfterAbruptPhysicalRunnerExitIsUncertainAndCannotReplay() {
         serviceController = Robolectric.buildService(AgentForegroundService::class.java).create()
         val service = serviceController!!.get()
-        val runnerEntered = CountDownLatch(1)
+        val runnerEntered = CompletableFuture<Unit>()
         val releaseRunner = CountDownLatch(1)
         val runnerStarts = AtomicInteger()
         val providerCalls = AtomicInteger()
         installSyntheticProvider(service) { providerCalls.incrementAndGet(); error("No provider request belongs to this runner-loss boundary") }
         service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, _ ->
             runnerStarts.incrementAndGet()
-            runnerEntered.countDown()
+            runnerEntered.complete(Unit)
             check(releaseRunner.await(30, TimeUnit.SECONDS))
             // Error bypasses normal RuntimeException terminal handling; FutureTask still physically unwinds.
             // This is a host abrupt-runner-loss simulation, not an Android OS process kill.
@@ -433,7 +617,7 @@ class ProactiveReplyNativeAcceptanceTest {
         val originalStart = drainServiceIntents().single()
         try {
             service.onStartCommand(originalStart, 0, 1)
-            assertTrue("Must cross the actual native claim before simulated loss", runnerEntered.await(30, TimeUnit.SECONDS))
+            awaitNativeEntry(runnerEntered, service, "Must cross the actual native claim before simulated loss")
             val started = submissions().single()
             assertEquals("STARTED", started.state)
             assertEquals(prepared.revision + 1, started.revision)

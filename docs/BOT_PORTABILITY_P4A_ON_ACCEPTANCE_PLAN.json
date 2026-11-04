@@ -6,7 +6,7 @@
     "Play"
   ],
   "retainedD3Methods": 27,
-  "nativeNewMethods": 23,
+  "nativeNewMethods": 26,
   "newCompatibilityMethods": 2,
   "focusedClasses": [
     "com.jarvys.agent.CentralAvailabilityBoundaryAcceptanceTest",
@@ -16,6 +16,7 @@
     "com.jarvys.agent.ProactiveReplyIndependentOwnerRaceTest",
     "com.jarvys.agent.ProactiveReplyNativeAcceptanceTest",
     "com.jarvys.agent.ProactiveReplyNativeBoundaryComposeTest",
+    "com.jarvys.agent.ProactiveReplyNativeCombinationTest",
     "com.jarvys.agent.ProactiveReplyUiSelectionTest",
     "com.jarvys.agent.ProactiveSuggestedRepliesComposeTest",
     "com.jarvys.agent.ProactiveTypedRenderedRecoveryTest",
@@ -115,6 +116,7 @@
     "com.jarvys.agent.ProactiveReplyIndependentOwnerRaceTest",
     "com.jarvys.agent.ProactiveReplyNativeAcceptanceTest",
     "com.jarvys.agent.ProactiveReplyNativeBoundaryComposeTest",
+    "com.jarvys.agent.ProactiveReplyNativeCombinationTest",
     "com.jarvys.agent.ProactiveReplyUiSelectionTest",
     "com.jarvys.agent.ProactiveSuggestedRepliesComposeTest",
     "com.jarvys.agent.ProactiveTypedRenderedRecoveryTest",
