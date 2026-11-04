@@ -40,8 +40,8 @@ class ProactiveNativeReplyContextCompatibilityTest {
         val thread = "native-compacted-$kind"
         val text = "Explain the compacted $kind notice"
         val noticeText = "Parcel 118 from the $kind source is waiting at the depot"
-        val store = LocalRunStore(context)
         ProactiveNativeServiceFixture(context, storage).use { native ->
+            val store = db { LocalRunStore(context) }
             val notice = db {
                 val id = store.appendProactiveAssistantMessageIfAbsent(session, "native-compaction-$kind",
                     noticeText, listOf(ProactiveSuggestedReply("Explain", text)), thread)

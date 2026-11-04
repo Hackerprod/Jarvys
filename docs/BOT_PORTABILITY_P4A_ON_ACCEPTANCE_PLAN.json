@@ -18,7 +18,9 @@
     "com.jarvys.agent.ProactiveReplyNativeBoundaryComposeTest",
     "com.jarvys.agent.ProactiveReplyUiSelectionTest",
     "com.jarvys.agent.ProactiveSuggestedRepliesComposeTest",
+    "com.jarvys.agent.ProactiveTypedRenderedRecoveryTest",
     "com.jarvys.agent.canvas.ChatCanvasContractTest",
+    "com.jarvys.agent.canvas.ChatCanvasResourceResolutionTest",
     "com.jarvys.agent.chatdb.CentralSubmissionPersistenceTest",
     "com.jarvys.agent.chatdb.ProactiveReplyAcceptancePersistenceTest",
     "com.jarvys.agent.chatdb.ProactiveReplyBootstrapGenerationTest",
@@ -26,7 +28,8 @@
     "com.jarvys.agent.proactive.ProactiveActionReceiverTest",
     "com.jarvys.agent.proactive.ProactiveAgentProcessorTest",
     "com.jarvys.agent.proactive.ProactiveNotifierCanonicalSourceTest",
-    "com.jarvys.agent.proactive.ProactiveReplyNotificationIdentityTest"
+    "com.jarvys.agent.proactive.ProactiveReplyNotificationIdentityTest",
+    "com.jarvys.agent.ui.chat.AssistantTextSelectionTest"
   ],
   "fullRegressionClasses": [
     "com.jarvys.agent.AgentForegroundServiceMainThreadAdmissionTest",
@@ -107,11 +110,14 @@
     "com.jarvys.agent.OrdinaryAgentAvailabilityAcceptanceTest",
     "com.jarvys.agent.OrdinaryRegenerationAvailabilityTest",
     "com.jarvys.agent.OriginalUserSuspensionAuthorityTest",
+    "com.jarvys.agent.ProactiveCentralTest",
     "com.jarvys.agent.ProactiveNativeReplyContextCompatibilityTest",
     "com.jarvys.agent.ProactiveReplyIndependentOwnerRaceTest",
     "com.jarvys.agent.ProactiveReplyNativeAcceptanceTest",
     "com.jarvys.agent.ProactiveReplyNativeBoundaryComposeTest",
     "com.jarvys.agent.ProactiveReplyUiSelectionTest",
+    "com.jarvys.agent.ProactiveSuggestedRepliesComposeTest",
+    "com.jarvys.agent.ProactiveTypedRenderedRecoveryTest",
     "com.jarvys.agent.ProviderRetryLeaseTest",
     "com.jarvys.agent.SealedInferenceTransportTest",
     "com.jarvys.agent.WorkspaceArtifactDeliveryTest",
@@ -132,6 +138,8 @@
     "com.jarvys.agent.WorkspaceSupervisorMessagePipelineTest",
     "com.jarvys.agent.WorkspaceTreeNativeRuntimeTest",
     "com.jarvys.agent.WorkspaceTreeP1PreclaimTest",
+    "com.jarvys.agent.canvas.ChatCanvasContractTest",
+    "com.jarvys.agent.canvas.ChatCanvasResourceResolutionTest",
     "com.jarvys.agent.chatdb.CentralAvailabilityUiReadThreadTest",
     "com.jarvys.agent.chatdb.CentralSubmissionPersistenceTest",
     "com.jarvys.agent.chatdb.CentralSubmissionSchemaCompatibilityTest",
@@ -166,8 +174,10 @@
     "com.jarvys.agent.crew.CrewWorkspaceCycleOwnershipTest",
     "com.jarvys.agent.crew.CrewWorkspaceMissionAdmissionTest",
     "com.jarvys.agent.proactive.ProactiveActionReceiverTest",
+    "com.jarvys.agent.proactive.ProactiveAgentProcessorTest",
     "com.jarvys.agent.proactive.ProactiveNotifierCanonicalSourceTest",
     "com.jarvys.agent.proactive.ProactiveReplyNotificationIdentityTest",
+    "com.jarvys.agent.ui.chat.AssistantTextSelectionTest",
     "com.jarvys.agent.ui.chat.PreservedCentralDrawerComposeTest",
     "com.jarvys.agent.workspaces.CentralDefaultAwaitDelegationTest",
     "com.jarvys.agent.workspaces.CentralMascotScaleComposeTest",
@@ -190,5 +200,6 @@
     "com.jarvys.agent.workspaces.WorkspaceTreeStoreTest"
   ],
   "historicalSelectorSource": "docs/V100_FINAL_VERSION_HOST_RESULTS.json",
-  "historicalResultsNotReused": true
+  "historicalResultsNotReused": true,
+  "typedRenderedRecoveryMethods": 2
 }
