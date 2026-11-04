@@ -126,13 +126,28 @@ class ProactiveReplyAcceptancePersistenceTest {
     }
 
     @Test fun changedUserThreadReplyToSourceOptionOrProofFailsEveryReadWithoutFallback()=work {
+        // This attempted corruption is rejected by the native spine FK before any read validator.
+        val pinnedNotice=notice("fk-sequence","fk-sequence-thread")
+        val pinned=checkNotNull(accept(source(pinnedNotice.messageId)))
+        val pinnedNoticeAfterAcceptance=repository().getMessage(session,pinnedNotice.messageId)
+        val pinnedUser=repository().getMessage(session,pinned.snapshot.userMessageId)
+        val before=conservation()
+        val failure=runCatching {db.testChatSql.execSQL("UPDATE messages SET seq=seq+10000 WHERE message_id=?",arrayOf(pinnedNotice.messageId))}.exceptionOrNull()
+        assertTrue("The actual FK must reject a missing spine parent",generateSequence(failure){it.cause}.any {it is android.database.SQLException && it.message.orEmpty().contains("Error code: 19") && it.message.orEmpty().contains("FOREIGN KEY constraint failed")})
+        assertEquals(before,conservation())
+        assertEquals(pinnedNoticeAfterAcceptance,repository().getMessage(session,pinnedNotice.messageId))
+        assertEquals(pinnedUser,repository().getMessage(session,pinned.snapshot.userMessageId))
+        assertEquals(pinned.snapshot,db.withChatReadTransaction {CentralTurnSubmissionRepository(db).find(session,pinned.snapshot.submissionId)})
+        assertEquals(pinned.snapshot.sourceSha256,captureCentralUserRootDigest(db,session,pinned.snapshot.userMessageId))
+        assertEquals(0L,scalar("SELECT COUNT(*) FROM pragma_foreign_key_check"))
         val mutations=listOf<(StoredMessage,ProactiveReplyWriteResult)->Unit>(
             {_,a->db.testChatSql.execSQL("UPDATE messages SET proactive_thread_key=NULL WHERE message_id=?",arrayOf(a.snapshot.userMessageId))},
             {_,a->db.testChatSql.execSQL("UPDATE messages SET proactive_reply_to_message_id=NULL WHERE message_id=?",arrayOf(a.snapshot.userMessageId))},
             {n,_->db.testChatSql.execSQL("UPDATE messages SET proactive_thread_key='other' WHERE message_id=?",arrayOf(n.messageId))},
             {n,_->db.testChatSql.execSQL("UPDATE proactive_suggested_replies SET text='changed' WHERE message_id=? AND ordinal=0",arrayOf(n.messageId))},
             {_,a->db.testChatSql.execSQL("DELETE FROM message_parts WHERE message_id=? AND kind=?",arrayOf(a.snapshot.userMessageId,ProactiveReplyAcceptance.PART_KIND))},
-            {n,_->db.testChatSql.execSQL("UPDATE messages SET seq=seq+10000 WHERE message_id=?",arrayOf(n.messageId))},
+            // Existing consumed marker is a real spine parent, but cannot become the source's sequence.
+            {n,_->db.testChatSql.execSQL("UPDATE messages SET seq=suggested_replies_consumed_seq WHERE message_id=?",arrayOf(n.messageId))},
             {n,_->db.testChatSql.execSQL("UPDATE messages SET role='agent' WHERE message_id=?",arrayOf(n.messageId))},
             {n,_->db.testChatSql.execSQL("UPDATE messages SET proactive_decision_id='changed-decision' WHERE message_id=?",arrayOf(n.messageId))},
             {n,_->db.testChatSql.execSQL("UPDATE messages SET suggested_replies_consumed_seq=NULL WHERE message_id=?",arrayOf(n.messageId))},

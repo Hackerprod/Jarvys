@@ -114,9 +114,9 @@ class ProactiveReplyBootstrapGenerationTest {
             repo.consumeSuggestedReplies(central,f.notice().messageId)
         }
         f.sql.execSQL("INSERT INTO storage_meta(key,value) VALUES('unrelated-current-metadata','retain-exactly')")
-        assertNull(f.generation());val rows=f.rows(true);val schema=f.schema()
+        assertNull(f.generation());val rows=f.rows(true);val schema=f.schema();val metadataCount=f.count("storage_meta")
         f.ensure();assertNotNull(f.generation());assertEquals(rows,f.rows(true));assertEquals(schema,f.schema())
-        assertEquals(2L,f.count("storage_meta"));val allRows=f.rows()
+        assertEquals(metadataCount+1L,f.count("storage_meta"));val allRows=f.rows()
         f.ensure();assertEquals(allRows,f.rows());assertEquals(0L,f.count("central_turn_submissions"))
     }
 
