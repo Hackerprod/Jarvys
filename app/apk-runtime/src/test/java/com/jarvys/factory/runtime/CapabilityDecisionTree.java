@@ -98,7 +98,8 @@ final class CapabilityDecisionTree<T> {
             root = root.getParent();
         if (root == null) throw new AssertionError("Reviewed production source is required for the compositional proof");
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/BridgeProtocol.java", "14bfb1fac103ac378ed697f4985f5b02c97fd1eb1e54255d2a356483c005ce12");
-        requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/FactoryConfig.java", "f70cb304ec638786ae84a1d2519f520015e0ea5ac6e50eb9a6be5f8914baa731");
+        // fork LightsRemote: modo standalone
+        requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/FactoryConfig.java", "4366e3a9b33a2395af706771bd2e645828b6d141f7fc38d976100dccc72fddcf");
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/StrictJson.java", "02e6ad92f28332fca3ea2466d435d5da3944cbdb55b06488b7fa18105853034e");
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/FactoryException.java", "03cc2dd0ce63975d9ba31e813df29bd08b6a6834cdef28be6f220a33f2a98331");
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/BiometricAuthentication.java", "58bde0dd6fb3741a6a5adac9fe53039f5b0ae9eb2cf947969c086fb1a74e86a4");
@@ -114,7 +115,8 @@ final class CapabilityDecisionTree<T> {
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/NotificationRequest.java", "296679b0e054f75653105b11b0cec5dd6b5c3b2701a77eadaf0083c2b3c8579d");
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/SpeechRequest.java", "31933b6f416f70fd3b0a20e2677a219c7f0f815e1d727ec44ee4dbe9e586b696");
         requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/BrowserUrl.java", "d617912e9365b7b525cb8fddf5187f26f3db1dbfc42bf979bc328bbdbd58c8f3");
-        requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java", "0a26af3d37ba5d14462e1ec430bb17b7684946dc2e114e9bcec994f0a37d6be2");
+        // fork LightsRemote: modo standalone
+        requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java", "9c9852beb65e0b122cab4e7dd1c1ec1d5f6f9a8db79730c7cd74de51d2103c9f");
         requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/ContactPickSpec.java", "ffac2ad67a7d0f71c5dc7582d4e571a7755e921995e0f69389abf0fa883c3706");
         requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/ExternalLaunchSpec.java", "cfd9edef4ca7dff114597553c812a869c77e3fcdeca11c23b1c8e3a16ac35c1c");
         requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/ManifestAudit.java", "f57e086e96b8bf0bcfe75ef6dd6094b0648292154a8b705b248089b05c82fe89");

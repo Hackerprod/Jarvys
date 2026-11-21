@@ -44,14 +44,36 @@ public final class NativeNetwork {
     private final ConnectionFactory connections;
     private final CleartextPolicy cleartext;
     private final Clock clock;
+    /** Lower-case host:port entries; null = no restriction (host-bound mode). */
+    private final java.util.Set<String> allowedHosts;
 
     public NativeNetwork() {
         this(url -> (HttpURLConnection) url.openConnection(),
                 host -> NetworkSecurityPolicy.getInstance().isCleartextTrafficPermitted(host), System::nanoTime);
     }
+    /** Standalone mode: every connection, including each redirect, must target one of these host:port entries. */
+    public NativeNetwork(java.util.Collection<String> allowedHosts) {
+        this(url -> (HttpURLConnection) url.openConnection(),
+                host -> NetworkSecurityPolicy.getInstance().isCleartextTrafficPermitted(host), System::nanoTime, allowedHosts);
+    }
     public NativeNetwork(ConnectionFactory connections, CleartextPolicy cleartext, Clock clock) {
+        this(connections, cleartext, clock, null);
+    }
+    public NativeNetwork(ConnectionFactory connections, CleartextPolicy cleartext, Clock clock, java.util.Collection<String> allowedHosts) {
         if (connections == null || cleartext == null || clock == null) throw new IllegalArgumentException();
         this.connections = connections; this.cleartext = cleartext; this.clock = clock;
+        if (allowedHosts == null) this.allowedHosts = null;
+        else {
+            java.util.Set<String> normalized = new java.util.HashSet<>();
+            for (String host : allowedHosts) normalized.add(host.toLowerCase(java.util.Locale.ROOT));
+            this.allowedHosts = java.util.Collections.unmodifiableSet(normalized);
+        }
+    }
+    private void requireAllowedHost(URL url) throws FactoryException {
+        if (allowedHosts == null) return;
+        int port = url.getPort() != -1 ? url.getPort() : url.getDefaultPort();
+        String host = url.getHost() == null ? "" : url.getHost().toLowerCase(java.util.Locale.ROOT);
+        if (!allowedHosts.contains(host + ":" + port)) throw new FactoryException("HOST_NOT_ALLOWED", "This app may only contact its declared hosts.");
     }
     private static ScheduledThreadPoolExecutor deadlines() {
         ScheduledThreadPoolExecutor value = new ScheduledThreadPoolExecutor(1, runnable -> {
@@ -198,6 +220,7 @@ public final class NativeNetwork {
         int redirects = 0;
         while (true) {
             checkTransfer(access, cancellation, deadline, document);
+            requireAllowedHost(url);
             if ("http".equalsIgnoreCase(url.getProtocol()) && !cleartext.permitted(url.getHost()))
                 throw new FactoryException("CLEARTEXT_NOT_PERMITTED", "Android configuration does not permit cleartext HTTP for this host.");
             checkTransfer(access, cancellation, deadline, document);
@@ -345,6 +368,7 @@ public final class NativeNetwork {
         int redirects = 0;
         while (true) {
             check(authorization, cancellation, deadline);
+            requireAllowedHost(url);
             if (injector != null && !"https".equalsIgnoreCase(url.getProtocol()))
                 throw new FactoryException("SECRET_SCOPE_MISMATCH", "Native credential requests require HTTPS.");
             if ("http".equalsIgnoreCase(url.getProtocol()) && !cleartext.permitted(url.getHost()))

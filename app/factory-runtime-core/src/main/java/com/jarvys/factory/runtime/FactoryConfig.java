@@ -6,6 +6,7 @@ import com.jarvys.factory.contract.CapabilityCatalog;
 import com.jarvys.factory.contract.ResourceBudgets;
 import com.jarvys.factory.contract.IncomingSharePolicy;
 import com.jarvys.factory.contract.NotificationPolicy;
+import com.jarvys.factory.contract.StandalonePolicy;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -28,6 +29,10 @@ public final class FactoryConfig {
     public final IncomingSharePolicy incomingShare;
     public final NotificationPolicy notifications;
     public final BluetoothPolicy bluetooth;
+    /** null = host-bound (default); "standalone" = network-only without the Jarvys host. */
+    public final String authority;
+    public final java.util.List<String> allowedHosts;
+    public boolean standalone() { return StandalonePolicy.AUTHORITY.equals(authority); }
     public static final class DocumentBroker {
         public final String packageName, certificateSha256;
         private DocumentBroker(String packageName, String certificateSha256) {
@@ -42,6 +47,10 @@ public final class FactoryConfig {
         this(appId, name, entryPoint, capabilities, documentBroker, dataBackupTables, dataBackupKeys, ResourceBudgets.legacy(), null, null, null);
     }
     private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker, Set<String> dataBackupTables, Set<String> dataBackupKeys, ResourceBudgets resources, IncomingSharePolicy incomingShare, NotificationPolicy notifications, BluetoothPolicy bluetooth) {
+        this(appId, name, entryPoint, capabilities, documentBroker, dataBackupTables, dataBackupKeys, resources, incomingShare, notifications, bluetooth, null, Collections.emptyList());
+    }
+    private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker, Set<String> dataBackupTables, Set<String> dataBackupKeys, ResourceBudgets resources, IncomingSharePolicy incomingShare, NotificationPolicy notifications, BluetoothPolicy bluetooth, String authority, java.util.List<String> allowedHosts) {
+        this.authority = authority; this.allowedHosts = Collections.unmodifiableList(new java.util.ArrayList<>(allowedHosts));
         this.resources = resources;
         this.bluetooth = bluetooth;
         this.incomingShare = incomingShare;
@@ -60,7 +69,7 @@ public final class FactoryConfig {
     private static FactoryConfig parseInternal(String text, String installedPackage) throws FactoryException {
         try {
             JSONObject object = StrictJson.object(text, 8192);
-            exactKeys(object, "schemaVersion", "appId", "name", "entryPoint", "capabilities", "documentBroker", "dataBackup", "resourceBudgets", "incomingShare", "notifications", "bluetooth");
+            exactKeys(object, "schemaVersion", "appId", "name", "entryPoint", "capabilities", "documentBroker", "dataBackup", "resourceBudgets", "incomingShare", "notifications", "bluetooth", "authority", "allowedHosts");
             if (!(object.get("schemaVersion") instanceof Integer) || object.getInt("schemaVersion") != 1)
                 throw new FactoryException("INVALID_CONFIG", "Unsupported application configuration version.");
             String appId = string(object, "appId");
@@ -124,6 +133,20 @@ public final class FactoryConfig {
                 if (!backupKeys.isEmpty() && (!capabilities.contains("storage") || !capabilities.contains("documents")))
                     throw new FactoryException("INVALID_CONFIG", "Key backup requires storage and documents capabilities.");
             }
+            String authority = null;
+            java.util.List<String> allowedHosts = Collections.emptyList();
+            if (object.has("authority")) {
+                if (!StandalonePolicy.AUTHORITY.equals(object.get("authority"))) throw new FactoryException("INVALID_CONFIG", "Unsupported application authority.");
+                authority = StandalonePolicy.AUTHORITY;
+                if (object.has("documentBroker")) throw new FactoryException("INVALID_CONFIG", "Standalone applications do not use a host broker.");
+                try {
+                    StandalonePolicy.validateCapabilities(capabilities);
+                    JSONArray hosts = object.getJSONArray("allowedHosts");
+                    java.util.List<String> list = new java.util.ArrayList<>();
+                    for (int i = 0; i < hosts.length(); i++) { Object host = hosts.get(i); if (!(host instanceof String)) throw new IllegalArgumentException(); list.add((String) host); }
+                    allowedHosts = StandalonePolicy.validateHosts(list);
+                } catch (IllegalArgumentException invalid) { throw new FactoryException("INVALID_CONFIG", "Invalid standalone capabilities or allowed hosts."); }
+            } else if (object.has("allowedHosts")) throw new FactoryException("INVALID_CONFIG", "allowedHosts requires standalone authority.");
             DocumentBroker broker = null;
             if (object.has("documentBroker")) {
                 if (!CapabilityCatalog.requiresHostBroker(capabilities)) throw new FactoryException("INVALID_CONFIG", "Host broker requires a capability with a native policy or broker operation.");
@@ -134,10 +157,10 @@ public final class FactoryConfig {
                     throw new FactoryException("INVALID_CONFIG", "Invalid pinned document broker.");
                 broker = new DocumentBroker(host, certificate);
             }
-            if (installedPackage != null && CapabilityCatalog.requiresMandatoryHostBroker(capabilities) && broker == null)
+            if (installedPackage != null && CapabilityCatalog.requiresMandatoryHostBroker(capabilities, authority != null) && broker == null)
                 throw new FactoryException("INVALID_CONFIG", "Declared native policy or broker operations require a pinned compatible Jarvys host.");
             ResourceBudgets resources = object.has("resourceBudgets") ? ResourceBudgetsJson.parse(object.getJSONObject("resourceBudgets")) : ResourceBudgets.legacy();
-            return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables, backupKeys, resources, incomingShare, notifications, bluetooth);
+            return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables, backupKeys, resources, incomingShare, notifications, bluetooth, authority, allowedHosts);
         } catch (JSONException e) {
             throw new FactoryException("INVALID_CONFIG", "Invalid application configuration.");
         }

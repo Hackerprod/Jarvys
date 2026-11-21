@@ -187,7 +187,7 @@ final class NativeEffects implements AutoCloseable {
         this(activity, config, permissions, io, foreground,
                 new ThreadPoolExecutor(4, 4, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<Runnable>(16),
                         task -> { Thread thread = new Thread(task, "factory-network"); thread.setDaemon(true); return thread; },
-                        new ThreadPoolExecutor.AbortPolicy()), new NativeNetwork(), null, documents);
+                        new ThreadPoolExecutor.AbortPolicy()), config.standalone() ? new NativeNetwork(config.allowedHosts) : new NativeNetwork(), null, documents);
     }
     NativeEffects(Activity activity, FactoryConfig config, NativePermissionSessions permissions, Executor io, boolean foreground,
                   ThreadPoolExecutor networkIo, NativeNetwork network, NativeSpeech speech) {
@@ -409,6 +409,7 @@ final class NativeEffects implements AutoCloseable {
                     job.worker(networkIo, value -> value.complete(NativeEffects.this.network.execute(network, value.lease, cancellation)));
                 }); return;
             case NETWORK_PING:
+                if (config.standalone()) throw new FactoryException("PERMISSION_DENIED", "Raw ping is not available in standalone mode.");
                 NetworkPingRequest ping = NetworkPingRequest.parse(request.args);
                 authorize(request, reply, ping.authorizationDetails(), job -> {
                     NativePing.Cancellation cancellation = new NativePing.Cancellation(); job.cancellation = cancellation::cancel;

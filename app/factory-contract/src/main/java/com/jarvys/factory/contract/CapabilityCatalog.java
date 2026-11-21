@@ -210,6 +210,12 @@ public final class CapabilityCatalog {
         for (String name : select(requested)) if (!name.equals("sensors") && hostBrokerCapability(name)) return true;
         return false;
     }
+    /** Standalone authority: network needs no host; every other host capability is rejected separately. */
+    public static boolean requiresMandatoryHostBroker(Iterable<String> requested, boolean standalone) {
+        if (!standalone) return requiresMandatoryHostBroker(requested);
+        for (String name : select(requested)) if (!name.equals("sensors") && !name.equals("network") && hostBrokerCapability(name)) return true;
+        return false;
+    }
     private static boolean hostBrokerCapability(String name) {
         return name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone")
                 || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar")

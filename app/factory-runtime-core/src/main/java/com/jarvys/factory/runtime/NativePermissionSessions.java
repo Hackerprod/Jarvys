@@ -49,9 +49,9 @@ final class NativePermissionSessions implements AutoCloseable {
             nonce = value.toString();
         }
         @Override public void check() {
-            if (ended.get() || closed || !foreground || !callback.current() || client == null)
+            if (ended.get() || closed || !foreground || !callback.current() || (client == null && !config.standalone()))
                 throw new SecurityException("Native operation no longer owns the foreground page");
-            client.check();
+            if (client != null) client.check();
             if (ended.get() || closed || !foreground || !callback.current()) throw new SecurityException("Native operation authority ended");
         }
         void onCancelled(Runnable action) {
@@ -86,6 +86,12 @@ final class NativePermissionSessions implements AutoCloseable {
         if (closed || !foreground || !callback.current()) throw new FactoryException("UNAVAILABLE", "Native operations require the active foreground page.");
         NativeOperationRequest request = NativeOperationRequest.parse(operation, details);
         Lease lease = new Lease(request, callback); leases.add(lease); main.postDelayed(lease.expiry, 300_000);
+        if (config.standalone()) {
+            // Standalone: the local lease is already approved; no host broker is involved. deliver() keeps the
+            // foreground/current checks and cancels the 300 s expiry; check() and close() still guard the work.
+            main.post(() -> deliver(lease));
+            return lease;
+        }
         try { io.execute(() -> acquire(lease)); }
         catch (RuntimeException busy) { fail(lease, "BUSY", "Native authorization worker is busy."); }
         return lease;

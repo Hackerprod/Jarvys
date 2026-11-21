@@ -9,6 +9,7 @@ import com.jarvys.factory.contract.ResourceBudgets
 import com.jarvys.factory.contract.IncomingSharePolicy
 import com.jarvys.factory.runtime.IncomingSharePolicyJson
 import com.jarvys.factory.contract.NotificationPolicy
+import com.jarvys.factory.contract.StandalonePolicy
 import com.jarvys.factory.runtime.NotificationPolicyJson
 import com.jarvys.factory.runtime.ResourceBudgetsJson
 import com.jarvys.factory.runtime.FactoryConfig
@@ -31,6 +32,9 @@ data class FactorySpec(
     val notifications: NotificationPolicy? = null,
     val bluetooth: BluetoothPolicy? = null,
     val adaptiveIcon: AdaptiveIconPolicy? = null,
+    /** null = host-bound (default); "standalone" = network-only, limited to [allowedHosts]. */
+    val authority: String? = null,
+    val allowedHosts: List<String> = emptyList(),
 ) {
     fun runtimeConfig(documentBroker: JSONObject? = null): ByteArray {
         val config = JSONObject().put("schemaVersion", 1).put("appId", appId)
@@ -40,6 +44,7 @@ data class FactorySpec(
         incomingShare?.let { config.put("incomingShare", IncomingSharePolicyJson.toJson(it)) }
         notifications?.let { config.put("notifications", NotificationPolicyJson.toJson(it)) }
         bluetooth?.let { config.put("bluetooth", BluetoothPolicyJson.toJson(it)) }
+        if (authority != null) config.put("authority", authority).put("allowedHosts", JSONArray(allowedHosts))
         if (documentBroker != null) config.put("documentBroker", documentBroker)
         val text = config.toString()
         FactoryConfig.parse(text, appId)
@@ -55,6 +60,7 @@ data class FactorySpec(
             incomingShare?.let { json.put("incomingShare", IncomingSharePolicyJson.toJson(it)) }
             notifications?.let { json.put("notifications", NotificationPolicyJson.toJson(it)) }
             bluetooth?.let { json.put("bluetooth", BluetoothPolicyJson.toJson(it)) }
+            authority?.let { json.put("authority", it).put("allowedHosts", JSONArray(allowedHosts)) }
             adaptiveIcon?.let { policy -> json.put("adaptiveIcon", JSONObject().put("foreground", policy.foreground).put("background", policy.background)
                 .also { if (policy.insetPercent != 0) it.put("insetPercent", policy.insetPercent) }) }
         }
@@ -80,7 +86,7 @@ data class FactorySpec(
         private val APP_ID = Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+")
         @JvmStatic fun parse(json: JSONObject): FactorySpec {
             val fields = setOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon")
-            require(json.keys().asSequence().toSet().let { it.containsAll(fields) && it.all { key -> key in fields || key == "dataBackup" || key == "resourceBudgets" || key == "incomingShare" || key == "notifications" || key == "bluetooth" || key == "adaptiveIcon" } }) { "factory.json requires ${fields.joinToString()} and optional dataBackup/resourceBudgets/incomingShare/notifications/bluetooth/adaptiveIcon" }
+            require(json.keys().asSequence().toSet().let { it.containsAll(fields) && it.all { key -> key in fields || key == "dataBackup" || key == "resourceBudgets" || key == "incomingShare" || key == "notifications" || key == "bluetooth" || key == "adaptiveIcon" || key == "authority" || key == "allowedHosts" } }) { "factory.json requires ${fields.joinToString()} and optional dataBackup/resourceBudgets/incomingShare/notifications/bluetooth/adaptiveIcon/authority/allowedHosts" }
             require(integer(json, "schemaVersion") == 1) { "Unsupported factory schemaVersion" }
             val appId = string(json, "appId")
             require(APP_ID.matches(appId) && appId.split('.').size in 2..16 && appId.length <= 127 && !appId.startsWith("android.") &&
@@ -153,8 +159,21 @@ data class FactorySpec(
                 } else 0
                 AdaptiveIconPolicy(relativePath(string(adaptive, "foreground")), string(adaptive, "background"), inset)
             } else null
+            val authority = if (json.has("authority")) {
+                require(json.opt("authority") == StandalonePolicy.AUTHORITY) { "authority must be \"standalone\" when present" }
+                StandalonePolicy.AUTHORITY
+            } else null
+            val allowedHosts = if (authority != null) {
+                val hosts = json.opt("allowedHosts")
+                require(hosts is JSONArray) { "standalone apps require an allowedHosts array" }
+                StandalonePolicy.validateCapabilities(caps)
+                StandalonePolicy.validateHosts((0 until hosts.length()).map { index -> (hosts.opt(index) as? String) ?: throw IllegalArgumentException("allowedHosts must contain strings") })
+            } else {
+                require(!json.has("allowedHosts")) { "allowedHosts requires authority standalone" }
+                emptyList()
+            }
             val resources = if (json.has("resourceBudgets")) ResourceBudgetsJson.parse(json.getJSONObject("resourceBudgets")) else ResourceBudgets.legacy()
-            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables, backupKeys, resources, incomingShare, notifications, bluetooth, adaptiveIcon)
+            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables, backupKeys, resources, incomingShare, notifications, bluetooth, adaptiveIcon, authority, allowedHosts)
         }
         fun relativePath(value: String): String {
             require(value.isNotBlank() && value.length <= MAX_PATH_CHARACTERS && !value.startsWith('/') && '\\' !in value &&

@@ -20,6 +20,25 @@ class FactorySpecTest {
         assertEquals("www/index.html",config.getString("entryPoint"))
         assertEquals(setOf("schemaVersion","appId","name","entryPoint","capabilities","resourceBudgets","documentBroker"),config.keys().asSequence().toSet())
     }
+    private fun standalone() = spec().put("capabilities",JSONArray(listOf("network"))).put("authority","standalone").put("allowedHosts",JSONArray(listOf("10.0.0.1:8877")))
+    @Test fun standaloneKeepsAuthorityAndHostsInRuntimeConfigWithoutBroker() {
+        val value=FactorySpec.parse(standalone())
+        assertEquals("standalone",value.authority);assertEquals(listOf("10.0.0.1:8877"),value.allowedHosts)
+        val config=JSONObject(String(value.runtimeConfig()))
+        assertEquals("standalone",config.getString("authority"));assertEquals(listOf("10.0.0.1:8877"),config.getJSONArray("allowedHosts").let{a->(0 until a.length()).map{a.getString(it)}})
+        assertFalse(config.has("documentBroker"))
+        assertEquals("standalone",value.toJson().getString("authority"))
+        val plain=FactorySpec.parse(spec());assertNull(plain.authority);assertFalse(JSONObject(String(plain.runtimeConfig(broker()))).has("authority"))
+    }
+    @Test fun standaloneRejectsHostCapabilitiesAndBadHosts() {
+        rejects{it.put("authority","standalone")}
+        rejects{it.put("authority","standalone").put("allowedHosts",JSONArray(listOf("10.0.0.1:8877")))}
+        rejects{it.put("allowedHosts",JSONArray(listOf("10.0.0.1:8877")))}
+        for(change in listOf<(JSONObject)->Unit>({it.put("capabilities",JSONArray(listOf("network","notifications")))},{it.put("allowedHosts",JSONArray())},{it.put("allowedHosts",JSONArray(listOf("10.0.0.1")))},{it.put("authority","other")})) {
+            val json=standalone();change(json)
+            assertThrows(IllegalArgumentException::class.java){FactorySpec.parse(json)}
+        }
+    }
     @Test fun reservedAndInvalidPackageIdsAreRejected() {
         for(id in listOf("com.jarvys.agent","com.jarvys.factory.template","android.hidden","single","org.Example.x","org.a/evil","org..x","org."+"x".repeat(125))) rejects{it.put("appId",id)}
     }
